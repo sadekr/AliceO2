@@ -11,7 +11,7 @@
 /// \file FwdDCAFitterN.h
 /// \brief Defintions for N-prongs secondary vertex fit
 /// \author ruben.shahoyan@cern.ch, adapted from central barrel to fwd rapidities by Rita Sadek, rita.sadek@cern.ch
-/// For the formulae derivation see /afs/cern.ch/user/s/shahoian/public/O2/DCAFitter/FwdDCAFitterN.pdf
+/// For the formulae derivation see /afs/cern.ch/user/s/shahoian/public/O2/DCAFitter/DCAFitterN.pdf
 /// For the formulaes used in forward rapidities: https://cernbox.cern.ch/index.php/s/oRpJHTDs6rHdMBs
 
 #ifndef _ALICEO2_DCA_FWDFITTERN_
@@ -133,10 +133,10 @@ class FwdDCAFitterN
   }
 
   ///< create parent track param with errors for decay vertex
-  o2::track::TrackParCovFwd createParentTrackParCov(int cand = 0) const; //???
+  // o2::track::TrackParCovFwd createParentTrackParCov(int cand = 0) const; 
 
   ///< create parent track param w/o errors for decay vertex
-  o2::track::TrackParFwd createParentTrackPar(int cand = 0) const;
+  // o2::track::TrackParFwd createParentTrackPar(int cand = 0) const;
 
   ///< calculate on the fly track param (no cov mat) at candidate, check isValid to make sure propagation was successful
   o2::track::TrackParFwd FwdgetTrackParamAtPCA(int i, int cand = 0) const;
@@ -545,7 +545,7 @@ void FwdDCAFitterN<N, Args...>::FwdcalcRMatrices()
     for (int j = i; j--;) {
       // const auto& mj = mTrAux[j];
       mCosDif[i][j] = 1 * NInv; // 1 / N
-      mSinDif[i][j] = 0 ; // ? 
+      mSinDif[i][j] = 0 ; 
     }
   }
 }
@@ -648,12 +648,10 @@ void FwdDCAFitterN<N, Args...>::FwdcalcPCANoErr()
   for (int i = N - 1; i--;) {
     double y, z; // working on z axis, with no rotattion needed from lab to track frame
 
-//    o2::math_utils::rotateZd(mTrPos[mCurHyp][i][0], mTrPos[mCurHyp][i][1], x, y, mTrAux[i].s, mTrAux[i].c);
+//    o2::math_utils::rotateZd(mTrPos[mCurHyp][i][0], mTrPos[mCurHyp][i][1], x, y, mTrAux[i].s, mTrAux[i].c); -> No rotation needed (track frame same as lab frame)
     //RRRR mTrAux[i].loc2glo(mTrPos[mCurHyp][i][0], mTrPos[mCurHyp][i][1], x, y );
 
-//Fwdcheck
     pca[0] += mTrPos[mCurHyp][i][0];
-    // pca[1] += mTrPos[mCurHyp][i][1]; //?
     pca[1] += y;
     pca[2] += z;
   }
@@ -728,9 +726,9 @@ inline double FwdDCAFitterN<N, Args...>::FwdcalcChi2NoErr() const
 
 //___________________________________________________________________
 template <int N, typename... Args>
-bool FwdDCAFitterN<N, Args...>::FwdcorrectTracks(const VecND& corrZ) // correct trracks in fwd ? fwdCheck 
+bool FwdDCAFitterN<N, Args...>::FwdcorrectTracks(const VecND& corrZ) 
 {
-  // propagate tracks to updated Z
+  // propagate tracks to updated Z 
   for (int i = N; i--;) {
     const auto& trDer = mTrDer[mCurHyp][i];
     auto dz2h = 0.5 * corrZ[i] * corrZ[i];
@@ -758,8 +756,8 @@ bool FwdDCAFitterN<N, Args...>::FwdpropagateTracksToVertex(int icand)
     auto& trc = mCandTr[ord][i];
     // auto x = mTrAux[i].c * pca[0] + mTrAux[i].s * pca[1]; // X of PCA in the track frame 
 
-    auto z = pca[2]; // to Fwdcheck ? 
-    // trc.propagateToZquadratic(z, mBz); // prop for FwdTracks: propagateToZquadratic : to test
+    auto z = pca[2]; 
+    // trc.propagateToZquadratic(z, mBz); // prop for FwdTracks: propagateToZquadratic : to test !! 
     trc.propagateToZlinear(z); //check : No bool required for impossible cases? 
 
 
@@ -1199,7 +1197,7 @@ template <int N, typename... Args>
 bool FwdDCAFitterN<N, Args...>::minimizeChi2()
 {
   // find best chi2 (weighted DCA) of N tracks in the vicinity of the seed PCA
-  for (int i = N; i--;) { // for N=3?? how. But mPCA is calculated with 2 tracks and not 3 // mPCA for 2 is enough, because it is just a seed as starting point
+  for (int i = N; i--;) { // mPCA for 2 is enough, because it is just a seed as starting point
     mCandTr[mCurHyp][i] = *mOrigTrPtr[i];
     // auto x = mTrAux[i].c * mPCA[mCurHyp][0] + mTrAux[i].s * mPCA[mCurHyp][1]; // X of PCA in the track frame
     // int ord = mOrder[i];
@@ -1247,7 +1245,7 @@ bool FwdDCAFitterN<N, Args...>::minimizeChi2()
     FwdcalcTrackResiduals(); // updated residuals
     chi2Upd = FwdcalcChi2(); // updated chi2
     if (getAbsMax(dz) < mMinParamChange || chi2Upd > chi2 * mMinRelChi2Change) { 
-      // [getAbsMax(mD2Chi2Dz2*mDChi2Dz)<0.001] -- Stop iterations if largest change of any Z? is smaller than this or stop if NewChi2 > OldChi2*0.9
+      // [getAbsMax(mD2Chi2Dz2*mDChi2Dz)<0.001] -- Stop iterations if largest change of any Z is smaller than this min, or stop if NewChi2 > OldChi2*0.9
       chi2 = chi2Upd;
       break; // converged
     }
@@ -1336,7 +1334,7 @@ bool FwdDCAFitterN<N, Args...>::roughDXCut() const
 
 //___________________________________________________________________
 template <int N, typename... Args>
-bool FwdDCAFitterN<N, Args...>::closerToAlternative() const  // Fwdcheck? on yz plane?
+bool FwdDCAFitterN<N, Args...>::closerToAlternative() const  // To check this -> on yz plane 
 {
   // check if the point current PCA point is closer to the seeding XY point being tested or to alternative see (if any)
   auto dxCur = mPCA[mCurHyp][0] - mCrossings.xDCA[mCrossIDCur], dyCur = mPCA[mCurHyp][1] - mCrossings.yDCA[mCrossIDCur];
@@ -1346,6 +1344,7 @@ bool FwdDCAFitterN<N, Args...>::closerToAlternative() const  // Fwdcheck? on yz 
 
 
 // TO ADD VERBOSE SYS
+
 
 /*
 //___________________________________________________________________
