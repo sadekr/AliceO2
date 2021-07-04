@@ -60,8 +60,16 @@ class TrackParFwd
     auto sinphi = o2::math_utils::sin(mParameters(2));
     return sinphi; }
 
+  Double_t getCsp2() const { 
+    auto snp = o2::math_utils::sin(mParameters(2));
+    Double_t csp;
+    csp = std::sqrt((1. - snp) * (1. + snp));
+    return csp*csp ;}
+
   void setTanl(Double_t tanl) { mParameters(3) = tanl; }
   Double_t getTanl() const { return mParameters(3); }
+  Double_t getTgl() const { return mParameters(3); } //DELETE ME: for sake of test
+  
 
   void setInvQPt(Double_t invqpt) { mParameters(4) = invqpt; }
   Double_t getInvQPt() const { return mParameters(4); } // return Inverse charged pt
@@ -88,7 +96,8 @@ class TrackParFwd
   }
 
   Double_t getK(double b) const {
-    return o2::constants::math::B2C * std::abs(b);
+    return std::abs(o2::constants::math::B2C * b); 
+
   } 
 
   Double_t getHz(double b) const {
@@ -121,7 +130,7 @@ class TrackParFwd
   void propagateParamToZlinear(double zEnd);
   void propagateParamToZquadratic(double zEnd, double zField);
   void propagateParamToZhelix(double zEnd, double zField);
-  void getCircleParams(double bz, o2::math_utils::CircleXY<double>& c);
+  void getCircleParams(float bz, o2::math_utils::CircleXY<float>& c, float& sna  , float& csa ) const;
 
  protected:
   Double_t mZ = 0.; ///< Z coordinate (cm)

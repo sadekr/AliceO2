@@ -386,7 +386,7 @@ void TrackParCovFwd::addMCSEffect(double dZ, double x_over_X0)
 }
 
 //_______________________________________________________
-void TrackParFwd::getCircleParams(double bz, o2::math_utils::CircleXY<double>& c) //put an include to get the o2::math_utils::CircleXY 
+void TrackParFwd::getCircleParams(float bz, o2::math_utils::CircleXY<float>& c,  float& sna , float& csa) const
 {
   // get circle params in track global frame, for straight line just set to local coordinates
   c.rC = getCurvature(bz);
