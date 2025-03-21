@@ -40,6 +40,8 @@
 
 #include <cstdio> // for NULL, snprintf
 
+#define MAX_SENSORS 2000
+
 class FairModule;
 
 class TGeoMedium;
@@ -284,15 +286,17 @@ void Detector::buildFT3NewVacuumVessel()
   // to adhere to the changes that were presented at the ALICE 3 Upgrade days in March 2024
   // Inner radius at C-side to 7 cm
   // Inner radius at A-side stays at 5 cm
-  // 06.02.2025 update: IRIS layers are now in TRK
 
   LOG(info) << "Building FT3 Detector: After Upgrade Days March 2024 version";
 
-  mNumberOfLayers = 9;
+  mNumberOfLayers = 12;
   float sensorThickness = 30.e-4;
   float layersx2X0 = 1.e-2;
   std::vector<std::array<float, 5>> layersConfigCSide{
-    {77., 7.0, 35., layersx2X0}, // {z_layer, r_in, r_out, Layerx2X0}
+    {26., .5, 2.5, 0.1f * layersx2X0}, // {z_layer, r_in, r_out, Layerx2X0}
+    {30., .5, 2.5, 0.1f * layersx2X0},
+    {34., .5, 2.5, 0.1f * layersx2X0},
+    {77., 7.0, 35., layersx2X0},
     {100., 7.0, 35., layersx2X0},
     {122., 7.0, 35., layersx2X0},
     {150., 7.0, 68.f, layersx2X0},
@@ -303,7 +307,10 @@ void Detector::buildFT3NewVacuumVessel()
     {350., 7.0, 68.f, layersx2X0}};
 
   std::vector<std::array<float, 5>> layersConfigASide{
-    {77., 5.0, 35., layersx2X0}, // {z_layer, r_in, r_out, Layerx2X0}
+    {26., .5, 2.5, 0.1f * layersx2X0}, // {z_layer, r_in, r_out, Layerx2X0}
+    {30., .5, 2.5, 0.1f * layersx2X0},
+    {34., .5, 2.5, 0.1f * layersx2X0},
+    {77., 5.0, 35., layersx2X0},
     {100., 5.0, 35., layersx2X0},
     {122., 5.0, 35., layersx2X0},
     {150., 5.0, 68.f, layersx2X0},
@@ -729,9 +736,26 @@ void Detector::defineSensitiveVolumes()
     for (int direction : {0, 1}) {
       for (int iLayer = 0; iLayer < mNumberOfLayers; iLayer++) {
         volumeName = o2::ft3::GeometryTGeo::getFT3SensorPattern() + std::to_string(iLayer);
-        v = geoManager->GetVolume(Form("%s_%d_%d", GeometryTGeo::getFT3SensorPattern(), direction, iLayer));
-        LOG(info) << "Adding FT3 Sensitive Volume => " << v->GetName();
-        AddSensitiveVolume(v);
+        if (iLayer < 6) {
+          v = geoManager->GetVolume(Form("%s_%d_%d", GeometryTGeo::getFT3SensorPattern(), direction, iLayer));
+          LOG(info) << "Adding FT3 Sensitive Volume => " << v->GetName();
+          AddSensitiveVolume(v);
+        } else {
+            for (int sensor_count = 0; sensor_count < MAX_SENSORS; ++sensor_count) {
+                std::string sensor_name_front = "FT3sensor_front_" + std::to_string(iLayer) + "_" + std::to_string(direction) + "_" + std::to_string(sensor_count); 
+                std::string sensor_name_back = "FT3sensor_back_" + std::to_string(iLayer) + "_" + std::to_string(direction) + "_" + std::to_string(sensor_count);
+                v = geoManager->GetVolume(sensor_name_front.c_str());
+                if (v) {
+                    LOG(info) << "Adding FT3 Sensitive Volume => " << v->GetName();
+                    AddSensitiveVolume(v);
+                }
+                v = geoManager->GetVolume(sensor_name_back.c_str());
+                if (v) {
+                    LOG(info) << "Adding FT3 Sensitive Volume => " << v->GetName();
+                    AddSensitiveVolume(v);
+                } 
+            }
+        }
       }
     }
   }
