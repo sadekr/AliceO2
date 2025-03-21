@@ -421,7 +421,7 @@ void FT3Module::create_layout(double mZ, int layerNumber, int direction, double 
 
 
                 int SiColor; 
-                double R_material_threshold = 40; 
+                double R_material_threshold = 0; 
 
 
                 if (placed_sensors.find({x, y}) == placed_sensors.end()) {
