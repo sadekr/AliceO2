@@ -31,7 +31,13 @@ struct MatCell {
   float meanX2X0;                   ///< fraction of radiaton lenght
 
   GPUd() MatCell() : meanRho(0.f), meanX2X0(0.f) {}
-  GPUdDefault() MatCell(const MatCell& src) CON_DEFAULT;
+  GPUdDefault() MatCell(const MatCell& src) = default;
+
+  GPUd() void set(const MatCell& c)
+  {
+    meanRho = c.meanRho;
+    meanX2X0 = c.meanX2X0;
+  }
 
   GPUd() void scale(float scale)
   {
@@ -49,7 +55,7 @@ struct MatBudget : MatCell {
   float length;                     ///< length in material
 
   GPUd() MatBudget() : length(0.f) {}
-  GPUdDefault() MatBudget(const MatBudget& src) CON_DEFAULT;
+  GPUdDefault() MatBudget(const MatBudget& src) = default;
 
   GPUd() void scale(float scale)
   {

@@ -22,7 +22,7 @@ using namespace o2::gpu;
 
 struct GPUWorkflowHelper::tmpDataContainer {
   std::vector<o2::BaseCluster<float>> ITSClustersArray;
-  std::vector<int> tpcLinkITS, tpcLinkTRD, tpcLinkTOF;
+  std::vector<int32_t> tpcLinkITS, tpcLinkTRD, tpcLinkTOF;
   std::vector<const o2::track::TrackParCov*> globalTracks;
   std::vector<float> globalTrackTimes;
 };
@@ -39,7 +39,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
         const auto& patterns = recoCont.getITSClustersPatterns();
         auto pattIt = patterns.begin();
         retVal->ITSClustersArray.reserve(clusITS.size());
-        o2::its::ioutils::convertCompactClusters(clusITS, pattIt, retVal->ITSClustersArray, *calib->itsPatternDict);
+        o2::its::ioutils::convertCompactClusters(clusITS, pattIt, retVal->ITSClustersArray, calib->itsPatternDict);
         ioPtr.itsClusters = retVal->ITSClustersArray.data();
       }
       ioPtr.nItsClusters = clusITS.size();
@@ -51,7 +51,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
         ioPtr.itsClusterMC = ITSClsLabels;
       }
     }
-    //LOG(info) << "Got " << ioPtr.nItsClusters << " ITS Clusters";
+    // LOG(info) << "Got " << ioPtr.nItsClusters << " ITS Clusters";
   }
   if (maskTrk[GID::ITS] && ioPtr.nItsTracks == 0) {
     const auto& ITSTracksArray = recoCont.getITSTracks();
@@ -68,7 +68,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
         ioPtr.itsTrackMC = ITSTrkLabels.data();
       }
     }
-    //LOG(info) << "Got " << ioPtr.nItsTracks << " ITS Tracks";
+    // LOG(info) << "Got " << ioPtr.nItsTracks << " ITS Tracks";
   }
 
   if (maskTrk[GID::ITSTPC] && ioPtr.nTracksTPCITSO2 == 0) {
@@ -77,7 +77,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nTracksTPCITSO2 = trkITSTPC.size();
       ioPtr.tracksTPCITSO2 = trkITSTPC.data();
     }
-    //LOG(info) << "Got " << ioPtr.nTracksTPCITSO2 << " ITS-TPC Tracks";
+    // LOG(info) << "Got " << ioPtr.nTracksTPCITSO2 << " ITS-TPC Tracks";
   }
 
   if (maskCl[GID::TOF] && ioPtr.nTOFClusters == 0) {
@@ -86,7 +86,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nTOFClusters = tofClusters.size();
       ioPtr.tofClusters = tofClusters.data();
     }
-    //LOG(info) << "Got " << ioPtr.nTOFClusters << " TOF Clusters";
+    // LOG(info) << "Got " << ioPtr.nTOFClusters << " TOF Clusters";
   }
 
   if ((maskMatch[GID::TOF] || maskMatch[GID::ITSTPCTOF]) && ioPtr.nITSTPCTOFMatches == 0) {
@@ -95,7 +95,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nITSTPCTOFMatches = itstpctofMatches.size();
       ioPtr.itstpctofMatches = itstpctofMatches.data();
     }
-    //LOG(info) << "Got " << ioPtr.nITSTPCTOFMatches << " ITS-TPC-TOF Matches";
+    // LOG(info) << "Got " << ioPtr.nITSTPCTOFMatches << " ITS-TPC-TOF Matches";
   }
 
   if ((maskMatch[GID::TOF] || maskMatch[GID::ITSTPCTRDTOF]) && ioPtr.nITSTPCTRDTOFMatches == 0) {
@@ -104,7 +104,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nITSTPCTRDTOFMatches = itstpctrdtofMatches.size();
       ioPtr.itstpctrdtofMatches = itstpctrdtofMatches.data();
     }
-    //LOG(info) << "Got " << ioPtr.nITSTPCTRDTOFMatches << " ITS-TPC-TRD-TOF Matches";
+    // LOG(info) << "Got " << ioPtr.nITSTPCTRDTOFMatches << " ITS-TPC-TRD-TOF Matches";
   }
 
   if ((maskMatch[GID::TOF] || maskMatch[GID::TPCTOF]) && ioPtr.nTPCTOFMatches == 0) {
@@ -113,7 +113,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nTPCTOFMatches = tpctofMatches.size();
       ioPtr.tpctofMatches = tpctofMatches.data();
     }
-    //LOG(info) << "Got " << ioPtr.nTPCTOFMatches << " TPC-TOF Matches";
+    // LOG(info) << "Got " << ioPtr.nTPCTOFMatches << " TPC-TOF Matches";
   }
 
   if ((maskMatch[GID::TOF] || maskMatch[GID::TPCTRDTOF]) && ioPtr.nTPCTRDTOFMatches == 0) {
@@ -122,12 +122,12 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nTPCTRDTOFMatches = tpctrdtofMatches.size();
       ioPtr.tpctrdtofMatches = tpctrdtofMatches.data();
     }
-    //LOG(info) << "Got " << ioPtr.nTPCTOFMatches << " TPC-TOF Matches";
+    // LOG(info) << "Got " << ioPtr.nTPCTOFMatches << " TPC-TOF Matches";
   }
 
   if (maskCl[GID::TRD]) {
     recoCont.inputsTRD->fillGPUIOPtr(&ioPtr);
-    //LOG(info) << "Got " << ioPtr.nTRDTracklets << " TRD Tracklets";
+    // LOG(info) << "Got " << ioPtr.nTRDTracklets << " TRD Tracklets";
   }
 
   if (maskTrk[GID::ITSTPCTRD] && ioPtr.nTRDTracksITSTPCTRD == 0) {
@@ -136,7 +136,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nTRDTracksITSTPCTRD = trdTracks.size();
       ioPtr.trdTracksITSTPCTRD = trdTracks.data();
     }
-    //LOG(info) << "Got " << ioPtr.nTRDTracksITSTPCTRD << " ITS-TPC-TRD Tracks";
+    // LOG(info) << "Got " << ioPtr.nTRDTracksITSTPCTRD << " ITS-TPC-TRD Tracks";
   }
 
   if (maskTrk[GID::TPCTRD] && ioPtr.nTRDTracksTPCTRD == 0) {
@@ -145,12 +145,12 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       ioPtr.nTRDTracksTPCTRD = trdTracks.size();
       ioPtr.trdTracksTPCTRD = trdTracks.data();
     }
-    //LOG(info) << "Got " << ioPtr.nTRDTracksTPCTRD << " TPC-TRD Tracks";
+    // LOG(info) << "Got " << ioPtr.nTRDTracksTPCTRD << " TPC-TRD Tracks";
   }
 
   if (maskCl[GID::TPC] && ioPtr.clustersNative == nullptr) {
     ioPtr.clustersNative = &recoCont.getTPCClusters();
-    //LOG(info) << "Got " << ioPtr.clustersNative->nClustersTotal << " TPC Clusters";
+    // LOG(info) << "Got " << ioPtr.clustersNative->nClustersTotal << " TPC Clusters";
   }
 
   if (maskTrk[GID::TPC] && ioPtr.nOutputTracksTPCO2 == 0) {
@@ -176,7 +176,7 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
       retVal->tpcLinkTRD.resize(ioPtr.nOutputTracksTPCO2, -1);
       ioPtr.tpcLinkTRD = retVal->tpcLinkTRD.data();
     }
-    //LOG(info) << "Got " << ioPtr.nOutputTracksTPCO2 << " TPC Tracks";
+    // LOG(info) << "Got " << ioPtr.nOutputTracksTPCO2 << " TPC Tracks";
   }
 
   auto creator = [maskTrk, &ioPtr, &recoCont, &retVal](auto& trk, GID gid, float time, float) {
@@ -213,11 +213,11 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
   };
   recoCont.createTracksVariadic(creator);
   if (maskTrk[GID::TPC] && retVal->tpcLinkTRD.size()) {
-    for (unsigned int i = 0; i < ioPtr.nTRDTracksTPCTRD; i++) { // TODO: This should be handled by the createTracks logic, but so far it lacks the TRD tracks
+    for (uint32_t i = 0; i < ioPtr.nTRDTracksTPCTRD; i++) { // TODO: This should be handled by the createTracks logic, but so far it lacks the TRD tracks
       retVal->tpcLinkTRD[ioPtr.trdTracksTPCTRD[i].getRefGlobalTrackId().getIndex()] = i;
     }
     if (ioPtr.nTracksTPCITSO2) {
-      for (unsigned int i = 0; i < ioPtr.nTRDTracksITSTPCTRD; i++) {
+      for (uint32_t i = 0; i < ioPtr.nTRDTracksITSTPCTRD; i++) {
         retVal->tpcLinkTRD[ioPtr.tracksTPCITSO2[ioPtr.trdTracksITSTPCTRD[i].getRefGlobalTrackId().getIndex()].getRefTPC().getIndex()] = i | 0x40000000;
       }
     }
@@ -225,5 +225,5 @@ std::shared_ptr<const GPUWorkflowHelper::tmpDataContainer> GPUWorkflowHelper::fi
   ioPtr.globalTracks = retVal->globalTracks.data();
   ioPtr.globalTrackTimes = retVal->globalTrackTimes.data();
 
-  return std::move(retVal);
+  return retVal;
 }

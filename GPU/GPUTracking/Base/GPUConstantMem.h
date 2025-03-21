@@ -20,59 +20,36 @@
 #include "GPUDataTypes.h"
 #include "GPUErrors.h"
 
-// Dummies for stuff not supported in legacy code (ROOT 5 / OPENCL1.2)
-#if defined(GPUCA_NOCOMPAT_ALLCINT) && (!defined(GPUCA_GPULIBRARY) || !defined(GPUCA_ALIROOT_LIB))
 #include "GPUTPCGMMerger.h"
 #include "GPUTRDTracker.h"
-#else
-#include "GPUTRDDef.h"
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
-{
-class GPUTPCGMMerger
-{
-};
-template <class T, class P>
-class GPUTRDTracker_t
-{
-  void SetMaxData(const GPUTrackingInOutPointers& io) {}
-};
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
-#endif
 
-// Dummies for stuff not suppored in legacy code, or for what requires O2 headers while not available
-#if defined(GPUCA_NOCOMPAT_ALLCINT) && (!defined(GPUCA_GPULIBRARY) || !defined(GPUCA_ALIROOT_LIB)) && defined(GPUCA_HAVE_O2HEADERS)
 #include "GPUTPCConvert.h"
 #include "GPUTPCCompression.h"
+#include "GPUTPCDecompression.h"
 #include "GPUITSFitter.h"
 #include "GPUTPCClusterFinder.h"
 #include "GPUTrackingRefit.h"
-#else
-#include "GPUO2FakeClasses.h"
-#endif
 
 #ifdef GPUCA_KERNEL_DEBUGGER_OUTPUT
 #include "GPUKernelDebugOutput.h"
 #endif
 
-namespace GPUCA_NAMESPACE
+#ifdef GPUCA_HAS_ONNX
+#include "GPUTPCNNClusterizer.h"
+#endif
+
+namespace o2::gpu
 {
-namespace gpu
-{
-MEM_CLASS_PRE()
 struct GPUConstantMem {
-  MEM_CONSTANT(GPUParam)
-  param;
-  MEM_GLOBAL(GPUTPCTracker)
-  tpcTrackers[GPUCA_NSLICES];
+  GPUParam param;
+  GPUTPCTracker tpcTrackers[GPUCA_NSECTORS];
   GPUTPCConvert tpcConverter;
   GPUTPCCompression tpcCompressor;
+  GPUTPCDecompression tpcDecompressor;
   GPUTPCGMMerger tpcMerger;
   GPUTRDTrackerGPU trdTrackerGPU;
   GPUTRDTracker trdTrackerO2;
-  GPUTPCClusterFinder tpcClusterer[GPUCA_NSLICES];
+  GPUTPCClusterFinder tpcClusterer[GPUCA_NSECTORS];
   GPUITSFitter itsFitter;
   GPUTrackingRefitProcessor trackingRefit;
   GPUTrackingInOutPointers ioPtrs;
@@ -81,51 +58,51 @@ struct GPUConstantMem {
 #ifdef GPUCA_KERNEL_DEBUGGER_OUTPUT
   GPUKernelDebugOutput debugOutput;
 #endif
+#ifdef GPUCA_HAS_ONNX
+  GPUTPCNNClusterizer tpcNNClusterer[GPUCA_NSECTORS];
+#endif
+
+  template <int32_t I>
+  GPUd() auto& getTRDTracker();
 };
 
-#ifdef GPUCA_NOCOMPAT
-union GPUConstantMemCopyable {
-  GPUConstantMemCopyable() {}  // NOLINT: We want an empty constructor, not a default one
-  ~GPUConstantMemCopyable() {} // NOLINT: We want an empty destructor, not a default one
-  GPUConstantMemCopyable(const GPUConstantMemCopyable& o)
-  {
-    for (unsigned int k = 0; k < sizeof(GPUConstantMem) / sizeof(int); k++) {
-      ((int*)&v)[k] = ((int*)&o.v)[k];
-    }
-  }
-  GPUConstantMem v;
-};
-#endif
-
-#if defined(GPUCA_GPUCODE) && defined(GPUCA_NOCOMPAT)
-static constexpr size_t gGPUConstantMemBufferSize = (sizeof(GPUConstantMem) + sizeof(uint4) - 1);
-#ifndef GPUCA_GPUCODE_HOSTONLY
-#if defined(GPUCA_HAS_GLOBAL_SYMBOL_CONSTANT_MEM)
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
-GPUconstant() GPUCA_NAMESPACE::gpu::GPUConstantMemCopyable gGPUConstantMemBuffer; // HIP constant memory symbol address cannot be obtained when in namespace
-namespace GPUCA_NAMESPACE
+template <>
+GPUdi() auto& GPUConstantMem::getTRDTracker<0>()
 {
-namespace gpu
+  return trdTrackerGPU;
+}
+template <>
+GPUdi() auto& GPUConstantMem::getTRDTracker<1>()
 {
-#endif // GPUCA_HAS_GLOBAL_SYMBOL_CONSTANT_MEM
-#ifdef GPUCA_CONSTANT_AS_ARGUMENT
-static GPUConstantMemCopyable gGPUConstantMemBufferHost;
-#endif // GPUCA_CONSTANT_AS_ARGUMENT
-#endif // !GPUCA_GPUCODE_HOSTONLY
-#endif
-
-// Must be placed here, to avoid circular header dependency
-GPUdi() GPUconstantref() const MEM_CONSTANT(GPUParam) & GPUProcessor::Param() const
-{
-#if defined(GPUCA_GPUCODE_DEVICE) && defined(GPUCA_HAS_GLOBAL_SYMBOL_CONSTANT_MEM) && !defined(GPUCA_GPUCODE_HOSTONLY)
-  return GPUCA_CONSMEM.param;
-#else
-  return mConstantMem->param;
-#endif
+  return trdTrackerO2;
 }
 
-GPUdi() GPUconstantref() const MEM_CONSTANT(GPUConstantMem) * GPUProcessor::GetConstantMem() const
+union GPUConstantMemCopyable {
+#if !defined(__OPENCL__) || defined(__OPENCL_HOST__)
+  GPUh() GPUConstantMemCopyable() {}  // NOLINT: We want an empty constructor, not a default one
+  GPUh() ~GPUConstantMemCopyable() {} // NOLINT: We want an empty destructor, not a default one
+  GPUh() GPUConstantMemCopyable(const GPUConstantMemCopyable& o)
+  {
+    for (uint32_t k = 0; k < sizeof(GPUConstantMem) / sizeof(int32_t); k++) {
+      ((int32_t*)&v)[k] = ((int32_t*)&o.v)[k];
+    }
+  }
+#endif
+  GPUConstantMem v;
+};
+
+#if defined(GPUCA_GPUCODE)
+static constexpr size_t gGPUConstantMemBufferSize = (sizeof(GPUConstantMem) + sizeof(uint4) - 1);
+#endif
+} // namespace o2::gpu
+#if defined(GPUCA_HAS_GLOBAL_SYMBOL_CONSTANT_MEM) && !defined(GPUCA_GPUCODE_HOSTONLY)
+GPUconstant() o2::gpu::GPUConstantMemCopyable gGPUConstantMemBuffer; // TODO: This should go into o2::gpu namespace, but then CUDA or HIP would not find the symbol
+#endif // GPUCA_HAS_GLOBAL_SYMBOL_CONSTANT_MEM
+namespace o2::gpu
+{
+
+// Must be placed here, to avoid circular header dependency
+GPUdi() GPUconstantref() const GPUConstantMem* GPUProcessor::GetConstantMem() const
 {
 #if defined(GPUCA_GPUCODE_DEVICE) && defined(GPUCA_HAS_GLOBAL_SYMBOL_CONSTANT_MEM) && !defined(GPUCA_GPUCODE_HOSTONLY)
   return &GPUCA_CONSMEM;
@@ -134,12 +111,16 @@ GPUdi() GPUconstantref() const MEM_CONSTANT(GPUConstantMem) * GPUProcessor::GetC
 #endif
 }
 
-GPUdi() void GPUProcessor::raiseError(unsigned int code, unsigned int param1, unsigned int param2, unsigned int param3) const
+GPUdi() GPUconstantref() const GPUParam& GPUProcessor::Param() const
+{
+  return GetConstantMem()->param;
+}
+
+GPUdi() void GPUProcessor::raiseError(uint32_t code, uint32_t param1, uint32_t param2, uint32_t param3) const
 {
   GetConstantMem()->errorCodes.raiseError(code, param1, param2, param3);
 }
 
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

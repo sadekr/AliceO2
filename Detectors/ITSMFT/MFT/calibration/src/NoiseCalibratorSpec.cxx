@@ -18,10 +18,14 @@
 #include "DataFormatsITSMFT/Digit.h"
 #include "DataFormatsITSMFT/CompCluster.h"
 #include "DataFormatsITSMFT/ROFRecord.h"
+#include "ITSMFTBase/DPLAlpideParam.h"
+#include "ITSMFTReconstruction/ClustererParam.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
+#include "Framework/CCDBParamSpec.h"
+#include "DetectorsCommonDataFormats/DetectorNameConf.h"
 
 using namespace o2::framework;
 using namespace o2::utils;
@@ -31,35 +35,58 @@ namespace o2
 namespace mft
 {
 
-NoiseCalibratorSpec::NoiseCalibratorSpec(bool useDigits)
-  : mDigits(useDigits)
+NoiseCalibratorSpec::NoiseCalibratorSpec(bool useDigits, std::shared_ptr<o2::base::GRPGeomRequest> req)
+  : mDigits(useDigits), mCCDBRequest(req)
 {
 }
 
 void NoiseCalibratorSpec::init(InitContext& ic)
 {
+  o2::base::GRPGeomHelper::instance().setRequest(mCCDBRequest);
   auto probT = ic.options().get<float>("prob-threshold");
-  LOG(INFO) << "Setting the probability threshold to " << probT;
+  auto probTRelErr = ic.options().get<float>("prob-rel-err");
+  LOGP(info, "Setting the probability threshold to {} with relative error {}", probT, probTRelErr);
+  mStopMeOnly = ic.options().get<bool>("stop-me-only");
+  mPath = ic.options().get<std::string>("path-CCDB");
+  mPathMerge = ic.options().get<std::string>("path-CCDB-merge");
 
-  mPath = ic.options().get<std::string>("path");
   mMeta = ic.options().get<std::string>("meta");
   mStart = ic.options().get<int64_t>("tstart");
   mEnd = ic.options().get<int64_t>("tend");
 
-  mCalibrator = std::make_unique<CALIBRATOR>(probT);
+  mCalibrator = std::make_unique<CALIBRATOR>(probT, probTRelErr);
+
+  mPathDcs = ic.options().get<std::string>("path-DCS");
+  mOutputType = ic.options().get<std::string>("send-to-server");
+  mNoiseMapForDcs.clear();
+  api.init(o2::base::NameConf::getCCDBServer());
 }
 
 void NoiseCalibratorSpec::run(ProcessingContext& pc)
 {
+  updateTimeDependentParams(pc);
   if (mDigits) {
     const auto digits = pc.inputs().get<gsl::span<o2::itsmft::Digit>>("digits");
     const auto rofs = pc.inputs().get<gsl::span<o2::itsmft::ROFRecord>>("digitsROF");
     const auto tfcounter = o2::header::get<o2::framework::DataProcessingHeader*>(pc.inputs().get("digitsROF").header)->startTime;
 
     if (mCalibrator->processTimeFrame(tfcounter, digits, rofs)) {
-      LOG(INFO) << "Minimum number of noise counts has been reached !";
-      sendOutput(pc.outputs());
-      pc.services().get<ControlService>().readyToQuit(QuitRequest::All);
+      LOG(info) << "Minimum number of noise counts has been reached !";
+      if (mOutputType.compare("CCDB") == 0) {
+        LOG(info) << "Sending an object to Production-CCDB";
+        sendOutputCcdb(pc.outputs());
+        LOG(info) << "Sending an object to Production-CCDBMerge";
+        sendOutputCcdbMerge(pc.outputs());
+      } else if (mOutputType.compare("DCS") == 0) {
+        LOG(info) << "Sending an object to DCS-CCDB";
+        sendOutputDcs(pc.outputs());
+      } else {
+        LOG(info) << "Sending an object to Production-CCDB and DCS-CCDB";
+        sendOutputCcdbDcs(pc.outputs());
+        LOG(info) << "Sending an object to Production-CCDBMerge";
+        sendOutputCcdbMerge(pc.outputs());
+      }
+      pc.services().get<ControlService>().readyToQuit(mStopMeOnly ? QuitRequest::Me : QuitRequest::All);
     }
   } else {
     const auto compClusters = pc.inputs().get<gsl::span<o2::itsmft::CompClusterExt>>("compClusters");
@@ -68,15 +95,53 @@ void NoiseCalibratorSpec::run(ProcessingContext& pc)
     const auto tfcounter = o2::header::get<o2::framework::DataProcessingHeader*>(pc.inputs().get("ROframes").header)->startTime;
 
     if (mCalibrator->processTimeFrame(tfcounter, compClusters, patterns, rofs)) {
-      LOG(INFO) << "Minimum number of noise counts has been reached !";
-      sendOutput(pc.outputs());
-      pc.services().get<ControlService>().readyToQuit(QuitRequest::All);
+      LOG(info) << "Minimum number of noise counts has been reached !";
+      if (mOutputType.compare("CCDB") == 0) {
+        LOG(info) << "Sending an object to Production-CCDB";
+        sendOutputCcdb(pc.outputs());
+        LOG(info) << "Sending an object to Production-CCDBMerge";
+        sendOutputCcdbMerge(pc.outputs());
+      } else if (mOutputType.compare("DCS") == 0) {
+        LOG(info) << "Sending an object to DCS-CCDB";
+        sendOutputDcs(pc.outputs());
+      } else {
+        LOG(info) << "Sending an object to Production-CCDB and DCS-CCDB";
+        sendOutputCcdbDcs(pc.outputs());
+        LOG(info) << "Sending an object to Production-CCDBMerge";
+        sendOutputCcdbMerge(pc.outputs());
+      }
+      pc.services().get<ControlService>().readyToQuit(mStopMeOnly ? QuitRequest::Me : QuitRequest::All);
     }
   }
 }
 
-void NoiseCalibratorSpec::sendOutput(DataAllocator& output)
+void NoiseCalibratorSpec::setOutputDcs(const o2::itsmft::NoiseMap& payload)
 {
+  for (int iChip = 0; iChip < 936; ++iChip) {
+    for (int iRow = 0; iRow < 512; ++iRow) {
+      for (int iCol = 0; iCol < 1024; ++iCol) {
+
+        if (!payload.isNoisy(iChip, iRow, iCol)) {
+          continue;
+        }
+        std::array<int, 3> noise = {iChip, iRow, iCol};
+        mNoiseMapForDcs.emplace_back(noise);
+      }
+    }
+  }
+}
+
+void NoiseCalibratorSpec::sendOutputCcdbDcs(DataAllocator& output)
+{
+
+  LOG(info) << "CCDB-DCS mode";
+
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+
   mCalibrator->finalize();
 
   long tstart = mStart;
@@ -94,7 +159,7 @@ void NoiseCalibratorSpec::sendOutput(DataAllocator& output)
     for (auto& token : tokens) {
       auto keyval = Str::tokenize(token, '=', false);
       if (keyval.size() != 2) {
-        LOG(ERROR) << "Illegal command-line key/value string: " << token;
+        LOG(error) << "Illegal command-line key/value string: " << token;
         continue;
       }
       Str::trim(keyval[1]);
@@ -112,7 +177,78 @@ void NoiseCalibratorSpec::sendOutput(DataAllocator& output)
   auto flName = o2::ccdb::CcdbApi::generateFileName("noise");
   auto image = o2::ccdb::CcdbApi::createObjectImage(&payload, &info);
   info.setFileName(flName);
-  LOG(INFO) << "Sending object " << info.getPath() << "/" << info.getFileName()
+  LOG(info) << "Sending object " << info.getPath() << "/" << info.getFileName()
+            << " of size " << image->size()
+            << " bytes, valid for " << info.getStartValidityTimestamp()
+            << " : " << info.getEndValidityTimestamp();
+
+  using clbUtils = o2::calibration::Utils;
+  output.snapshot(Output{clbUtils::gDataOriginCDBPayload, "MFT_NoiseMap", 0}, *image.get());
+  output.snapshot(Output{clbUtils::gDataOriginCDBWrapper, "MFT_NoiseMap", 0}, info);
+
+  setOutputDcs(payload);
+
+  o2::ccdb::CcdbObjectInfo infoDcs(mPathDcs, "NoiseMap", "noise.root", meta, tstart, tend);
+  auto flNameDcs = o2::ccdb::CcdbApi::generateFileName("noise");
+  auto imageDcs = o2::ccdb::CcdbApi::createObjectImage(&mNoiseMapForDcs, &infoDcs);
+  infoDcs.setFileName(flNameDcs);
+  LOG(info) << "Sending object " << infoDcs.getPath() << "/" << infoDcs.getFileName()
+            << " of size " << imageDcs->size()
+            << " bytes, valid for " << infoDcs.getStartValidityTimestamp()
+            << " : " << infoDcs.getEndValidityTimestamp();
+
+  using clbUtilsDcs = o2::calibration::Utils;
+  output.snapshot(Output{clbUtilsDcs::gDataOriginCDBPayload, "MFT_NoiseMap", 1}, *imageDcs.get());
+  output.snapshot(Output{clbUtilsDcs::gDataOriginCDBWrapper, "MFT_NoiseMap", 1}, infoDcs);
+}
+
+void NoiseCalibratorSpec::sendOutputCcdb(DataAllocator& output)
+{
+
+  LOG(info) << "CCDB mode";
+
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+
+  mCalibrator->finalize();
+
+  long tstart = mStart;
+  if (tstart == -1) {
+    tstart = o2::ccdb::getCurrentTimestamp();
+  }
+  long tend = mEnd;
+  if (tend == -1) {
+    constexpr long SECONDSPERYEAR = 365 * 24 * 60 * 60;
+    tend = o2::ccdb::getFutureTimestamp(SECONDSPERYEAR);
+  }
+
+  std::map<std::string, std::string> meta;
+  auto toKeyValPairs = [&meta](std::vector<std::string> const& tokens) {
+    for (auto& token : tokens) {
+      auto keyval = Str::tokenize(token, '=', false);
+      if (keyval.size() != 2) {
+        LOG(error) << "Illegal command-line key/value string: " << token;
+        continue;
+      }
+      Str::trim(keyval[1]);
+      meta[keyval[0]] = keyval[1];
+    }
+  };
+  toKeyValPairs(Str::tokenize(mMeta, ';', true));
+
+  long startTF, endTF;
+
+  const auto& payload = mCalibrator->getNoiseMap();
+  //  const auto& payload = mCalibrator->getNoiseMap(starTF, endTF); //For TimeSlot calibration
+
+  o2::ccdb::CcdbObjectInfo info(mPath, "NoiseMap", "noise.root", meta, tstart, tend);
+  auto flName = o2::ccdb::CcdbApi::generateFileName("noise");
+  auto image = o2::ccdb::CcdbApi::createObjectImage(&payload, &info);
+  info.setFileName(flName);
+  LOG(info) << "Sending object CCDB " << info.getPath() << "/" << info.getFileName()
             << " of size " << image->size()
             << " bytes, valid for " << info.getStartValidityTimestamp()
             << " : " << info.getEndValidityTimestamp();
@@ -122,9 +258,164 @@ void NoiseCalibratorSpec::sendOutput(DataAllocator& output)
   output.snapshot(Output{clbUtils::gDataOriginCDBWrapper, "MFT_NoiseMap", 0}, info);
 }
 
+void NoiseCalibratorSpec::sendOutputCcdbMerge(DataAllocator& output)
+{
+
+  LOG(info) << "CCDB-Merge mode";
+
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+
+  mCalibrator->finalize();
+
+  long tstart = mStart;
+  if (tstart == -1) {
+    tstart = o2::ccdb::getCurrentTimestamp();
+  }
+  long tend = mEnd;
+  if (tend == -1) {
+    constexpr long SECONDSPERYEAR = 365 * 24 * 60 * 60;
+    tend = o2::ccdb::getFutureTimestamp(SECONDSPERYEAR);
+  }
+
+  std::map<std::string, std::string> meta;
+  auto toKeyValPairs = [&meta](std::vector<std::string> const& tokens) {
+    for (auto& token : tokens) {
+      auto keyval = Str::tokenize(token, '=', false);
+      if (keyval.size() != 2) {
+        LOG(error) << "Illegal command-line key/value string: " << token;
+        continue;
+      }
+      Str::trim(keyval[1]);
+      meta[keyval[0]] = keyval[1];
+    }
+  };
+  toKeyValPairs(Str::tokenize(mMeta, ';', true));
+
+  long startTF, endTF;
+
+  auto payload = mCalibrator->getNoiseMap();
+  //  const auto& payload = mCalibrator->getNoiseMap(starTF, endTF); //For TimeSlot calibration
+  map<string, string> headers;
+  map<std::string, std::string> filter;
+  auto* payloadPrev1 = api.retrieveFromTFileAny<o2::itsmft::NoiseMap>(mPath, filter, -1, &headers);
+  long validtime = std::stol(headers["Valid-From"]);
+  auto mergedPL = payload;
+  if (validtime > 0) {
+    validtime = validtime - 1;
+    auto* payloadPrev2 = api.retrieveFromTFileAny<o2::itsmft::NoiseMap>(mPath, filter, validtime, &headers);
+    auto bufferPL = payloadPrev2->merge(payloadPrev1);
+    mergedPL = payload.merge(&bufferPL);
+  }
+  o2::ccdb::CcdbObjectInfo info(mPathMerge, "NoiseMap", "noise.root", meta, tstart, tend);
+  auto flName = o2::ccdb::CcdbApi::generateFileName("noise");
+  auto image = o2::ccdb::CcdbApi::createObjectImage(&mergedPL, &info);
+  info.setFileName(flName);
+  LOG(info) << "Sending object ccdb-merge " << info.getPath() << "/" << info.getFileName()
+            << " of size " << image->size()
+            << " bytes, valid for " << info.getStartValidityTimestamp()
+            << " : " << info.getEndValidityTimestamp();
+
+  using clbUtils = o2::calibration::Utils;
+  output.snapshot(Output{clbUtils::gDataOriginCDBPayload, "MFT_NoiseMap", 0}, *image.get());
+  output.snapshot(Output{clbUtils::gDataOriginCDBWrapper, "MFT_NoiseMap", 0}, info);
+}
+
+void NoiseCalibratorSpec::sendOutputDcs(DataAllocator& output)
+{
+
+  LOG(info) << "DCS mode";
+
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
+
+  mCalibrator->finalize();
+
+  long tstart = mStart;
+  if (tstart == -1) {
+    tstart = o2::ccdb::getCurrentTimestamp();
+  }
+  long tend = mEnd;
+  if (tend == -1) {
+    constexpr long SECONDSPERYEAR = 365 * 24 * 60 * 60;
+    tend = o2::ccdb::getFutureTimestamp(SECONDSPERYEAR);
+  }
+
+  std::map<std::string, std::string> meta;
+  auto toKeyValPairs = [&meta](std::vector<std::string> const& tokens) {
+    for (auto& token : tokens) {
+      auto keyval = Str::tokenize(token, '=', false);
+      if (keyval.size() != 2) {
+        LOG(error) << "Illegal command-line key/value string: " << token;
+        continue;
+      }
+      Str::trim(keyval[1]);
+      meta[keyval[0]] = keyval[1];
+    }
+  };
+  toKeyValPairs(Str::tokenize(mMeta, ';', true));
+
+  long startTF, endTF;
+
+  const auto& payload = mCalibrator->getNoiseMap();
+  //  const auto& payload = mCalibrator->getNoiseMap(starTF, endTF); //For TimeSlot calibration
+
+  setOutputDcs(payload);
+
+  o2::ccdb::CcdbObjectInfo infoDcs(mPathDcs, "NoiseMap", "noise.root", meta, tstart, tend);
+  auto flNameDcs = o2::ccdb::CcdbApi::generateFileName("noise");
+  auto imageDcs = o2::ccdb::CcdbApi::createObjectImage(&mNoiseMapForDcs, &infoDcs);
+  infoDcs.setFileName(flNameDcs);
+  LOG(info) << "Sending object " << infoDcs.getPath() << "/" << infoDcs.getFileName()
+            << " of size " << imageDcs->size()
+            << " bytes, valid for " << infoDcs.getStartValidityTimestamp()
+            << " : " << infoDcs.getEndValidityTimestamp();
+
+  using clbUtilsDcs = o2::calibration::Utils;
+  output.snapshot(Output{clbUtilsDcs::gDataOriginCDBPayload, "MFT_NoiseMap", 0}, *imageDcs.get());
+  output.snapshot(Output{clbUtilsDcs::gDataOriginCDBWrapper, "MFT_NoiseMap", 0}, infoDcs);
+}
+
 void NoiseCalibratorSpec::endOfStream(o2::framework::EndOfStreamContext& ec)
 {
-  sendOutput(ec.outputs());
+  if (mOutputType.compare("CCDB") == 0) {
+    LOG(info) << "Sending an object to Production-CCDB";
+    sendOutputCcdb(ec.outputs());
+    LOG(info) << "Sending an object to Production-CCDB-Merge";
+    sendOutputCcdbMerge(ec.outputs());
+  } else if (mOutputType.compare("DCS") == 0) {
+    LOG(info) << "Sending an object to DCS-CCDB";
+    sendOutputDcs(ec.outputs());
+  } else {
+    LOG(info) << "Sending an object to Production-CCDB and DCS-CCDB";
+    sendOutputCcdbDcs(ec.outputs());
+    sendOutputCcdbMerge(ec.outputs());
+  }
+}
+
+///_______________________________________
+void NoiseCalibratorSpec::updateTimeDependentParams(ProcessingContext& pc)
+{
+  o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+  if (!mDigits) {
+    pc.inputs().get<o2::itsmft::TopologyDictionary*>("cldict"); // just to trigger the finaliseCCDB
+  }
+}
+
+///_______________________________________
+void NoiseCalibratorSpec::finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+{
+  o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj);
+  if (matcher == ConcreteDataMatcher("MFT", "CLUSDICT", 0)) {
+    LOG(info) << "cluster dictionary updated";
+    mCalibrator->setClusterDictionary((const o2::itsmft::TopologyDictionary*)obj);
+  }
 }
 
 DataProcessorSpec getNoiseCalibratorSpec(bool useDigits)
@@ -138,25 +429,36 @@ DataProcessorSpec getNoiseCalibratorSpec(bool useDigits)
     inputs.emplace_back("compClusters", detOrig, "COMPCLUSTERS", 0, Lifetime::Timeframe);
     inputs.emplace_back("patterns", detOrig, "PATTERNS", 0, Lifetime::Timeframe);
     inputs.emplace_back("ROframes", detOrig, "CLUSTERSROF", 0, Lifetime::Timeframe);
+    inputs.emplace_back("cldict", "MFT", "CLUSDICT", 0, Lifetime::Condition, ccdbParamSpec("MFT/Calib/ClusterDictionary"));
   }
-
+  auto ccdbRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                          // orbitResetTime
+                                                                false,                          // GRPECS=true
+                                                                false,                          // GRPLHCIF
+                                                                false,                          // GRPMagField
+                                                                false,                          // askMatLUT
+                                                                o2::base::GRPGeomRequest::None, // geometry
+                                                                inputs);
   using clbUtils = o2::calibration::Utils;
   std::vector<OutputSpec> outputs;
-  outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBPayload, "MFT_NoiseMap"});
-  outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBWrapper, "MFT_NoiseMap"});
+  outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBPayload, "MFT_NoiseMap"}, Lifetime::Sporadic);
+  outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBWrapper, "MFT_NoiseMap"}, Lifetime::Sporadic);
 
   return DataProcessorSpec{
     "mft-noise-calibrator",
     inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<NoiseCalibratorSpec>(useDigits)},
+    AlgorithmSpec{adaptFromTask<NoiseCalibratorSpec>(useDigits, ccdbRequest)},
     Options{
       {"prob-threshold", VariantType::Float, 1.e-6f, {"Probability threshold for noisy pixels"}},
+      {"prob-rel-err", VariantType::Float, 0.2f, {"Relative error on channel noise to apply the threshold"}},
       {"tstart", VariantType::Int64, -1ll, {"Start of validity timestamp"}},
       {"tend", VariantType::Int64, -1ll, {"End of validity timestamp"}},
-      {"path", VariantType::String, "/MFT/Calib/NoiseMap", {"Path to write to in CCDB"}},
+      {"path-CCDB", VariantType::String, "/MFT/Calib/NoiseMap", {"Path to write to in CCDB"}},
+      {"path-CCDB-merge", VariantType::String, "/MFT/Calib/NoiseMapMerged", {"Path to write merged file to in CCDB"}},
+      {"path-DCS", VariantType::String, "/MFT/Config/NoiseMap", {"Path to write to in DCS"}},
       {"meta", VariantType::String, "", {"meta data to write in CCDB"}},
-      {"hb-per-tf", VariantType::Int, 256, {"Number of HBF per TF"}}}};
+      {"send-to-server", VariantType::String, "CCDB-DCS", {"meta data to write in DCS-CCDB"}},
+      {"stop-me-only", VariantType::Bool, false, {"At sufficient statistics stop only this device, otherwise whole workflow"}}}};
 }
 
 } // namespace mft

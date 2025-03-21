@@ -20,9 +20,9 @@ using namespace o2::tof;
 
 ClassImp(Diagnostic);
 
-int Diagnostic::fill(ULong64_t pattern)
+uint32_t Diagnostic::fill(ULong64_t pattern)
 {
-  int frequency = 1;
+  uint32_t frequency = 1;
 
   auto pairC = mVector.find(pattern);
 
@@ -35,7 +35,7 @@ int Diagnostic::fill(ULong64_t pattern)
   return frequency;
 }
 
-int Diagnostic::fill(ULong64_t pattern, int frequency)
+uint32_t Diagnostic::fill(ULong64_t pattern, uint32_t frequency)
 {
   auto pairC = mVector.find(pattern);
 
@@ -49,7 +49,7 @@ int Diagnostic::fill(ULong64_t pattern, int frequency)
   return frequency;
 }
 
-int Diagnostic::getFrequency(ULong64_t pattern)
+uint32_t Diagnostic::getFrequency(ULong64_t pattern) const
 {
   auto pairC = mVector.find(pattern);
   if (pairC != mVector.end()) {
@@ -59,9 +59,14 @@ int Diagnostic::getFrequency(ULong64_t pattern)
   return 0;
 }
 
-void Diagnostic::print() const
+void Diagnostic::print(bool longFormat) const
 {
-  LOG(INFO) << "Diagnostic patterns";
+  LOG(info) << "Diagnostic patterns, entries = " << mVector.size();
+
+  if (!longFormat) {
+    return;
+  }
+
   for (const auto& [key, value] : mVector) {
     std::cout << key << " = " << value << "; ";
   }
@@ -86,51 +91,64 @@ ULong64_t Diagnostic::getTRMKey(int crate, int trm)
   return key;
 }
 
-int Diagnostic::getSlot(ULong64_t pattern) const
-{
-  return (pattern & 68719476735) / 4294967296;
-}
-
-int Diagnostic::getCrate(ULong64_t pattern) const
-{
-  return (pattern & 8796093022207) / 68719476736;
-}
-
-int Diagnostic::getChannel(ULong64_t pattern) const
-{
-  if (getSlot(pattern) == 14) {
-    return (pattern & 262143);
-  }
-  return -1;
-}
-
-int Diagnostic::getNoisyLevel(ULong64_t pattern) const
-{
-  if (getChannel(pattern)) {
-    if (pattern & (1 << 20)) {
-      return 3;
-    } else if (pattern & (1 << 19)) {
-      return 2;
-    } else {
-      return 1;
-    }
-  }
-  return 0;
-}
-
 void Diagnostic::fill(const Diagnostic& diag)
 {
-  LOG(DEBUG) << "Filling diagnostic word";
+  LOG(debug) << "Filling diagnostic word";
   for (auto const& el : diag.mVector) {
-    LOG(DEBUG) << "Filling diagnostic pattern " << el.first << " adding " << el.second << " to " << getFrequency(el.first) << " --> " << el.second + getFrequency(el.first);
+    LOG(debug) << "Filling diagnostic pattern " << el.first << " adding " << el.second << " to " << getFrequency(el.first) << " --> " << el.second + getFrequency(el.first);
     fill(el.first, el.second);
   }
 }
 
 void Diagnostic::merge(const Diagnostic* prev)
 {
-  LOG(DEBUG) << "Merging diagnostic words";
+  LOG(debug) << "Merging diagnostic words";
   for (auto const& el : prev->mVector) {
-    fill(el.first, el.second + getFrequency(el.first));
+    fill(el.first, el.second);
   }
+}
+
+void Diagnostic::getNoisyLevelMap(Char_t* output) const
+{
+  // set true in output channel array
+  for (auto pair : mVector) {
+    auto key = pair.first;
+    int slot = getSlot(key);
+
+    if (slot != 14) {
+      continue;
+    }
+
+    output[getChannel(key)] = getNoisyLevel(key);
+  }
+}
+
+void Diagnostic::getNoisyMap(Bool_t* output, int noisyThr) const
+{
+  // set true in output channel array
+  for (auto pair : mVector) {
+    auto key = pair.first;
+    int slot = getSlot(key);
+
+    if (slot != 14) {
+      continue;
+    }
+
+    if (getNoisyLevel(key) >= noisyThr) {
+      output[getChannel(key)] = true;
+    }
+  }
+}
+
+bool Diagnostic::isNoisyChannel(int channel, int thr) const
+{
+  static const ULong64_t addMask[3] = {0, 1 << 19, 3 << 19};
+  ULong64_t mask = getNoisyChannelKey(channel);
+  for (int i = thr; i <= 2; i++) {
+    if (getFrequency(mask + addMask[i])) {
+      return true;
+    }
+  }
+
+  return false;
 }

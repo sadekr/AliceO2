@@ -51,13 +51,23 @@ class IntegratingMerger : public framework::Task
   /// \brief IntegratingMerger process callback.
   void run(framework::ProcessingContext& ctx) override;
 
+  /// \brief Callback for CallbackService::Id::EndOfStream
+  void endOfStream(framework::EndOfStreamContext& eosContext) override;
+
  private:
-  void publish(framework::DataAllocator& allocator);
+  void finishCycle(framework::DataAllocator& outputs);
+  void publishIntegral(framework::DataAllocator& allocator);
+  void publishMovingWindow(framework::DataAllocator& allocator);
+  static void merge(ObjectStore& mMergedDelta, ObjectStore&& other);
   void clear();
+  bool shouldFinishCycle(const framework::InputRecord&) const;
 
  private:
   header::DataHeader::SubSpecificationType mSubSpec;
-  ObjectStore mMergedObject = std::monostate{};
+  // data points since the last cycle end. it allows us to create moving windows
+  ObjectStore mMergedObjectLastCycle = std::monostate{};
+  // data points since the last state reset
+  ObjectStore mMergedObjectIntegral = std::monostate{};
   MergerConfig mConfig;
   std::unique_ptr<monitoring::Monitoring> mCollector;
   int mCyclesSinceReset = 0;

@@ -8,15 +8,13 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#ifndef FRAMEWORK_CONFIG_CONTEXT_H
-#define FRAMEWORK_CONFIG_CONTEXT_H
+#ifndef O2_FRAMEWORK_CONFIG_CONTEXT_H_
+#define O2_FRAMEWORK_CONFIG_CONTEXT_H_
 
 #include "Framework/ConfigParamRegistry.h"
-#include "Framework/ServiceRegistry.h"
+#include "Framework/ServiceRegistryRef.h"
 
-namespace o2
-{
-namespace framework
+namespace o2::framework
 {
 
 /// This is the context class for information which are available at
@@ -25,23 +23,25 @@ namespace framework
 class ConfigContext
 {
  public:
-  ConfigContext(ConfigParamRegistry& options, int argc, char** argv) : mOptions{options}, mArgc{argc}, mArgv{argv} {}
+  ConfigContext(ConfigParamRegistry& options, ServiceRegistryRef services, int argc, char** argv);
 
-  ConfigParamRegistry& options() const { return mOptions; }
+  [[nodiscard]] ConfigParamRegistry& options() const { return mOptions; }
+  [[nodiscard]] ServiceRegistryRef services() const { return mServices; }
 
-  bool helpOnCommandLine() const;
+  [[nodiscard]] bool helpOnCommandLine() const;
 
-  int argc() const { return mArgc; }
-  char* const* const argv() const { return mArgv; }
+  [[nodiscard]] int argc() const { return mArgc; }
+  [[nodiscard]] char* const* argv() const { return mArgv; }
 
  private:
   ConfigParamRegistry& mOptions;
+
+  ServiceRegistryRef mServices;
   // additionaly keep information about the original command line
   int mArgc = 0;
   char** mArgv = nullptr;
 };
 
-} // namespace framework
-} // namespace o2
+} // namespace o2::framework
 
-#endif
+#endif // O2_FRAMEWORK_CONFIG_CONTEXT_H_

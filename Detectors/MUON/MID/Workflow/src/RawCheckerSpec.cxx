@@ -48,7 +48,7 @@ template <typename RAWCHECKER>
 class RawCheckerDeviceDPL
 {
  public:
-  RawCheckerDeviceDPL<RAWCHECKER>(const std::vector<uint16_t>& feeIds, const CrateMasks& crateMasks, const ElectronicsDelay& electronicsDelay) : mFeeIds(feeIds), mCrateMasks(crateMasks), mElectronicsDelay(electronicsDelay) {}
+  RawCheckerDeviceDPL(const std::vector<uint16_t>& feeIds, const CrateMasks& crateMasks, const ElectronicsDelay& electronicsDelay) : mFeeIds(feeIds), mCrateMasks(crateMasks), mElectronicsDelay(electronicsDelay) {}
 
   void init(o2::framework::InitContext& ic)
   {
@@ -77,14 +77,19 @@ class RawCheckerDeviceDPL
     mOutFile.open(outFilename.c_str());
 
     auto stop = [this]() {
+      if constexpr (std::is_same_v<RAWCHECKER, RawDataChecker>) {
+        if (!mChecker.checkMissingLinks()) {
+          mOutFile << mChecker.getDebugMessage() << "\n";
+        }
+      }
       bool hasProcessed = (mChecker.getNEventsProcessed() > 0);
       double scaleFactor = (mChecker.getNEventsProcessed() > 0) ? 1.e6 / static_cast<double>(mChecker.getNEventsProcessed()) : 0.;
-      LOG(INFO) << "Processing time / " << mChecker.getNEventsProcessed() << " BCs: full: " << mTimer.count() * scaleFactor << " us  checker: " << mTimerAlgo.count() * scaleFactor << " us";
+      LOG(info) << "Processing time / " << mChecker.getNEventsProcessed() << " BCs: full: " << mTimer.count() * scaleFactor << " us  checker: " << mTimerAlgo.count() * scaleFactor << " us";
       std::string summary = getSummary(mChecker, mMaxErrors);
       mOutFile << summary << "\n";
-      LOG(INFO) << summary;
+      LOG(info) << summary;
     };
-    ic.services().get<o2::framework::CallbackService>().set(o2::framework::CallbackService::Id::Stop, stop);
+    ic.services().get<o2::framework::CallbackService>().set<o2::framework::CallbackService::Id::Stop>(stop);
 
     mMaxErrors = ic.options().get<int>("mid-checker-max-errors");
   }

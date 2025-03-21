@@ -13,10 +13,11 @@
 
 #include "MFTCalibration/NoiseCalibrator.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "TFile.h"
 #include "DataFormatsITSMFT/Digit.h"
 #include "DataFormatsITSMFT/ClusterPattern.h"
+#include "DataFormatsITSMFT/CompCluster.h"
 #include "DataFormatsITSMFT/ROFRecord.h"
 
 namespace o2
@@ -28,7 +29,7 @@ bool NoiseCalibrator::processTimeFrame(calibration::TFType tf,
                                        gsl::span<const o2::itsmft::ROFRecord> const& rofs)
 {
   static int nTF = 0;
-  LOG(INFO) << "Processing TF# " << nTF++;
+  LOG(detail) << "Processing TF# " << nTF++;
 
   for (const auto& rof : rofs) {
     auto digitsInFrame = rof.getROFData(digits);
@@ -41,7 +42,7 @@ bool NoiseCalibrator::processTimeFrame(calibration::TFType tf,
     }
   }
   mNumberOfStrobes += rofs.size();
-  return (mNumberOfStrobes * mProbabilityThreshold >= mThreshold) ? true : false;
+  return (mNumberOfStrobes > mMinROFs) ? true : false;
 }
 
 bool NoiseCalibrator::processTimeFrame(calibration::TFType tf,
@@ -50,21 +51,34 @@ bool NoiseCalibrator::processTimeFrame(calibration::TFType tf,
                                        gsl::span<const o2::itsmft::ROFRecord> const& rofs)
 {
   static int nTF = 0;
-  LOG(INFO) << "Processing TF# " << nTF++;
+  LOG(detail) << "Processing TF# " << nTF++;
 
   auto pattIt = patterns.begin();
   for (const auto& rof : rofs) {
     auto clustersInFrame = rof.getROFData(clusters);
     for (const auto& c : clustersInFrame) {
-      if (c.getPatternID() != o2::itsmft::CompCluster::InvalidPatternID) {
-        // For the noise calibration, we use "pass1" clusters...
-        continue;
-      }
-      o2::itsmft::ClusterPattern patt(pattIt);
-
-      auto id = c.getSensorID();
+      auto pattID = c.getPatternID();
+      o2::itsmft::ClusterPattern patt;
       auto row = c.getRow();
       auto col = c.getCol();
+      if (mDict->getSize() == 0) {
+        if (pattID == o2::itsmft::CompCluster::InvalidPatternID) {
+          patt.acquirePattern(pattIt);
+        } else {
+          LOG(fatal) << "Clusters contain pattern IDs, but no dictionary is provided...";
+        }
+      } else if (pattID == o2::itsmft::CompCluster::InvalidPatternID) {
+        patt.acquirePattern(pattIt);
+      } else if (mDict->isGroup(pattID)) {
+        patt.acquirePattern(pattIt);
+        float xCOG = 0., zCOG = 0.;
+        patt.getCOG(xCOG, zCOG); // for grouped patterns the reference pixel is at COG
+        row -= round(xCOG);
+        col -= round(zCOG);
+      } else {
+        patt = mDict->getPattern(pattID);
+      }
+      auto id = c.getSensorID();
       auto colSpan = patt.getColumnSpan();
       auto rowSpan = patt.getRowSpan();
 
@@ -101,13 +115,14 @@ bool NoiseCalibrator::processTimeFrame(calibration::TFType tf,
     }
   }
   mNumberOfStrobes += rofs.size();
-  return (mNumberOfStrobes * mProbabilityThreshold >= mThreshold) ? true : false;
+  return (mNumberOfStrobes > mMinROFs) ? true : false;
 }
 
 void NoiseCalibrator::finalize()
 {
-  LOG(INFO) << "Number of processed strobes is " << mNumberOfStrobes;
+  LOG(info) << "Number of processed strobes is " << mNumberOfStrobes;
   mNoiseMap.applyProbThreshold(mProbabilityThreshold, mNumberOfStrobes);
+  mNoiseMap.print();
 }
 
 } // namespace mft

@@ -14,7 +14,6 @@
 
 #include "DataFormatsEMCAL/Digit.h"
 #include "DataFormatsEMCAL/Cluster.h"
-#include "DataFormatsEMCAL/EMCALBlockHeader.h"
 #include "DataFormatsEMCAL/TriggerRecord.h"
 #include "EMCALWorkflow/AnalysisClusterSpec.h"
 #include "Framework/ControlService.h"
@@ -22,33 +21,54 @@
 #include "EMCALBase/Geometry.h"
 #include "DetectorsBase/GeometryManager.h"
 #include <TGeoManager.h>
+#include "Framework/ConcreteDataMatcher.h"
 
 using namespace o2::emcal::reco_workflow;
 
 template <class InputType>
+void AnalysisClusterSpec<InputType>::updateTimeDependentParams(o2::framework::ProcessingContext& pc)
+{
+  o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+  static bool initOnceDone = false;
+  if (!initOnceDone) { // this params need to be queried only once
+    initOnceDone = true;
+    // FIXME: Hardcoded for run II run
+    // Get default geometry object if not yet set
+    // gGeoManager->Import("/Users/hadi/Clusterizer/O2geometry.root");
+    mGeometry = Geometry::GetInstanceFromRunNumber(223409);
+    if (!mGeometry) {
+      LOG(error) << "Failure accessing geometry";
+    }
+    double timeCut = 10000, timeMin = 0, timeMax = 10000, gradientCut = 0.03, thresholdSeedEnergy = 0.1, thresholdCellEnergy = 0.05;
+    bool doEnergyGradientCut = true;
+
+    // Initialize clusterizer and link geometry
+    mClusterizer.initialize(timeCut, timeMin, timeMax, gradientCut, doEnergyGradientCut, thresholdSeedEnergy, thresholdCellEnergy);
+    mClusterizer.setGeometry(mGeometry);
+  }
+}
+
+template <class InputType>
+void AnalysisClusterSpec<InputType>::finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj)
+{
+  if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+    return;
+  }
+}
+
+template <class InputType>
 void AnalysisClusterSpec<InputType>::init(framework::InitContext& ctx)
 {
-  auto& ilctx = ctx.services().get<AliceO2::InfoLogger::InfoLoggerContext>();
-  ilctx.setField(AliceO2::InfoLogger::InfoLoggerContext::FieldName::Detector, "EMC");
+  o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
 
-  LOG(DEBUG) << "[EMCALClusterizer - init] Initialize clusterizer ...";
+  if (ctx.services().active<AliceO2::InfoLogger::InfoLoggerContext>()) {
+    auto& ilctx = ctx.services().get<AliceO2::InfoLogger::InfoLoggerContext>();
+    ilctx.setField(AliceO2::InfoLogger::InfoLoggerContext::FieldName::Detector, "EMC");
+  }
+
+  LOG(debug) << "[EMCALClusterizer - init] Initialize clusterizer ...";
 
   // FIXME: Placeholder configuration -> get config from CCDB object
-  double timeCut = 10000, timeMin = 0, timeMax = 10000, gradientCut = 0.03, thresholdSeedEnergy = 0.1, thresholdCellEnergy = 0.05;
-  bool doEnergyGradientCut = true;
-
-  // FIXME: Hardcoded for run II run
-  // Get default geometry object if not yet set
-  o2::base::GeometryManager::loadGeometry(); // for generating full clusters
-  mGeometry = Geometry::GetInstanceFromRunNumber(223409);
-  if (!mGeometry) {
-    LOG(ERROR) << "Failure accessing geometry";
-  }
-  //gGeoManager->Import("/Users/hadi/Clusterizer/O2geometry.root");
-
-  // Initialize clusterizer and link geometry
-  mClusterizer.initialize(timeCut, timeMin, timeMax, gradientCut, doEnergyGradientCut, thresholdSeedEnergy, thresholdCellEnergy);
-  mClusterizer.setGeometry(mGeometry);
 
   mEventHandler = new o2::emcal::EventHandler<InputType>();
 
@@ -60,8 +80,8 @@ void AnalysisClusterSpec<InputType>::init(framework::InitContext& ctx)
 template <class InputType>
 void AnalysisClusterSpec<InputType>::run(framework::ProcessingContext& ctx)
 {
-  LOG(DEBUG) << "[EMCALClusterizer - run] called";
-
+  LOG(debug) << "[EMCALClusterizer - run] called";
+  updateTimeDependentParams(ctx);
   std::string inputname;
   std::string TrigName;
 
@@ -73,19 +93,11 @@ void AnalysisClusterSpec<InputType>::run(framework::ProcessingContext& ctx)
     TrigName = "cellstrgr";
   }
 
-  auto dataref = ctx.inputs().get(inputname.c_str());
-  auto const* emcheader = o2::framework::DataRefUtils::getHeader<o2::emcal::EMCALBlockHeader*>(dataref);
-  if (!emcheader->mHasPayload) {
-    LOG(DEBUG) << "[EMCALClusterizer - run] No more cells/digits" << std::endl;
-    ctx.services().get<o2::framework::ControlService>().readyToQuit(framework::QuitRequest::Me);
-    return;
-  }
-
   auto Inputs = ctx.inputs().get<gsl::span<InputType>>(inputname.c_str());
-  LOG(DEBUG) << "[EMCALClusterizer - run]  Received " << Inputs.size() << " Cells/digits, running clusterizer ...";
+  LOG(debug) << "[EMCALClusterizer - run]  Received " << Inputs.size() << " Cells/digits, running clusterizer ...";
 
   auto InputTriggerRecord = ctx.inputs().get<gsl::span<TriggerRecord>>(TrigName.c_str());
-  LOG(DEBUG) << "[EMCALClusterizer - run]  Received " << InputTriggerRecord.size() << " Trigger Records, running clusterizer ...";
+  LOG(debug) << "[EMCALClusterizer - run]  Received " << InputTriggerRecord.size() << " Trigger Records, running clusterizer ...";
 
   mOutputAnaClusters->clear();
 
@@ -126,9 +138,7 @@ void AnalysisClusterSpec<InputType>::run(framework::ProcessingContext& ctx)
     auto inputEvent = mEventHandler->buildEvent(iev);
 
     mClusterFactory->reset();
-    mClusterFactory->setClustersContainer(inputEvent.mClusters);
-    mClusterFactory->setCellsContainer(Inputs);
-    mClusterFactory->setCellsIndicesContainer(inputEvent.mCellIndices);
+    mClusterFactory->setContainer(inputEvent.mClusters, Inputs, inputEvent.mCellIndices);
 
     //for (const auto& analysisCluster : mClusterFactory) {
     for (int icl = 0; icl < mClusterFactory->getNumberOfClusters(); icl++) {
@@ -137,8 +147,8 @@ void AnalysisClusterSpec<InputType>::run(framework::ProcessingContext& ctx)
     }
   }
 
-  LOG(DEBUG) << "[EMCALClusterizer - run] Writing " << mOutputAnaClusters->size() << " clusters ...";
-  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "ANALYSISCLUSTERS", 0, o2::framework::Lifetime::Timeframe}, *mOutputAnaClusters);
+  LOG(debug) << "[EMCALClusterizer - run] Writing " << mOutputAnaClusters->size() << " clusters ...";
+  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "ANALYSISCLUSTERS", 0}, *mOutputAnaClusters);
 }
 
 o2::framework::DataProcessorSpec o2::emcal::reco_workflow::getAnalysisClusterSpec(bool useDigits)
@@ -153,6 +163,14 @@ o2::framework::DataProcessorSpec o2::emcal::reco_workflow::getAnalysisClusterSpe
     inputs.emplace_back("cells", o2::header::gDataOriginEMC, "CELLS", 0, o2::framework::Lifetime::Timeframe);
     inputs.emplace_back("cellstrgr", o2::header::gDataOriginEMC, "CELLSTRGR", 0, o2::framework::Lifetime::Timeframe);
   }
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                             // orbitResetTime
+                                                              false,                             // GRPECS=true
+                                                              false,                             // GRPLHCIF
+                                                              false,                             // GRPMagField
+                                                              false,                             // askMatLUT
+                                                              o2::base::GRPGeomRequest::Aligned, // geometry
+                                                              inputs,
+                                                              true);
 
   outputs.emplace_back(o2::header::gDataOriginEMC, "ANALYSISCLUSTERS", 0, o2::framework::Lifetime::Timeframe);
 
@@ -160,11 +178,11 @@ o2::framework::DataProcessorSpec o2::emcal::reco_workflow::getAnalysisClusterSpe
     return o2::framework::DataProcessorSpec{"EMCALAnalysisClusterSpec",
                                             inputs,
                                             outputs,
-                                            o2::framework::adaptFromTask<o2::emcal::reco_workflow::AnalysisClusterSpec<o2::emcal::Digit>>()};
+                                            o2::framework::adaptFromTask<o2::emcal::reco_workflow::AnalysisClusterSpec<o2::emcal::Digit>>(ggRequest)};
   } else {
     return o2::framework::DataProcessorSpec{"EMCALAnalysisClusterSpec",
                                             inputs,
                                             outputs,
-                                            o2::framework::adaptFromTask<o2::emcal::reco_workflow::AnalysisClusterSpec<o2::emcal::Cell>>()};
+                                            o2::framework::adaptFromTask<o2::emcal::reco_workflow::AnalysisClusterSpec<o2::emcal::Cell>>(ggRequest)};
   }
 }

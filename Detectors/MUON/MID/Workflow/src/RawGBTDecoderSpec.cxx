@@ -46,10 +46,10 @@ class RawGBTDecoderDeviceDPL
   void init(o2::framework::InitContext& ic)
   {
     auto stop = [this]() {
-      double scaleFactor = 1.e6 / mNROFs;
-      LOG(INFO) << "Processing time / " << mNROFs << " ROFs: full: " << mTimer.count() * scaleFactor << " us  decoding: " << mTimerAlgo.count() * scaleFactor << " us";
+      double scaleFactor = (mNROFs == 0) ? 0. : 1.e6 / mNROFs;
+      LOG(info) << "Processing time / " << mNROFs << " ROFs: full: " << mTimer.count() * scaleFactor << " us  decoding: " << mTimerAlgo.count() * scaleFactor << " us";
     };
-    ic.services().get<o2::framework::CallbackService>().set(o2::framework::CallbackService::Id::Stop, stop);
+    ic.services().get<o2::framework::CallbackService>().set<o2::framework::CallbackService::Id::Stop>(stop);
 
     auto idx = ic.services().get<o2::framework::ParallelContext>().index1D();
     mFeeId = mFeeIds[idx];
@@ -77,13 +77,13 @@ class RawGBTDecoderDeviceDPL
       dh = it.o2DataHeader();
       auto const* rdhPtr = reinterpret_cast<const o2::header::RDHAny*>(it.raw());
       gsl::span<const uint8_t> payload(it.data(), it.size());
-      mDecoder->process(payload, o2::raw::RDHUtils::getHeartBeatOrbit(rdhPtr), data, rofRecords);
+      mDecoder->process(payload, o2::raw::RDHUtils::getHeartBeatOrbit(rdhPtr), o2::raw::RDHUtils::getTriggerType(rdhPtr), data, rofRecords);
     }
 
     mTimerAlgo += std::chrono::high_resolution_clock::now() - tAlgoStart;
 
-    pc.outputs().snapshot(o2::framework::Output{header::gDataOriginMID, "DECODED", dh->subSpecification, o2::framework::Lifetime::Timeframe}, data);
-    pc.outputs().snapshot(o2::framework::Output{header::gDataOriginMID, "DECODEDROF", dh->subSpecification, o2::framework::Lifetime::Timeframe}, rofRecords);
+    pc.outputs().snapshot(o2::framework::Output{header::gDataOriginMID, "DECODED", dh->subSpecification}, data);
+    pc.outputs().snapshot(o2::framework::Output{header::gDataOriginMID, "DECODEDROF", dh->subSpecification}, rofRecords);
 
     mTimer += std::chrono::high_resolution_clock::now() - tStart;
     mNROFs += rofRecords.size();

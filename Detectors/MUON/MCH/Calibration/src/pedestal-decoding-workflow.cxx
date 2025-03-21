@@ -9,13 +9,6 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-///
-/// \file    DatDecoderSpec.cxx
-/// \author  Andrea Ferrero
-///
-/// \brief Implementation of a data processor to run the raw decoding
-///
-
 #include <random>
 #include <iostream>
 #include <fstream>
@@ -49,8 +42,11 @@
 
 #include "MCHBase/DecoderError.h"
 #include "MCHCalibration/PedestalDigit.h"
+#include "MCHBase/HeartBeatPacket.h"
 
 #include "CommonUtils/ConfigurableParam.h"
+
+#include "MCHConstants/DetectionElements.h"
 
 static const size_t SOLAR_ID_MAX = 100 * 8;
 
@@ -80,7 +76,7 @@ static std::string readFileContent(std::string& filename)
 
 static bool isValidDeID(int deId)
 {
-  for (auto id : deIdsForAllMCH) {
+  for (auto id : o2::mch::constants::deIdsForAllMCH) {
     if (id == deId) {
       return true;
     }
@@ -121,7 +117,7 @@ class PedestalsTask
 
   void initElec2DetMapper(std::string filename)
   {
-    LOG(INFO) << "[initElec2DetMapper] filename=" << filename;
+    LOG(info) << "[initElec2DetMapper] filename=" << filename;
     if (filename.empty()) {
       mElec2Det = createElec2DetMapper<ElectronicMapperGenerated>();
     } else {
@@ -132,7 +128,7 @@ class PedestalsTask
 
   void initFee2SolarMapper(std::string filename)
   {
-    LOG(INFO) << "[initFee2SolarMapper] filename=" << filename;
+    LOG(info) << "[initFee2SolarMapper] filename=" << filename;
     if (filename.empty()) {
       mFee2Solar = createFeeLink2SolarMapper<ElectronicMapperGenerated>();
     } else {
@@ -153,18 +149,19 @@ class PedestalsTask
     initElec2DetMapper(mMapFECfile);
     auto stop = [this]() {
       if (mTFcount > 0) {
-        LOG(INFO) << "time spent for decoding (ms): min=" << mTimeDecoderMin->count() << ", max="
+        LOG(info) << "time spent for decoding (ms): min=" << mTimeDecoderMin->count() << ", max="
                   << mTimeDecoderMax->count() << ", mean=" << mTimeDecoder.count() / mTFcount;
       }
     };
-    ic.services().get<CallbackService>().set(CallbackService::Id::Stop, stop);
-    ic.services().get<CallbackService>().set(CallbackService::Id::Reset, [this]() { reset(); });
+    ic.services().get<CallbackService>().set<CallbackService::Id::Stop>(stop);
+    ic.services().get<CallbackService>().set<CallbackService::Id::Reset>([this]() { reset(); });
   }
 
   //_________________________________________________________________________________________________
   void reset()
   {
     mDigits.clear();
+    mHBPackets.clear();
     mErrors.clear();
   }
 
@@ -178,11 +175,24 @@ class PedestalsTask
 
     auto tStart = std::chrono::high_resolution_clock::now();
 
+    auto heartBeatHandler = [&](DsElecId dsElecId, uint8_t chip, uint32_t bunchCrossing) {
+      auto ds = dsElecId.elinkId();
+      auto solar = dsElecId.solarId();
+
+      if (mDebug) {
+        auto s = asString(dsElecId);
+        LOGP(info, "HeartBeat: {}-CHIP{}", s, chip);
+      }
+
+      mHBPackets.emplace_back(solar, ds, chip, bunchCrossing);
+    };
+
     auto channelHandler = [&](DsElecId dsElecId, uint8_t channel, o2::mch::raw::SampaCluster sc) {
       auto solarId = dsElecId.solarId();
       auto dsId = dsElecId.elinkId();
       if (mDebug) {
-        std::cout << "New digit: SOLAR " << (int)solarId << "  DS " << (int)dsId << "  CH " << (int)channel << std::endl;
+        auto s = asString(dsElecId);
+        LOGP(info, "Digit: {}-CH{}", s, (int)channel);
       }
 
       mDigits.emplace_back(o2::mch::calibration::PedestalDigit(solarId, dsId, channel, sc.bunchCrossing, 0, sc.samples));
@@ -201,13 +211,14 @@ class PedestalsTask
     if (mDebug) {
       auto& rdhAny = *reinterpret_cast<RDH*>(const_cast<std::byte*>(&(page[0])));
       Nrdhs += 1;
-      std::cout << Nrdhs << "--\n";
+      LOGP(info, "{}--", Nrdhs);
       o2::raw::RDHUtils::printRDH(rdhAny);
     }
 
     if (!mDecoder) {
       DecodedDataHandlers handlers;
       handlers.sampaChannelHandler = channelHandler;
+      handlers.sampaHeartBeatHandler = heartBeatHandler;
       handlers.sampaErrorHandler = errorHandler;
       mDecoder = mFee2Solar ? o2::mch::raw::createPageDecoder(page, handlers, mFee2Solar)
                             : o2::mch::raw::createPageDecoder(page, handlers);
@@ -215,7 +226,7 @@ class PedestalsTask
     try {
       mDecoder(page);
     } catch (std::exception& e) {
-      std::cout << e.what() << '\n';
+      LOGP(error, "{}", e.what());
     }
   }
 
@@ -223,7 +234,7 @@ class PedestalsTask
   void decodeBuffer(gsl::span<const std::byte> buf)
   {
     if (mDebug) {
-      std::cout << "\n\n============================\nStart of new buffer\n";
+      LOGP(info, "\n\n============================\nStart of new buffer");
     }
     size_t bufSize = buf.size();
     size_t pageStart = 0;
@@ -311,7 +322,7 @@ class PedestalsTask
     loggerEnd = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> loggerElapsed = loggerEnd - loggerStart;
     if (loggerElapsed.count() > mLoggingInterval) {
-      LOG(INFO) << "Processed " << nDigits << " digits in " << nTF << " time frames";
+      LOGP(info, "Processed {} digits in {} time frames", nDigits, nTF);
       nDigits = 0;
       nTF = 0;
       loggerStart = std::chrono::high_resolution_clock::now();
@@ -351,12 +362,16 @@ class PedestalsTask
     size_t digitsSize;
     char* digitsBuffer = createBuffer(mDigits, digitsSize);
 
+    size_t hbSize;
+    char* hbBuffer = createBuffer(mHBPackets, hbSize);
+
     size_t errorsSize;
     char* errorsBuffer = createBuffer(mErrors, errorsSize);
 
     // create the output message
     auto freefct = [](void* data, void*) { free(data); };
     pc.outputs().adoptChunk(Output{header::gDataOriginMCH, "PDIGITS", 0}, digitsBuffer, digitsSize, freefct, nullptr);
+    pc.outputs().adoptChunk(Output{header::gDataOriginMCH, "HBPACKETS", 0}, hbBuffer, hbSize, freefct, nullptr);
     pc.outputs().adoptChunk(Output{header::gDataOriginMCH, "ERRORS", 0}, errorsBuffer, errorsSize, freefct, nullptr);
 
     logStats();
@@ -366,6 +381,7 @@ class PedestalsTask
   o2::mch::raw::PageDecoder mDecoder;
   SampaChannelHandler mChannelHandler;
   std::vector<o2::mch::calibration::PedestalDigit> mDigits;
+  std::vector<o2::mch::HeartBeatPacket> mHBPackets;
   std::vector<o2::mch::DecoderError> mErrors;
 
   Elec2DetMapper mElec2Det{nullptr};
@@ -391,13 +407,6 @@ using namespace o2::framework;
 
 const char* specName = "mch-pedestal-decoder";
 
-// customize the completion policy
-void customize(std::vector<o2::framework::CompletionPolicy>& policies)
-{
-  using o2::framework::CompletionPolicy;
-  policies.push_back(CompletionPolicyHelpers::defineByName(specName, CompletionPolicy::CompletionOp::Consume));
-}
-
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
 {
   workflowOptions.push_back(ConfigParamSpec{"input-spec", VariantType::String, "TF:MCH/RAWDATA", {"selection string for the input data"}});
@@ -412,11 +421,11 @@ using namespace o2::framework;
 //_________________________________________________________________________________________________
 o2::framework::DataProcessorSpec getMCHPedestalDecodingSpec(const char* specName, std::string inputSpec)
 {
-  //o2::mch::raw::PedestalsTask task();
   return DataProcessorSpec{
     specName,
     o2::framework::select(inputSpec.c_str()),
     Outputs{OutputSpec{header::gDataOriginMCH, "PDIGITS", 0, Lifetime::Timeframe},
+            OutputSpec{header::gDataOriginMCH, "HBPACKETS", 0, Lifetime::Timeframe},
             OutputSpec{header::gDataOriginMCH, "ERRORS", 0, Lifetime::Timeframe}},
     AlgorithmSpec{adaptFromTask<o2::mch::raw::PedestalsTask>(inputSpec)},
     Options{{"mch-debug", VariantType::Bool, false, {"enable verbose output"}},

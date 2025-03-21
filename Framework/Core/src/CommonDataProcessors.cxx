@@ -17,386 +17,31 @@
 #include "Framework/DataProcessingHeader.h"
 #include "Framework/DataDescriptorQueryBuilder.h"
 #include "Framework/DataDescriptorMatcher.h"
-#include "Framework/DataOutputDirector.h"
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/DataProcessingStats.h"
 #include "Framework/DataSpecUtils.h"
-#include "Framework/TableBuilder.h"
-#include "Framework/EndOfStreamContext.h"
 #include "Framework/InitContext.h"
 #include "Framework/InputSpec.h"
-#include "Framework/Logger.h"
-#include "Framework/OutputSpec.h"
+#include "Framework/RawDeviceService.h"
+#include "Framework/TimesliceIndex.h"
 #include "Framework/Variant.h"
-#include "../../../Algorithm/include/Algorithm/HeaderStack.h"
-#include "Framework/OutputObjHeader.h"
-#include "Framework/TableTreeHelpers.h"
-#include "Framework/StringHelpers.h"
 #include "Framework/ChannelSpec.h"
 #include "Framework/ExternalFairMQDeviceProxy.h"
 #include "Framework/RuntimeError.h"
+#include "Framework/RateLimiter.h"
+#include "Framework/PluginManager.h"
 #include <Monitoring/Monitoring.h>
 
-#include "TFile.h"
-#include "TTree.h"
-
-#include <ROOT/RSnapshotOptions.hxx>
-#include <ROOT/RDataFrame.hxx>
-#include <ROOT/RArrowDS.hxx>
-#include <ROOT/RVec.hxx>
-#include <chrono>
+#include <fairmq/Device.h>
 #include <fstream>
 #include <functional>
 #include <memory>
 #include <string>
-#include <thread>
 
-template class std::vector<o2::framework::OutputObjectInfo>;
-template class std::vector<o2::framework::OutputTaskInfo>;
 using namespace o2::framework::data_matcher;
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
 
 namespace o2::framework
 {
-
-struct InputObjectRoute {
-  std::string name;
-  uint32_t uniqueId;
-  std::string directory;
-  uint32_t taskHash;
-  OutputObjHandlingPolicy policy;
-  OutputObjSourceType sourceType;
-};
-
-struct InputObject {
-  TClass* kind = nullptr;
-  void* obj = nullptr;
-  std::string name;
-};
-
-const static std::unordered_map<OutputObjHandlingPolicy, std::string> ROOTfileNames = {{OutputObjHandlingPolicy::AnalysisObject, "AnalysisResults.root"},
-                                                                                       {OutputObjHandlingPolicy::QAObject, "QAResults.root"}};
-
-// =============================================================================
-DataProcessorSpec CommonDataProcessors::getOutputObjHistSink(std::vector<OutputObjectInfo> const& objmap, std::vector<OutputTaskInfo> const& tskmap)
-{
-  auto writerFunction = [objmap, tskmap](InitContext& ic) -> std::function<void(ProcessingContext&)> {
-    auto& callbacks = ic.services().get<CallbackService>();
-    auto inputObjects = std::make_shared<std::vector<std::pair<InputObjectRoute, InputObject>>>();
-
-    auto endofdatacb = [inputObjects](EndOfStreamContext& context) {
-      LOG(DEBUG) << "Writing merged objects and histograms to file";
-      if (inputObjects->empty()) {
-        LOG(ERROR) << "Output object map is empty!";
-        context.services().get<ControlService>().readyToQuit(QuitRequest::Me);
-        return;
-      }
-      std::string currentDirectory = "";
-      std::string currentFile = "";
-      TFile* f[OutputObjHandlingPolicy::numPolicies];
-      for (auto i = 0u; i < OutputObjHandlingPolicy::numPolicies; ++i) {
-        f[i] = nullptr;
-      }
-      for (auto& [route, entry] : *inputObjects) {
-        auto file = ROOTfileNames.find(route.policy);
-        if (file != ROOTfileNames.end()) {
-          auto filename = file->second;
-          if (f[route.policy] == nullptr) {
-            f[route.policy] = TFile::Open(filename.c_str(), "RECREATE");
-          }
-          auto nextDirectory = route.directory;
-          if ((nextDirectory != currentDirectory) || (filename != currentFile)) {
-            if (!f[route.policy]->FindKey(nextDirectory.c_str())) {
-              f[route.policy]->mkdir(nextDirectory.c_str());
-            }
-            currentDirectory = nextDirectory;
-            currentFile = filename;
-          }
-
-          // translate the list-structure created by the registry into a directory structure within the file
-          std::function<void(TList*, TDirectory*)> writeListToFile;
-          writeListToFile = [&](TList* list, TDirectory* parentDir) {
-            TIter next(list);
-            TNamed* object = nullptr;
-            while ((object = (TNamed*)next())) {
-              if (object->InheritsFrom(TList::Class())) {
-                writeListToFile((TList*)object, parentDir->mkdir(object->GetName(), object->GetName(), true));
-              } else {
-                parentDir->WriteObjectAny(object, object->Class(), object->GetName());
-                list->Remove(object);
-              }
-            }
-          };
-
-          TDirectory* currentDir = f[route.policy]->GetDirectory(currentDirectory.c_str());
-          if (route.sourceType == OutputObjSourceType::HistogramRegistrySource) {
-            TList* outputList = (TList*)entry.obj;
-            outputList->SetOwner(false);
-
-            // if registry should live in dedicated folder a TNamed object is appended to the list
-            if (outputList->Last()->IsA() == TNamed::Class()) {
-              delete outputList->Last();
-              outputList->RemoveLast();
-              currentDir = currentDir->mkdir(outputList->GetName(), outputList->GetName(), true);
-            }
-
-            writeListToFile(outputList, currentDir);
-            outputList->SetOwner();
-            delete outputList;
-            entry.obj = nullptr;
-          } else {
-            currentDir->WriteObjectAny(entry.obj, entry.kind, entry.name.c_str());
-          }
-        }
-      }
-      for (auto i = 0u; i < OutputObjHandlingPolicy::numPolicies; ++i) {
-        if (f[i] != nullptr) {
-          f[i]->Close();
-        }
-      }
-      LOG(DEBUG) << "All outputs merged in their respective target files";
-      context.services().get<ControlService>().readyToQuit(QuitRequest::Me);
-    };
-
-    callbacks.set(CallbackService::Id::EndOfStream, endofdatacb);
-    return [inputObjects, objmap, tskmap](ProcessingContext& pc) mutable -> void {
-      auto const& ref = pc.inputs().get("x");
-      if (!ref.header) {
-        LOG(ERROR) << "Header not found";
-        return;
-      }
-      if (!ref.payload) {
-        LOG(ERROR) << "Payload not found";
-        return;
-      }
-      auto datah = o2::header::get<o2::header::DataHeader*>(ref.header);
-      if (!datah) {
-        LOG(ERROR) << "No data header in stack";
-        return;
-      }
-
-      auto objh = o2::header::get<o2::framework::OutputObjHeader*>(ref.header);
-      if (!objh) {
-        LOG(ERROR) << "No output object header in stack";
-        return;
-      }
-
-      FairTMessage tm(const_cast<char*>(ref.payload), static_cast<int>(datah->payloadSize));
-      InputObject obj;
-      obj.kind = tm.GetClass();
-      if (obj.kind == nullptr) {
-        LOG(error) << "Cannot read class info from buffer.";
-        return;
-      }
-
-      auto policy = objh->mPolicy;
-      auto sourceType = objh->mSourceType;
-      auto hash = objh->mTaskHash;
-
-      obj.obj = tm.ReadObjectAny(obj.kind);
-      TNamed* named = static_cast<TNamed*>(obj.obj);
-      obj.name = named->GetName();
-      auto hpos = std::find_if(tskmap.begin(), tskmap.end(), [&](auto&& x) { return x.id == hash; });
-      if (hpos == tskmap.end()) {
-        LOG(ERROR) << "No task found for hash " << hash;
-        return;
-      }
-      auto taskname = hpos->name;
-      auto opos = std::find_if(objmap.begin(), objmap.end(), [&](auto&& x) { return x.id == hash; });
-      if (opos == objmap.end()) {
-        LOG(ERROR) << "No object list found for task " << taskname << " (hash=" << hash << ")";
-        return;
-      }
-      auto objects = opos->bindings;
-      if (std::find(objects.begin(), objects.end(), obj.name) == objects.end()) {
-        LOG(ERROR) << "No object " << obj.name << " in map for task " << taskname;
-        return;
-      }
-      auto nameHash = compile_time_hash(obj.name.c_str());
-      InputObjectRoute key{obj.name, nameHash, taskname, hash, policy, sourceType};
-      auto existing = std::find_if(inputObjects->begin(), inputObjects->end(), [&](auto&& x) { return (x.first.uniqueId == nameHash) && (x.first.taskHash == hash); });
-      if (existing == inputObjects->end()) {
-        inputObjects->push_back(std::make_pair(key, obj));
-        return;
-      }
-      auto merger = existing->second.kind->GetMerge();
-      if (!merger) {
-        LOG(ERROR) << "Already one unmergeable object found for " << obj.name;
-        return;
-      }
-
-      TList coll;
-      coll.Add(static_cast<TObject*>(obj.obj));
-      merger(existing->second.obj, &coll, nullptr);
-    };
-  };
-
-  char const* name = "internal-dpl-aod-global-analysis-file-sink";
-  DataProcessorSpec spec{
-    .name = name,
-    .inputs = {InputSpec("x", DataSpecUtils::dataDescriptorMatcherFrom(header::DataOrigin{"ATSK"}))},
-    .algorithm = {writerFunction},
-  };
-
-  return spec;
-}
-
-enum FileType : int {
-  AOD,
-  DANGLING
-};
-
-// add sink for the AODs
-DataProcessorSpec
-  CommonDataProcessors::getGlobalAODSink(std::shared_ptr<DataOutputDirector> dod,
-                                         std::vector<InputSpec> const& outputInputs)
-{
-
-  auto writerFunction = [dod, outputInputs](InitContext& ic) -> std::function<void(ProcessingContext&)> {
-    LOGP(DEBUG, "======== getGlobalAODSink::Init ==========");
-
-    // find out if any table needs to be saved
-    bool hasOutputsToWrite = false;
-    for (auto& outobj : outputInputs) {
-      auto ds = dod->getDataOutputDescriptors(outobj);
-      if (ds.size() > 0) {
-        hasOutputsToWrite = true;
-        break;
-      }
-    }
-
-    // if nothing needs to be saved then return a trivial functor
-    // this happens when nothing needs to be saved but there are dangling outputs
-    if (!hasOutputsToWrite) {
-      return [](ProcessingContext&) mutable -> void {
-        static bool once = false;
-        if (!once) {
-          LOG(INFO) << "No AODs to be saved.";
-          once = true;
-        }
-      };
-    }
-
-    // end of data functor is called at the end of the data stream
-    auto endofdatacb = [dod](EndOfStreamContext& context) {
-      dod->closeDataFiles();
-      context.services().get<ControlService>().readyToQuit(QuitRequest::Me);
-    };
-
-    auto& callbacks = ic.services().get<CallbackService>();
-    callbacks.set(CallbackService::Id::EndOfStream, endofdatacb);
-
-    // prepare map<uint64_t, uint64_t>(startTime, tfNumber)
-    std::map<uint64_t, uint64_t> tfNumbers;
-
-    // this functor is called once per time frame
-    return [dod, tfNumbers](ProcessingContext& pc) mutable -> void {
-      LOGP(DEBUG, "======== getGlobalAODSink::processing ==========");
-      LOGP(DEBUG, " processing data set with {} entries", pc.inputs().size());
-
-      // return immediately if pc.inputs() is empty. This should never happen!
-      if (pc.inputs().size() == 0) {
-        LOGP(INFO, "No inputs available!");
-        return;
-      }
-
-      // update tfNumbers
-      uint64_t startTime = 0;
-      uint64_t tfNumber = 0;
-      auto ref = pc.inputs().get("tfn");
-      if (ref.spec && ref.payload) {
-        startTime = DataRefUtils::getHeader<DataProcessingHeader*>(ref)->startTime;
-        tfNumber = pc.inputs().get<uint64_t>("tfn");
-        tfNumbers.insert(std::pair<uint64_t, uint64_t>(startTime, tfNumber));
-      }
-
-      // loop over the DataRefs which are contained in pc.inputs()
-      for (const auto& ref : pc.inputs()) {
-        if (!ref.spec) {
-          LOGP(DEBUG, "Invalid input will be skipped!");
-          continue;
-        }
-
-        // skip non-AOD refs
-        if (!DataSpecUtils::partialMatch(*ref.spec, header::DataOrigin("AOD"))) {
-          continue;
-        }
-        startTime = DataRefUtils::getHeader<DataProcessingHeader*>(ref)->startTime;
-
-        // does this need to be saved?
-        auto dh = DataRefUtils::getHeader<header::DataHeader*>(ref);
-        auto tableName = dh->dataDescription.as<std::string>();
-        auto ds = dod->getDataOutputDescriptors(*dh);
-        if (ds.empty()) {
-          continue;
-        }
-
-        // get TF number fro startTime
-        auto it = tfNumbers.find(startTime);
-        if (it != tfNumbers.end()) {
-          tfNumber = (it->second / dod->getNumberTimeFramesToMerge()) * dod->getNumberTimeFramesToMerge();
-        } else {
-          LOGP(FATAL, "No time frame number found for output with start time {}", startTime);
-          throw std::runtime_error("Processing is stopped!");
-        }
-
-        // get the TableConsumer and corresponding arrow table
-        auto msg = pc.inputs().get(ref.spec->binding);
-        if (msg.header == nullptr) {
-          LOGP(ERROR, "No header for message {}:{}", ref.spec->binding, *ref.spec);
-          continue;
-        }
-        auto s = pc.inputs().get<TableConsumer>(ref.spec->binding);
-        auto table = s->asArrowTable();
-        if (!table->Validate().ok()) {
-          LOGP(WARNING, "The table \"{}\" is not valid and will not be saved!", tableName);
-          continue;
-        }
-        if (table->schema()->fields().empty()) {
-          LOGP(DEBUG, "The table \"{}\" is empty but will be saved anyway!", tableName);
-        }
-
-        // loop over all DataOutputDescriptors
-        // a table can be saved in multiple ways
-        // e.g. different selections of columns to different files
-        for (auto d : ds) {
-          auto fileAndFolder = dod->getFileFolder(d, tfNumber);
-          auto treename = fileAndFolder.folderName + d->treename;
-          TableToTree ta2tr(table,
-                            fileAndFolder.file,
-                            treename.c_str());
-
-          if (!d->colnames.empty()) {
-            for (auto& cn : d->colnames) {
-              auto idx = table->schema()->GetFieldIndex(cn);
-              auto col = table->column(idx);
-              auto field = table->schema()->field(idx);
-              if (idx != -1) {
-                ta2tr.addBranch(col, field);
-              }
-            }
-          } else {
-            ta2tr.addAllBranches();
-          }
-          ta2tr.process();
-        }
-      }
-    };
-  }; // end of writerFunction
-
-  // the command line options relevant for the writer are global
-  // see runDataProcessing.h
-  DataProcessorSpec spec{
-    "internal-dpl-aod-writer",
-    outputInputs,
-    Outputs{},
-    AlgorithmSpec(writerFunction),
-    {}};
-
-  return spec;
-}
 
 DataProcessorSpec
   CommonDataProcessors::getGlobalFileSink(std::vector<InputSpec> const& danglingOutputInputs,
@@ -423,7 +68,7 @@ DataProcessorSpec
       return [](ProcessingContext&) mutable -> void {
         static bool once = false;
         if (!once) {
-          LOG(DEBUG) << "No dangling output to be dumped.";
+          LOG(debug) << "No dangling output to be dumped.";
           once = true;
         }
       };
@@ -431,9 +76,9 @@ DataProcessorSpec
     auto output = std::make_shared<std::ofstream>(filename.c_str(), std::ios_base::binary);
     return [output, matcher = outputMatcher](ProcessingContext& pc) mutable -> void {
       VariableContext matchingContext;
-      LOG(DEBUG) << "processing data set with " << pc.inputs().size() << " entries";
+      LOG(debug) << "processing data set with " << pc.inputs().size() << " entries";
       for (const auto& entry : pc.inputs()) {
-        LOG(DEBUG) << "  " << *(entry.spec);
+        LOG(debug) << "  " << *(entry.spec);
         auto header = DataRefUtils::getHeader<header::DataHeader*>(entry);
         auto dataProcessingHeader = DataRefUtils::getHeader<DataProcessingHeader*>(entry);
         if (matcher->match(*header, matchingContext) == false) {
@@ -442,7 +87,7 @@ DataProcessorSpec
         output->write(reinterpret_cast<char const*>(header), sizeof(header::DataHeader));
         output->write(reinterpret_cast<char const*>(dataProcessingHeader), sizeof(DataProcessingHeader));
         output->write(entry.payload, o2::framework::DataRefUtils::getPayloadSize(entry));
-        LOG(DEBUG) << "wrote data, size " << o2::framework::DataRefUtils::getPayloadSize(entry);
+        LOG(debug) << "wrote data, size " << o2::framework::DataRefUtils::getPayloadSize(entry);
       }
     };
   };
@@ -498,20 +143,75 @@ DataProcessorSpec CommonDataProcessors::getGlobalFairMQSink(std::vector<InputSpe
   return specifyFairMQDeviceOutputProxy("internal-dpl-injected-output-proxy", danglingOutputInputs, defaultChannelConfig.c_str());
 }
 
-DataProcessorSpec CommonDataProcessors::getDummySink(std::vector<InputSpec> const& danglingOutputInputs)
+void retryMetricCallback(uv_async_t* async)
+{
+  static size_t lastTimeslice = -1;
+  auto* services = (ServiceRegistryRef*)async->data;
+  auto& timesliceIndex = services->get<TimesliceIndex>();
+  auto* device = services->get<RawDeviceService>().device();
+  auto channel = device->GetChannels().find("metric-feedback");
+  auto oldestPossingTimeslice = timesliceIndex.getOldestPossibleOutput().timeslice.value;
+  if (channel == device->GetChannels().end()) {
+    return;
+  }
+  fair::mq::MessagePtr payload(device->NewMessage());
+  payload->Rebuild(&oldestPossingTimeslice, sizeof(int64_t), nullptr, nullptr);
+  auto consumed = oldestPossingTimeslice;
+
+  int64_t result = channel->second[0].Send(payload, 100);
+  // If the sending worked, we do not retry.
+  if (result != 0) {
+    // If the sending did not work, we keep trying until it actually works.
+    // This will schedule other tasks in the queue, so the processing of the
+    // data will still happen.
+    uv_async_send(async);
+  } else {
+    lastTimeslice = consumed;
+  }
+}
+
+DataProcessorSpec CommonDataProcessors::getDummySink(std::vector<InputSpec> const& danglingOutputInputs, std::string rateLimitingChannelConfig)
 {
   return DataProcessorSpec{
     .name = "internal-dpl-injected-dummy-sink",
     .inputs = danglingOutputInputs,
-    .algorithm = AlgorithmSpec{adaptStateful([](CallbackService& callbacks) {
-      auto dataConsumed = [](ServiceRegistry& services) {
-        services.get<DataProcessingStats>().consumedTimeframes++;
+    .algorithm = AlgorithmSpec{adaptStateful([](CallbackService& callbacks, DeviceState& deviceState, InitContext& ic) {
+      static uv_async_t async;
+      // The callback will only have access to the
+      async.data = new ServiceRegistryRef{ic.services()};
+      uv_async_init(deviceState.loop, &async, retryMetricCallback);
+      auto domainInfoUpdated = [](ServiceRegistryRef services, size_t timeslice, ChannelIndex channelIndex) {
+        LOGP(debug, "Domain info updated with timeslice {}", timeslice);
+        retryMetricCallback(&async);
+        auto& timesliceIndex = services.get<TimesliceIndex>();
+        auto oldestPossingTimeslice = timesliceIndex.getOldestPossibleOutput().timeslice.value;
+        auto& stats = services.get<DataProcessingStats>();
+        stats.updateStats({(int)ProcessingStatsId::CONSUMED_TIMEFRAMES, DataProcessingStats::Op::Set, (int64_t)oldestPossingTimeslice});
       };
-      callbacks.set(CallbackService::Id::DataConsumed, dataConsumed);
+      callbacks.set<CallbackService::Id::DomainInfoUpdated>(domainInfoUpdated);
 
-      return adaptStateless([]() {});
-    })}};
+      return adaptStateless([]() {
+      });
+    })},
+    .options = !rateLimitingChannelConfig.empty() ? std::vector<ConfigParamSpec>{{"channel-config", VariantType::String, // raw input channel
+                                                                                  rateLimitingChannelConfig,
+                                                                                  {"Out-of-band channel config"}}}
+                                                  : std::vector<ConfigParamSpec>(),
+    .labels = {{"resilient"}}};
 }
 
-#pragma GCC diagnostic pop
+AlgorithmSpec CommonDataProcessors::wrapWithRateLimiting(AlgorithmSpec spec)
+{
+  return PluginManager::wrapAlgorithm(spec, [](AlgorithmSpec::ProcessCallback& original, ProcessingContext& pcx) -> void {
+    auto& raw = pcx.services().get<RawDeviceService>();
+    static RateLimiter limiter;
+    auto limit = std::stoi(raw.device()->fConfig->GetValue<std::string>("timeframes-rate-limit"));
+    LOG(detail) << "Rate limiting to " << limit << " timeframes in flight";
+    limiter.check(pcx, limit, 2000);
+    LOG(detail) << "Rate limiting passed. Invoking old callback";
+    original(pcx);
+    LOG(detail) << "Rate limited callback done";
+  });
+}
+
 } // namespace o2::framework

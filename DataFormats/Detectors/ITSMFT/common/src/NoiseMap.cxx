@@ -22,17 +22,23 @@ using namespace o2::itsmft;
 
 void NoiseMap::print()
 {
-  int nc = 0, np = 0;
+  int nc = 0, np = 0, nm = 0;
   for (const auto& map : mNoisyPixels) {
     if (!map.empty()) {
       nc++;
     }
     np += map.size();
+    if (map.find(getKey(-1, -1)) != map.end()) {
+      nm++;
+      nc--;
+      np--;
+    }
   }
-  LOG(INFO) << "Number of noisy chips: " << nc;
-  LOG(INFO) << "Number of noisy pixels: " << np;
-  LOG(INFO) << "Number of of strobes: " << mNumOfStrobes;
-  LOG(INFO) << "Probability threshold: " << mProbThreshold;
+  LOG(info) << "Number of fully maske chips " << nm;
+  LOG(info) << "Number of noisy chips: " << nc;
+  LOG(info) << "Number of noisy pixels: " << np;
+  LOG(info) << "Number of of strobes: " << mNumOfStrobes;
+  LOG(info) << "Probability threshold: " << mProbThreshold;
 }
 
 void NoiseMap::fill(const gsl::span<const CompClusterExt> data)

@@ -55,16 +55,9 @@ class DigitizerSpec final : public o2::base::BaseDPLDigitizer
   void run(framework::ProcessingContext& ctx);
 
  private:
-  /// \brief helper function which will be offered as a service
-  /// \param brname Name of the hit branch
-  /// \param sourceID ID of the source
-  /// \param entryID ID of the entry in the source
-  void retrieveHits(const char* brname,
-                    int sourceID,
-                    int entryID);
-
   float mReadoutTime = 0.;                                  ///< PHOS readout time
   float mDeadTime = 0.;                                     ///< PHOS dead time
+  bool mInitSimParams = true;                               ///< To initialize SimParams
   Digitizer mDigitizer;                                     ///< Digitizer object
   std::vector<TChain*> mSimChains;                          ///< Chain of files for background/signal events
   std::vector<Hit>* mHits = nullptr;                        ///< Vector with input hits from Signal event

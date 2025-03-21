@@ -52,8 +52,8 @@ class RawReaderFDD : public RawReaderFDDBaseNorm
   void accumulateDigits()
   {
     getDigits(mVecDigits, mVecChannelData);
-    LOG(INFO) << "Number of Digits: " << mVecDigits.size();
-    LOG(INFO) << "Number of ChannelData: " << mVecChannelData.size();
+    LOG(info) << "Number of Digits: " << mVecDigits.size();
+    LOG(info) << "Number of ChannelData: " << mVecChannelData.size();
     if (mDumpData) {
       DigitBlockFDD::print(mVecDigits, mVecChannelData);
     }
@@ -65,8 +65,8 @@ class RawReaderFDD : public RawReaderFDDBaseNorm
   }
   void makeSnapshot(o2::framework::ProcessingContext& pc)
   {
-    pc.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginFDD, "DIGITSBC", 0, o2::framework::Lifetime::Timeframe}, mVecDigits);
-    pc.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginFDD, "DIGITSCH", 0, o2::framework::Lifetime::Timeframe}, mVecChannelData);
+    pc.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginFDD, "DIGITSBC", 0}, mVecDigits);
+    pc.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginFDD, "DIGITSCH", 0}, mVecChannelData);
   }
   bool mDumpData;
   std::vector<Digit> mVecDigits;

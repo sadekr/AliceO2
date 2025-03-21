@@ -9,140 +9,107 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#define BOOST_TEST_MODULE Test Framework DataRelayer
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
-
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 #include "Framework/TableBuilder.h"
-#include "../src/FairMQResizableBuffer.h"
-#include <fairmq/FairMQTransportFactory.h>
+#include "Framework/FairMQResizableBuffer.h"
+#include <fairmq/TransportFactory.h>
 #include <cstring>
 #include <arrow/io/memory.h>
 #include <arrow/ipc/writer.h>
-#include <ROOT/RDataFrame.hxx>
 #include <arrow/util/config.h>
 
 using namespace o2::framework;
 
-template class std::unique_ptr<FairMQMessage>;
+template class std::unique_ptr<fair::mq::Message>;
 
 // A simple test where an input is provided
 // and the subsequent InputRecord is immediately requested.
-BOOST_AUTO_TEST_CASE(TestCreation)
+TEST_CASE("TestCreation")
 {
-  auto transport = FairMQTransportFactory::CreateTransportFactory("zeromq");
-  FairMQResizableBuffer buffer{[&transport](size_t size) -> std::unique_ptr<FairMQMessage> {
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  FairMQResizableBuffer buffer{[&transport](size_t size) -> std::unique_ptr<fair::mq::Message> {
     return std::move(transport->CreateMessage(size));
   }};
 }
 
 // Check a few invariants for Resize and Reserve operations
-BOOST_AUTO_TEST_CASE(TestInvariants)
+TEST_CASE("TestInvariants")
 {
-  auto transport = FairMQTransportFactory::CreateTransportFactory("zeromq");
-  FairMQResizableBuffer buffer{[&transport](size_t size) -> std::unique_ptr<FairMQMessage> {
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  FairMQResizableBuffer buffer{[&transport](size_t size) -> std::unique_ptr<fair::mq::Message> {
     return std::move(transport->CreateMessage(size));
   }};
 
-  BOOST_REQUIRE_EQUAL(buffer.size(), 0);
-  BOOST_REQUIRE(buffer.size() <= buffer.capacity());
+  REQUIRE(buffer.size() == 0);
+  REQUIRE(buffer.size() <= buffer.capacity());
 
   auto status = buffer.Reserve(10000);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 10000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 0);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 10000);
+  REQUIRE(buffer.size() == 0);
   auto old_ptr = buffer.data();
 
   status = buffer.Resize(9000, false);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(old_ptr, buffer.data());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 10000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 9000);
+  REQUIRE(status.ok());
+  REQUIRE(old_ptr == buffer.data());
+  REQUIRE(buffer.capacity() == 10000);
+  REQUIRE(buffer.size() == 9000);
 
   status = buffer.Resize(11000, false);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 11000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 11000);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 11000);
+  REQUIRE(buffer.size() == 11000);
 
   status = buffer.Resize(10000, false);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 11000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 10000);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 11000);
+  REQUIRE(buffer.size() == 10000);
 
   status = buffer.Resize(9000, true);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 11000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 9000);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 11000);
+  REQUIRE(buffer.size() == 9000);
 
   status = buffer.Resize(19000, true);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 19000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 19000);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 19000);
+  REQUIRE(buffer.size() == 19000);
 }
 
 // Check a few invariants for Resize and Reserve operations
-BOOST_AUTO_TEST_CASE(TestContents)
+TEST_CASE("TestContents")
 {
-  auto transport = FairMQTransportFactory::CreateTransportFactory("zeromq");
-  FairMQResizableBuffer buffer{[&transport](size_t size) -> std::unique_ptr<FairMQMessage> {
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  FairMQResizableBuffer buffer{[&transport](size_t size) -> std::unique_ptr<fair::mq::Message> {
     return std::move(transport->CreateMessage(size));
   }};
 
-  BOOST_REQUIRE_EQUAL(buffer.size(), 0);
-  BOOST_REQUIRE(buffer.size() <= buffer.capacity());
+  REQUIRE(buffer.size() == 0);
+  REQUIRE(buffer.size() <= buffer.capacity());
 
   auto status = buffer.Resize(10, true);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 10);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 10);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 10);
+  REQUIRE(buffer.size() == 10);
   auto old_ptr = buffer.data();
 
   strcpy((char*)buffer.mutable_data(), "foo");
 
   status = buffer.Resize(9000, false);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 9000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 9000);
-  BOOST_REQUIRE(strncmp((const char*)buffer.data(), "foo", 3) == 0);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 9000);
+  REQUIRE(buffer.size() == 9000);
+  REQUIRE(strncmp((const char*)buffer.data(), "foo", 3) == 0);
 
   status = buffer.Resize(4000, false);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 9000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 4000);
-  BOOST_REQUIRE(strncmp((const char*)buffer.data(), "foo", 3) == 0);
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 9000);
+  REQUIRE(buffer.size() == 4000);
+  REQUIRE(strncmp((const char*)buffer.data(), "foo", 3) == 0);
 
   status = buffer.Resize(40, true);
-  BOOST_REQUIRE(status.ok());
-  BOOST_REQUIRE_EQUAL(buffer.capacity(), 9000);
-  BOOST_REQUIRE_EQUAL(buffer.size(), 40);
-  BOOST_REQUIRE(strncmp((const char*)buffer.data(), "foo", 3) == 0);
-}
-
-BOOST_AUTO_TEST_CASE(TestStreaming)
-{
-  using namespace o2::framework;
-  /// Create a dummy table
-  TableBuilder builder;
-  ROOT::RDataFrame rdf(100);
-  auto t = rdf.Define("x", "1")
-             .Define("y", "2")
-             .Define("z", "x+y");
-  t.ForeachSlot(builder.persist<int, int>({"x", "z"}), {"x", "z"});
-
-  auto table = builder.finalize();
-  auto transport = FairMQTransportFactory::CreateTransportFactory("zeromq");
-  auto creator = [&transport](size_t size) -> std::unique_ptr<FairMQMessage> {
-    return transport->CreateMessage(size);
-  };
-  auto buffer = std::make_shared<FairMQResizableBuffer>(creator);
-  /// Writing to a stream
-  auto stream = std::make_shared<arrow::io::BufferOutputStream>(buffer);
-  auto outBatch = arrow::ipc::MakeStreamWriter(stream.get(), table->schema());
-  auto outStatus = outBatch.ValueOrDie()->WriteTable(*table);
-  if (outStatus.ok() == false) {
-    throw std::runtime_error("Unable to Write table");
-  }
-
-  std::unique_ptr<FairMQMessage> payload = buffer->Finalise();
+  REQUIRE(status.ok());
+  REQUIRE(buffer.capacity() == 9000);
+  REQUIRE(buffer.size() == 40);
+  REQUIRE(strncmp((const char*)buffer.data(), "foo", 3) == 0);
 }

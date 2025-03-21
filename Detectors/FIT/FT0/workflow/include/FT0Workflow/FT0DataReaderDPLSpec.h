@@ -54,11 +54,12 @@ class FT0DataReaderDPLSpec : public Task
       std::vector<InputSpec> dummy{InputSpec{"dummy", ConcreteDataMatcher{o2::header::gDataOriginFT0, o2::header::gDataDescriptionRawData, 0xDEADBEEF}}};
       for (const auto& ref : InputRecordWalker(pc.inputs(), dummy)) {
         const auto dh = o2::framework::DataRefUtils::getHeader<o2::header::DataHeader*>(ref);
-        if (dh->payloadSize == 0) {
+        auto payloadSize = DataRefUtils::getPayloadSize(ref);
+        if (payloadSize == 0) {
           auto maxWarn = o2::conf::VerbosityConfig::Instance().maxWarnDeadBeef;
           if (++contDeadBeef <= maxWarn) {
-            LOGP(WARNING, "Found input [{}/{}/{:#x}] TF#{} 1st_orbit:{} Payload {} : assuming no payload for all links in this TF{}",
-                 dh->dataOrigin.str, dh->dataDescription.str, dh->subSpecification, dh->tfCounter, dh->firstTForbit, dh->payloadSize,
+            LOGP(alarm, "Found input [{}/{}/{:#x}] TF#{} 1st_orbit:{} Payload {} : assuming no payload for all links in this TF{}",
+                 dh->dataOrigin.str, dh->dataDescription.str, dh->subSpecification, dh->tfCounter, dh->firstTForbit, payloadSize,
                  contDeadBeef == maxWarn ? fmt::format(". {} such inputs in row received, stopping reporting", contDeadBeef) : "");
           }
           mRawReader.makeSnapshot(pc); // send empty output
@@ -73,11 +74,11 @@ class FT0DataReaderDPLSpec : public Task
     for (auto it = parser.begin(), end = parser.end(); it != end; ++it) {
       //Proccessing each page
       count++;
-      auto rdhPtr = it.get_if<o2::header::RAWDataHeader>();
+      auto rdhPtr = reinterpret_cast<const o2::header::RDHAny*>(it.raw());
       gsl::span<const uint8_t> payload(it.data(), it.size());
-      mRawReader.process(payload, rdhPtr->linkID, rdhPtr->endPointID);
+      mRawReader.process(payload, o2::raw::RDHUtils::getLinkID(rdhPtr), o2::raw::RDHUtils::getEndPointID(rdhPtr));
     }
-    LOG(INFO) << "Pages: " << count;
+    LOG(info) << "Pages: " << count;
     mRawReader.accumulateDigits();
     mRawReader.makeSnapshot(pc);
     mRawReader.clear();
@@ -88,10 +89,10 @@ class FT0DataReaderDPLSpec : public Task
 template <typename RawReader>
 framework::DataProcessorSpec getFT0DataReaderDPLSpec(const RawReader& rawReader, bool askSTFDist)
 {
-  LOG(INFO) << "DataProcessorSpec initDataProcSpec() for RawReaderFT0";
+  LOG(info) << "DataProcessorSpec initDataProcSpec() for RawReaderFT0";
   std::vector<OutputSpec> outputSpec;
   RawReader::prepareOutputSpec(outputSpec);
-  std::vector<InputSpec> inputSpec{{"STF", ConcreteDataTypeMatcher{o2::header::gDataOriginFT0, "RAWDATA"}, Lifetime::Optional}};
+  std::vector<InputSpec> inputSpec{{"STF", ConcreteDataTypeMatcher{o2::header::gDataOriginFT0, "RAWDATA"}, Lifetime::Timeframe}};
   if (askSTFDist) {
     inputSpec.emplace_back("STFDist", "FLP", "DISTSUBTIMEFRAME", 0, Lifetime::Timeframe);
   }

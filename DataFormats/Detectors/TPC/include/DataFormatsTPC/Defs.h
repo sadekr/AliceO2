@@ -28,9 +28,7 @@
 #include "MathUtils/Cartesian.h"
 #endif
 
-namespace o2
-{
-namespace tpc
+namespace o2::tpc
 {
 
 /// TPC readout sidE
@@ -57,6 +55,9 @@ enum GEMstack { IROCgem = 0,
                 OROC2gem = 2,
                 OROC3gem = 3 };
 constexpr unsigned short GEMSTACKSPERSECTOR = 4;
+constexpr unsigned short GEMSPERSTACK = 4;
+constexpr unsigned short GEMSTACKSPERSIDE = GEMSTACKSPERSECTOR * SECTORSPERSIDE;
+constexpr unsigned short GEMSTACKS = GEMSTACKSPERSECTOR * SECTORSPERSIDE * SIDES;
 
 /// Definition of the different pad subsets
 enum class PadSubset : char {
@@ -65,12 +66,53 @@ enum class PadSubset : char {
   Region     ///< Regions (up to 36*10)
 };
 
+// TPC dE/dx charge types
+enum ChargeType {
+  Max = 0,
+  Tot = 1
+};
+constexpr unsigned short CHARGETYPES = 2;
+
+/// GEM stack identification
+struct StackID {
+  int sector{};
+  GEMstack type{};
+
+  /// Single number identification for the stacks
+  GPUdi() int getIndex() const
+  {
+    return sector + type * SECTORSPERSIDE * SIDES;
+  }
+  GPUdi() void setIndex(int index)
+  {
+    sector = index % (SECTORSPERSIDE * SIDES);
+    type = static_cast<GEMstack>((index / (SECTORSPERSIDE * SIDES)) % GEMSTACKSPERSECTOR);
+  }
+};
+
 /// Statistics type
 enum class StatisticsType {
   GausFit,     ///< Use slow gaus fit (better fit stability)
   GausFitFast, ///< Use fast gaus fit (less accurate error treatment)
   MeanStdDev   ///< Use mean and standard deviation
 };
+
+enum class PadFlags : unsigned short {
+  flagGoodPad = 1 << 0,      ///< flag for a good pad binary 0001
+  flagDeadPad = 1 << 1,      ///< flag for a dead pad binary 0010
+  flagUnknownPad = 1 << 2,   ///< flag for unknown status binary 0100
+  flagSaturatedPad = 1 << 3, ///< flag for saturated status binary 0100
+  flagHighPad = 1 << 4,      ///< flag for pad with extremly high IDC value
+  flagLowPad = 1 << 5,       ///< flag for pad with extremly low IDC value
+  flagSkip = 1 << 6,         ///< flag for defining a pad which is just ignored during the calculation of I1 and IDCDelta
+  flagFEC = 1 << 7,          ///< flag for a whole masked FEC
+  flagNeighbour = 1 << 8,    ///< flag if n neighbouring pads are outlier
+  flagAllNoneGood = flagDeadPad | flagUnknownPad | flagSaturatedPad | flagHighPad | flagLowPad | flagSkip | flagFEC | flagNeighbour,
+};
+
+inline PadFlags operator&(PadFlags a, PadFlags b) { return static_cast<PadFlags>(static_cast<int>(a) & static_cast<int>(b)); }
+inline PadFlags operator~(PadFlags a) { return static_cast<PadFlags>(~static_cast<int>(a)); }
+inline PadFlags operator|(PadFlags a, PadFlags b) { return static_cast<PadFlags>(static_cast<int>(a) | static_cast<int>(b)); }
 
 // default point definitions for PointND, PointNDlocal, PointNDglobal are in
 // MathUtils/CartesianND.h
@@ -138,7 +180,6 @@ typename Enum<T>::Iterator end(Enum<T>)
 {
   return typename Enum<T>::Iterator(((int)T::Last) + 1);
 }
-} // namespace tpc
-} // namespace o2
+} // namespace o2::tpc
 
 #endif

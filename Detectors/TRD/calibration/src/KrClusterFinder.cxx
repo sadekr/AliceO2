@@ -29,7 +29,7 @@ double KrClusterFinder::LandauChi2Functor::operator()(const double* par) const
   // par[1] : location parameter (approximately most probable value)
   // par[2] : sigma
   double retVal = 0;
-  for (unsigned int i = xLowerBound; i <= xUpperBound; ++i) {
+  for (int i = xLowerBound; i <= xUpperBound; ++i) {
     if (fabs(y[i]) < 1e-3f) {
       // exclude bins with zero errors like in TH1::Fit
       // the standard bin error is the square root of its content
@@ -104,6 +104,9 @@ void KrClusterFinder::setInput(const gsl::span<const Digit>& digitsIn, const gsl
 
 void KrClusterFinder::findClusters()
 {
+  if (mDigits.size() == 0 || mTriggerRecords.size() == 0) {
+    return;
+  }
   int nClsTotal = 0;
   int nClsDropped = 0;
   int nClsInvalidFit = 0;
@@ -165,13 +168,16 @@ void KrClusterFinder::findClusters()
         int tbMax = 0;
         int rowMax = 0;
         int colMax = 0;
-        unsigned int iDigitMax = 0;
-        for (int iDigit = 0; iDigit < nDigitsInDet; ++iDigit) {
+        for (unsigned int iDigit = 0; iDigit < nDigitsInDet; ++iDigit) {
+          uint64_t digitIdx = digitIdxArray[trig.getFirstDigit() + idxFirstDigitInDet[iDet] + iDigit]; // global index for array of all digits (mDigits)
+          if (mDigits[digitIdx].isSharedDigit()) {
+            // we need to skip the shared digits which are duplicates contained in the global digits array
+            continue;
+          }
           if (isDigitUsed[iDigit]) {
             // if a maximum has been found for this digit then all ADCs above threshold are already flagged as used
             continue;
           }
-          uint64_t digitIdx = trig.getFirstDigit() + idxFirstDigitInDet[iDet] + iDigit; // global index for array of all digits (mDigits)
           int tbMaxADC = -1;
           auto maxAdcInDigit = mDigits[digitIdx].getADCmax(tbMaxADC);
           if (maxAdcInDigit > adcMax) {
@@ -179,7 +185,6 @@ void KrClusterFinder::findClusters()
             tbMax = tbMaxADC;
             rowMax = mDigits[digitIdx].getPadRow();
             colMax = mDigits[digitIdx].getPadCol();
-            iDigitMax = iDigit;
             adcMax = maxAdcInDigit;
           }
         }
@@ -198,7 +203,11 @@ void KrClusterFinder::findClusters()
         int nUsedADCsInCl = 0;
         std::vector<uint64_t> constituentAdcIndices;
         for (unsigned int iDigit = 0; iDigit < nDigitsInDet; ++iDigit) {
-          uint64_t digitIdx = trig.getFirstDigit() + idxFirstDigitInDet[iDet] + iDigit; // global index for array of all digits (mDigits)
+          uint64_t digitIdx = digitIdxArray[trig.getFirstDigit() + idxFirstDigitInDet[iDet] + iDigit]; // global index for array of all digits (mDigits)
+          if (mDigits[digitIdx].isSharedDigit()) {
+            // we need to skip the shared digits which are duplicates contained in the global digits array
+            continue;
+          }
           int row = mDigits[digitIdx].getPadRow();
           if (std::abs(row - rowMax) > 1) {
             continue;
@@ -271,6 +280,7 @@ void KrClusterFinder::findClusters()
         uint32_t sumOfAdcTrunc;
         double rmsTimeTrunc;
         auto rmsAdcClusterTrunc = getRms(constituentAdcIndices, 2, 3., static_cast<uint32_t>(mMinAdcClEoverT * .95), rmsTimeTrunc, sumOfAdcTrunc);
+        (void)rmsAdcClusterTrunc; // return value not used, so silence compiler warning about unused variable
 
         // ADC value and time bin of first maximum
         int maxAdcA = -1;
@@ -396,9 +406,9 @@ void KrClusterFinder::findClusters()
           } else {
             //mFitResult->Print(std::cout);
             ++nClsDropped;
-            LOG(DEBUG) << "Kr cluster cannot be added because values are out of range";
-            LOGF(DEBUG, "sumOfAllTimeBins(%i), sumAdcA(%f), sumAdcB(%f), clSizeRow(%i), clSizeCol(%i), clSizeTime(%i), maxTbA(%i), maxTbB(%i)", sumOfAllTimeBins, sumAdcA, sumAdcB, clSizeRow, clSizeCol, clSizeTime, maxTbA, maxTbB);
-            LOGF(DEBUG, "rmsAdc(%f), rmsTime(%f), nUsedADCsInCl(%i), sumOfAllTimeBinsAboveThreshold(%i), integralLandauFit(%f), sumOfAdcTrunc(%u)", rmsAdc, rmsTime, nUsedADCsInCl, sumOfAllTimeBinsAboveThreshold, integralLandauFit, sumOfAdcTrunc);
+            LOG(debug) << "Kr cluster cannot be added because values are out of range";
+            LOGF(debug, "sumOfAllTimeBins(%i), sumAdcA(%f), sumAdcB(%f), clSizeRow(%i), clSizeCol(%i), clSizeTime(%i), maxTbA(%i), maxTbB(%i)", sumOfAllTimeBins, sumAdcA, sumAdcB, clSizeRow, clSizeCol, clSizeTime, maxTbA, maxTbB);
+            LOGF(debug, "rmsAdc(%f), rmsTime(%f), nUsedADCsInCl(%i), sumOfAllTimeBinsAboveThreshold(%i), integralLandauFit(%f), sumOfAdcTrunc(%u)", rmsAdc, rmsTime, nUsedADCsInCl, sumOfAllTimeBinsAboveThreshold, integralLandauFit, sumOfAdcTrunc);
           }
         }
       } // end cluster search
@@ -407,5 +417,5 @@ void KrClusterFinder::findClusters()
 
   // we don't need the exact BC time, just use first interaction record within this TF
   mTrigRecs.emplace_back(mTriggerRecords[0].getBCData(), nClsTotal);
-  LOGF(INFO, "Number of Kr clusters with a) invalid fit (%i) b) out-of-range values which were dropped (%i)", nClsInvalidFit, nClsDropped);
+  LOGF(info, "Number of Kr clusters with a) invalid fit (%i) b) out-of-range values which were dropped (%i)", nClsInvalidFit, nClsDropped);
 }

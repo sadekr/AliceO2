@@ -60,21 +60,33 @@ class MFTDCSDataProcessor : public o2::framework::Task
     std::vector<DPID> vect;
     mDPsUpdateInterval = ic.options().get<int64_t>("DPs-update-interval");
     if (mDPsUpdateInterval == 0) {
-      LOG(ERROR) << "MFT DPs update interval set to zero seconds --> changed to 60";
+      LOG(error) << "MFT DPs update interval set to zero seconds --> changed to 60";
       mDPsUpdateInterval = 60;
     }
+    LOG(info) << "mDPsUpdateInterval " << mDPsUpdateInterval << "[sec.]";
+
     bool useCCDBtoConfigure = ic.options().get<bool>("use-ccdb-to-configure");
 
     mStart = ic.options().get<int64_t>("tstart");
     mEnd = ic.options().get<int64_t>("tend");
 
+    mThreBBCurrent = ic.options().get<float>("thre-bb-current");
+    mThreAnalogCurrent = ic.options().get<float>("thre-analog-current");
+    mThreDigitCurrent = ic.options().get<float>("thre-digit-current");
+    mThreBBValtage = ic.options().get<float>("thre-bb-voltage");
+    mThreRULV = ic.options().get<float>("thre-ru-low-voltage");
+
+    LOG(info) << "mThreBBCurrent" << mThreBBCurrent;
+    LOG(info) << "mThreAnalogCurrent" << mThreAnalogCurrent;
+    LOG(info) << "mThreDigitCurrent" << mThreDigitCurrent;
+    LOG(info) << "mThreBBValtage" << mThreBBValtage;
+    LOG(info) << "mThreRULV" << mThreRULV;
+
     if (useCCDBtoConfigure) {
-      LOG(INFO) << "Configuring via CCDB";
-      std::string ccdbpath = ic.options().get<std::string>("ccdb-path");
+      LOG(info) << "Configuring via CCDB";
+
       auto& mgr = CcdbManager::instance();
-      mgr.setURL(ccdbpath);
-      CcdbApi api;
-      api.init(mgr.getURL());
+      mgr.setURL(o2::base::NameConf::getCCDBServer());
       long ts = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
       std::unordered_map<DPID, std::string>* dpid2DataDesc = mgr.getForTimeStamp<std::unordered_map<DPID, std::string>>("MFT/Config/DCSDPconfig", ts);
       for (auto& i : *dpid2DataDesc) {
@@ -83,7 +95,7 @@ class MFTDCSDataProcessor : public o2::framework::Task
     }
 
     else {
-      LOG(INFO) << "Configuring via hardcoded strings";
+      LOG(info) << "Configuring via hardcoded strings";
       std::vector<std::string> aliases = {"MFT_PSU_ZONE/H[0..1]/D[0..4]/F[0..1]/Z[0..3]/Current/Analog",
                                           "MFT_PSU_ZONE/H[0..1]/D[0..4]/F[0..1]/Z[0..3]/Current/BackBias",
                                           "MFT_PSU_ZONE/H[0..1]/D[0..4]/F[0..1]/Z[0..3]/Current/Digital",
@@ -111,18 +123,18 @@ class MFTDCSDataProcessor : public o2::framework::Task
 
       std::vector<std::string> expaliases = o2::dcs::expandAliases(aliases);
       for (const auto& i : expaliases) {
-        vect.emplace_back(i, o2::dcs::RAW_DOUBLE);
+        vect.emplace_back(i, o2::dcs::DPVAL_DOUBLE);
       }
     }
 
-    LOG(INFO) << "Listing Data Points for MFT:";
+    LOG(info) << "Listing Data Points for MFT:";
     for (auto& i : vect) {
-      LOG(INFO) << i;
+      LOG(info) << i;
     }
 
     mProcessor = std::make_unique<o2::mft::MFTDCSProcessor>();
     bool useVerboseMode = ic.options().get<bool>("use-verbose-mode");
-    LOG(INFO) << " ************************* Verbose?" << useVerboseMode;
+    LOG(info) << " ************************* Verbose?" << useVerboseMode;
 
     if (useVerboseMode) {
       mProcessor->useVerboseMode();
@@ -130,25 +142,33 @@ class MFTDCSDataProcessor : public o2::framework::Task
     mProcessor->init(vect);
 
     mTimer = HighResClock::now();
+    mReportTiming = ic.options().get<bool>("report-timing") || useVerboseMode;
   }
 
   //________________________________________________________________
   void run(o2::framework::ProcessingContext& pc) final
   {
+    TStopwatch sw;
     auto tfid = o2::header::get<o2::framework::DataProcessingHeader*>(pc.inputs().get("input").header)->startTime;
     auto dps = pc.inputs().get<gsl::span<DPCOM>>("input");
 
+    mProcessor->setThreBackBiasCurrent(mThreBBCurrent);
+    mProcessor->setThreAnalogCurrent(mThreAnalogCurrent);
+    mProcessor->setThreDigitCurrent(mThreDigitCurrent);
+    mProcessor->setThreBackBiasVoltage(mThreBBValtage);
+    mProcessor->setThreRULV(mThreRULV);
     mProcessor->setTF(tfid);
     mProcessor->process(dps);
 
     auto timeNow = HighResClock::now();
     Duration elapsedTime = timeNow - mTimer; // in seconds
-
-    LOG(INFO) << "mDPsUpdateInterval " << mDPsUpdateInterval << "[sec.]";
-
-    if (elapsedTime.count() >= mDPsUpdateInterval) {
+    if (elapsedTime.count() >= mDPsUpdateInterval || mProcessor->sendDPsCCDB()) {
       sendDPsoutput(pc.outputs());
       mTimer = timeNow;
+    }
+    sw.Stop();
+    if (mReportTiming) {
+      LOGP(info, "Timing CPU:{:.3e} Real:{:.3e} at slice {}", sw.CpuTime(), sw.RealTime(), pc.services().get<o2::framework::TimingInfo>().timeslice);
     }
   }
 
@@ -159,12 +179,18 @@ class MFTDCSDataProcessor : public o2::framework::Task
   }
 
  private:
+  bool mReportTiming = false;
   std::unique_ptr<MFTDCSProcessor> mProcessor;
   HighResClock::time_point mTimer;
   int64_t mDPsUpdateInterval;
-
   long mStart;
   long mEnd;
+
+  float mThreBBCurrent;
+  float mThreAnalogCurrent;
+  float mThreDigitCurrent;
+  float mThreBBValtage;
+  float mThreRULV;
 
   //________________________________________________________________
   void sendDPsoutput(DataAllocator& output)
@@ -182,15 +208,14 @@ class MFTDCSDataProcessor : public o2::framework::Task
     }
 
     if (tend == -1) {
-      constexpr long SECONDSPERYEAR = 365 * 24 * 60 * 60;
-      tend = o2::ccdb::getFutureTimestamp(SECONDSPERYEAR);
+      tend = tstart + o2::ccdb::CcdbObjectInfo::MONTH;
     }
 
     info.setStartValidityTimestamp(tstart);
     info.setEndValidityTimestamp(tend);
 
     auto image = o2::ccdb::CcdbApi::createObjectImage(&payload, &info);
-    LOG(INFO) << "Sending object " << info.getPath() << "/" << info.getFileName() << " of size " << image->size()
+    LOG(info) << "Sending object " << info.getPath() << "/" << info.getFileName() << " of size " << image->size()
               << " bytes, valid for " << info.getStartValidityTimestamp() << " : " << info.getEndValidityTimestamp();
     output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBPayload, "MFT_DCSDPs", 0}, *image.get());
     output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBWrapper, "MFT_DCSDPs", 0}, info);
@@ -210,8 +235,8 @@ DataProcessorSpec getMFTDCSDataProcessorSpec()
 
   std::vector<OutputSpec> outputs;
 
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "MFT_DCSDPs"});
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "MFT_DCSDPs"});
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "MFT_DCSDPs"}, Lifetime::Sporadic);
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "MFT_DCSDPs"}, Lifetime::Sporadic);
 
   return DataProcessorSpec{
     "mft-dcs-data-processor",
@@ -219,11 +244,16 @@ DataProcessorSpec getMFTDCSDataProcessorSpec()
     outputs,
     AlgorithmSpec{adaptFromTask<o2::mft::MFTDCSDataProcessor>()},
     Options{
-      {"ccdb-path", VariantType::String, "http://localhost:8080", {"Path to CCDB"}},
       {"tstart", VariantType::Int64, -1ll, {"Start of validity timestamp"}},
       {"tend", VariantType::Int64, -1ll, {"End of validity timestamp"}},
       {"use-ccdb-to-configure", VariantType::Bool, false, {"Use CCDB to configure"}},
       {"use-verbose-mode", VariantType::Bool, false, {"Use verbose mode"}},
+      {"report-timing", VariantType::Bool, false, {"Report timing for every slice"}},
+      {"thre-analog-current", VariantType::Float, 999.f, {"Threshold for Analog Currect to send to CCDB"}},
+      {"thre-digit-current", VariantType::Float, 999.f, {"Threshold for Digital Currect to send to CCDB"}},
+      {"thre-bb-current", VariantType::Float, 999.f, {"Threshold for BackBias Currect to send to CCDB"}},
+      {"thre-bb-voltage", VariantType::Float, 999.f, {"Threshold for BackBias Voltage to send to CCDB"}},
+      {"thre-ru-low-voltage", VariantType::Float, 999.f, {"Threshold for RU LV to send to CCDB"}},
       {"DPs-update-interval", VariantType::Int64, 600ll, {"Interval (in s) after which to update the DPs CCDB entry"}}}};
 }
 

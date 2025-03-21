@@ -12,11 +12,17 @@
 #define BOOST_TEST_MODULE Test TOFCTFIO
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
+
+#undef NDEBUG
+#include <cassert>
+
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/dataset.hpp>
 #include "DataFormatsTOF/CTF.h"
 #include "TOFBase/Geo.h"
 #include "TOFBase/Digit.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "TOFReconstruction/CTFCoder.h"
 #include "Framework/Logger.h"
 #include <TFile.h>
@@ -25,8 +31,11 @@
 #include <cstring>
 
 using namespace o2::tof;
+namespace boost_data = boost::unit_test::data;
 
-BOOST_AUTO_TEST_CASE(CompressedClustersTest)
+inline std::vector<o2::ctf::ANSHeader> ANSVersions{o2::ctf::ANSVersionCompat, o2::ctf::ANSVersion1};
+
+BOOST_DATA_TEST_CASE(CompressedClustersTest, boost_data::make(ANSVersions), ansVersion)
 {
 
   std::vector<Digit> digits;
@@ -77,19 +86,20 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
               });
 
     //    for (int i = 0; i < ndig; i++)
-    //        LOG(INFO) << "ROW = " << irof << " - Strip = " << digits[i].getChannel() / Geo::NPADS << " - BC = " << digits[i].getBC() << " - TDC = " << digits[i].getTDC();
+    //        LOG(info) << "ROW = " << irof << " - Strip = " << digits[i].getChannel() / Geo::NPADS << " - BC = " << digits[i].getBC() << " - TDC = " << digits[i].getTDC();
   }
   sw.Stop();
-  LOG(INFO) << "Generated " << digits.size() << " in " << rows.size() << " ROFs in " << sw.CpuTime() << " s";
+  LOG(info) << "Generated " << digits.size() << " in " << rows.size() << " ROFs in " << sw.CpuTime() << " s";
 
   sw.Start();
   std::vector<o2::ctf::BufferType> vec;
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Encoder);
+    coder.setANSVersion(ansVersion);
     coder.encode(vec, rows, digits, pattVec); // compress
   }
   sw.Stop();
-  LOG(INFO) << "Compressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Compressed in " << sw.CpuTime() << " s";
 
   // writing
   {
@@ -101,7 +111,7 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
     ctfImage->appendToTree(ctfTree, "TOF");
     ctfTree.Write();
     sw.Stop();
-    LOG(INFO) << "Wrote to tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Wrote to tree in " << sw.CpuTime() << " s";
   }
 
   // reading
@@ -113,7 +123,7 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
     BOOST_CHECK(tree);
     CTF::readFromTree(vec, *(tree.get()), "TOF");
     sw.Stop();
-    LOG(INFO) << "Read back from tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Read back from tree in " << sw.CpuTime() << " s";
   }
 
   std::vector<Digit> digitsD;
@@ -122,11 +132,11 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
   sw.Start();
   const auto ctfImage = CTF::getImage(vec.data());
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Decoder);
     coder.decode(ctfImage, rowsD, digitsD, pattVecD); // decompress
   }
   sw.Stop();
-  LOG(INFO) << "Decompressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Decompressed in " << sw.CpuTime() << " s";
 
   //
   // simple checks

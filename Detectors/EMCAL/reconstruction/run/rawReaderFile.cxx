@@ -18,7 +18,7 @@
 #include "DetectorsRaw/RawFileReader.h"
 #include "EMCALReconstruction/AltroDecoder.h"
 #include "EMCALReconstruction/RawReaderMemory.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 namespace bpo = boost::program_options;
 //using namespace o2::emcal;
@@ -78,7 +78,7 @@ int main(int argc, char** argv)
   while (1) {
     int tfID = reader.getNextTFToRead();
     if (tfID >= reader.getNTimeFrames()) {
-      LOG(INFO) << "nothing left to read after " << tfID << " TFs read";
+      LOG(info) << "nothing left to read after " << tfID << " TFs read";
       break;
     }
     std::vector<char> dataBuffer; // where to put extracted data

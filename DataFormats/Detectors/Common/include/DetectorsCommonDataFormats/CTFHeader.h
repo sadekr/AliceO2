@@ -27,13 +27,15 @@ namespace ctf
 struct CTFHeader {
 
   uint64_t run;                           // run number
+  uint64_t creationTime = 0;              // creation time from the DataProcessingHeader
   uint32_t firstTForbit = 0;              // first orbit of time frame as unique identifier within the run
+  uint32_t tfCounter = 0;                 // original TFcounter of the TF
   o2::detectors::DetID::mask_t detectors; // mask of represented detectors
 
   std::string describe() const;
   void print() const;
 
-  ClassDefNV(CTFHeader, 2)
+  ClassDefNV(CTFHeader, 4)
 };
 
 std::ostream& operator<<(std::ostream& stream, const CTFHeader& c);

@@ -9,10 +9,6 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#define BOOST_TEST_MODULE Test Framework InputRecordWalker
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
-
 #include "Framework/InputRecord.h"
 #include "Framework/InputSpan.h"
 #include "Framework/InputRecordWalker.h"
@@ -21,10 +17,9 @@
 #include "Headers/DataHeader.h"
 #include "Headers/DataHeaderHelpers.h"
 #include "Headers/Stack.h"
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 #include <vector>
 #include <memory>
-#include <iostream>
 #include <string>
 #include <unordered_map>
 
@@ -39,19 +34,19 @@ struct DataSet {
   using TaggedSet = std::pair<o2::header::DataOrigin, MessageSet>;
   using Messages = std::vector<TaggedSet>;
   using CheckType = std::vector<std::string>;
-  DataSet(std::vector<InputRoute>&& s, Messages&& m, CheckType&& v)
+  DataSet(std::vector<InputRoute>&& s, Messages&& m, CheckType&& v, ServiceRegistryRef registry)
     : schema{std::move(s)}, messages{std::move(m)}, span{[this](size_t i, size_t part) {
-                                                           BOOST_REQUIRE(i < this->messages.size());
-                                                           BOOST_REQUIRE(part < this->messages[i].second.size() / 2);
+                                                           REQUIRE(i < this->messages.size());
+                                                           REQUIRE(part < this->messages[i].second.size() / 2);
                                                            auto header = static_cast<char const*>(this->messages[i].second.at(2 * part)->data());
                                                            auto payload = static_cast<char const*>(this->messages[i].second.at(2 * part + 1)->data());
                                                            return DataRef{nullptr, header, payload};
                                                          },
-                                                         [this](size_t i) { return i < this->messages.size() ? messages[i].second.size() / 2 : 0; }, this->messages.size()},
-      record{schema, span},
+                                                         [this](size_t i) { return i < this->messages.size() ? messages[i].second.size() / 2 : 0; }, nullptr, this->messages.size()},
+      record{schema, span, registry},
       values{std::move(v)}
   {
-    BOOST_REQUIRE(messages.size() == schema.size());
+    REQUIRE(messages.size() == schema.size());
   }
 
   std::vector<InputRoute> schema;
@@ -63,6 +58,7 @@ struct DataSet {
 
 DataSet createData()
 {
+  static ServiceRegistry registry;
   // Create the routes we want for the InputRecord
   std::vector<InputSpec> inputspecs = {
     InputSpec{"tpc", "TPC", "SOMEDATA", 0, Lifetime::Timeframe},
@@ -138,26 +134,26 @@ DataSet createData()
   createMessage(dh3);
   createMessage(dh4);
 
-  return {std::move(schema), std::move(messages), std::move(checkValues)};
+  return {std::move(schema), std::move(messages), std::move(checkValues), registry};
 }
 
-BOOST_AUTO_TEST_CASE(test_DPLRawParser)
+TEST_CASE("test_DPLRawParser")
 {
   auto dataset = createData();
   InputRecord& inputs = dataset.record;
-  BOOST_REQUIRE(dataset.messages.size() > 0);
-  BOOST_REQUIRE(dataset.messages[0].second.at(0) != nullptr);
-  BOOST_REQUIRE(inputs.size() == 3);
-  BOOST_CHECK((*inputs.begin()).header == dataset.messages[0].second.at(0)->data());
+  REQUIRE(dataset.messages.size() > 0);
+  REQUIRE(dataset.messages[0].second.at(0) != nullptr);
+  REQUIRE(inputs.size() == 3);
+  REQUIRE((*inputs.begin()).header == dataset.messages[0].second.at(0)->data());
 
   int count = 0;
   for (auto const& ref : InputRecordWalker(inputs)) {
     auto const* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(ref);
     auto const data = inputs.get<std::string>(ref);
-    BOOST_CHECK(data == dataset.values[count]);
+    REQUIRE(data == dataset.values[count]);
     count++;
   }
-  BOOST_REQUIRE(count == 4);
+  REQUIRE(count == 4);
 
   std::vector<InputSpec> filter{
     {"tpc", "TPC", "SOMEDATA", 0, Lifetime::Timeframe},
@@ -167,8 +163,8 @@ BOOST_AUTO_TEST_CASE(test_DPLRawParser)
   count = 0;
   for (auto const& ref : InputRecordWalker(inputs, filter)) {
     auto const data = inputs.get<std::string>(ref);
-    BOOST_CHECK(data == dataset.values[count]);
+    REQUIRE(data == dataset.values[count]);
     count++;
   }
-  BOOST_REQUIRE(count == 3);
+  REQUIRE(count == 3);
 }

@@ -31,6 +31,9 @@
 #include "TRDBase/Calibrations.h"
 #include "TRDSimulation/Digitizer.h"
 #include "TRDSimulation/Detector.h" // for the Hit type
+#include "TRDSimulation/TRDSimParams.h"
+#include "DetectorsRaw/HBFUtils.h"
+#include <chrono>
 
 using namespace o2::framework;
 using SubSpecificationType = o2::framework::DataAllocator::SubSpecificationType;
@@ -47,7 +50,7 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
 
   void initDigitizerTask(framework::InitContext& ic) override
   {
-    LOG(INFO) << "initializing TRD digitization";
+    LOG(info) << "initializing TRD digitization";
     mDigitizer.init();
   }
 
@@ -57,12 +60,14 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
     if (finished) {
       return;
     }
-    LOG(INFO) << "Doing TRD digitization";
+    LOG(info) << "Doing TRD digitization";
 
     bool mctruth = pc.outputs().isAllowed({"TRD", "LABELS", 0});
 
     Calibrations simcal;
-    simcal.getCCDBObjects(297595);
+    // the timestamp can be extracted from the DPL header (it is set in SimReader)
+    auto creationTime = pc.services().get<o2::framework::TimingInfo>().creation;
+    simcal.getCCDBObjects(creationTime);
     mDigitizer.setCalibrations(&simcal);
 
     // read collision context from input
@@ -71,7 +76,7 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
     auto& irecords = context->getEventRecords();
 
     for (auto& record : irecords) {
-      LOG(DEBUG) << "TRD TIME RECEIVED " << record.getTimeNS();
+      LOG(debug) << "TRD TIME RECEIVED " << record.getTimeNS();
     }
 
     auto& eventParts = context->getEventParts();
@@ -79,19 +84,36 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
     o2::dataformats::MCTruthContainer<o2::MCCompLabel> labelsAccum;
     std::vector<TriggerRecord> triggers;
 
-    std::vector<o2::trd::Digit> digits;                         // digits which get filled
-    o2::dataformats::MCTruthContainer<o2::MCCompLabel> labels;  // labels which get filled
+    std::vector<o2::trd::Digit> digits;                        // digits which get filled
+    o2::dataformats::MCTruthContainer<o2::MCCompLabel> labels; // labels which get filled
 
-    o2::InteractionTimeRecord currentTime; // the current time
-    o2::InteractionTimeRecord triggerTime; // the time at which the TRD start reading out a signal
-    bool firstEvent = true;                // Flag for the first event processed
+    o2::InteractionTimeRecord currentTime;  // the current time
+    o2::InteractionTimeRecord previousTime; // the time of the previous collision
+    o2::InteractionTimeRecord triggerTime;  // the time at which the TRD start reading out a signal
+    size_t currTrig = 0;                    // from which collision is the current TRD trigger (only needed for debug information)
+    bool firstEvent = true;                 // Flag for the first event processed
+
+    // the interaction record marking the timeframe start
+    auto firstTF = InteractionTimeRecord(o2::raw::HBFUtils::Instance().getFirstSampledTFIR(), 0);
 
     TStopwatch timer;
     timer.Start();
     // loop over all composite collisions given from context
     // (aka loop over all the interaction records)
-    for (int collID = 0; collID < irecords.size(); ++collID) {
+    for (size_t collID = 0; collID < irecords.size(); ++collID) {
+      LOGF(debug, "Collision %lu out of %lu at %.1f ns started processing. Current pileup container size: %lu. Current number of digits accumulated: %lu",
+           collID, irecords.size(), irecords[collID].getTimeNS(), mDigitizer.getPileupSignals().size(), digitsAccum.size());
       currentTime = irecords[collID];
+
+      // Note: Very crude filter to neglect collisions coming before
+      // the first interaction record of the timeframe. Remove this, once these collisions can be handled
+      // within the digitization routine. Collisions before this timeframe might impact digits of this timeframe.
+      // See https://its.cern.ch/jira/browse/O2-5395.
+      if (currentTime < firstTF) {
+        LOG(info) << "Too early: Not digitizing collision " << collID;
+        continue;
+      }
+
       // Trigger logic implemented here
       bool isNewTrigger = true; // flag newly accepted readout trigger
       if (firstEvent) {
@@ -99,15 +121,21 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
         firstEvent = false;
       } else {
         double dT = currentTime.getTimeNS() - triggerTime.getTimeNS();
-        if (dT < o2::trd::constants::BUSY_TIME) {
-          // BUSY_TIME = READOUT_TIME + DEAD_TIME, if less than that, pile up the signals and update the last time
+        if (dT < mParams.busyTimeNS()) {
+          // busyTimeNS = readoutTimeNS + deadTimeNS, if less than that, pile up the signals and update the last time
+          LOGF(debug, "Collision %lu Not creating new trigger at time %.2f since dT=%.2f ns < busy time of %.1f us", collID, currentTime.getTimeNS(), dT, mParams.busyTimeNS() / 1000);
           isNewTrigger = false;
           mDigitizer.pileup();
         } else {
           // A new signal can be received, and the detector read it out:
           // flush previous stored digits, labels and keep a trigger record
           // then update the trigger time to the new one
+          if (mDigitizer.getPileupSignals().size() > 0) {
+            // in case the pileup container is not empty only signal stored in there is considered
+            mDigitizer.pileup(); // so we have to move the signals from the previous collision into the pileup container here
+          }
           mDigitizer.flush(digits, labels);
+          LOGF(debug, "Collision %lu we got %lu digits and %lu labels. There are %lu pileup containers remaining", currTrig, digits.size(), labels.getNElements(), mDigitizer.getPileupSignals().size());
           assert(digits.size() == labels.getIndexedSize());
           // Add trigger record, and send digits to the accumulator
           triggers.emplace_back(triggerTime, digitsAccum.size(), digits.size());
@@ -118,12 +146,17 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
           triggerTime = currentTime;
           digits.clear();
           labels.clear();
+          if (triggerTime.getTimeNS() - previousTime.getTimeNS() > mParams.busyTimeNS()) {
+            // we safely clear all pileup signals, because any previous collision cannot contribute signal anymore
+            mDigitizer.clearPileupSignals();
+          }
         }
       }
 
-      mDigitizer.setEventTime(triggerTime.getTimeNS());
+      mDigitizer.setEventTime(currentTime.getTimeNS());
       if (isNewTrigger) {
         mDigitizer.setTriggerTime(triggerTime.getTimeNS());
+        currTrig = collID;
       }
 
       // for each collision, loop over the constituents event and source IDs
@@ -134,34 +167,41 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
         // get the hits for this event and this source and process them
         std::vector<o2::trd::Hit> hits;
         context->retrieveHits(mSimChains, "TRDHit", part.sourceID, part.entryID, &hits);
+        LOGF(debug, "Collision %lu processing in total %lu hits", collID, hits.size());
         mDigitizer.process(hits);
       }
+      previousTime = currentTime;
     }
 
     // Force flush of the digits that remain in the digitizer cache
+    if (mDigitizer.getPileupSignals().size() > 0) {
+      // remember to move signals to pileup container in case it is not empty
+      mDigitizer.pileup();
+    }
     mDigitizer.flush(digits, labels);
+    LOGF(debug, "Collision %lu we got %lu digits and %lu labels. There are %lu pileup containers remaining", currTrig, digits.size(), labels.getNElements(), mDigitizer.getPileupSignals().size());
     assert(digits.size() == labels.getIndexedSize());
     triggers.emplace_back(triggerTime, digitsAccum.size(), digits.size());
     std::copy(digits.begin(), digits.end(), std::back_inserter(digitsAccum));
     if (mctruth) {
       labelsAccum.mergeAtBack(labels);
     }
-    LOGF(INFO, "List of TRD chambers with at least one drift velocity out of range: %s", mDigitizer.dumpFlaggedChambers());
+    LOGF(info, "List of TRD chambers with at least one drift velocity out of range: %s", mDigitizer.dumpFlaggedChambers());
     timer.Stop();
-    LOGF(INFO, "TRD digitization timing: Cpu: %.3e Real: %.3e s", timer.CpuTime(), timer.RealTime());
+    LOGF(info, "TRD digitization timing: Cpu: %.3e Real: %.3e s", timer.CpuTime(), timer.RealTime());
 
-    LOG(INFO) << "TRD: Sending " << digitsAccum.size() << " digits";
-    pc.outputs().snapshot(Output{"TRD", "DIGITS", 0, Lifetime::Timeframe}, digitsAccum);
+    LOG(info) << "TRD: Sending " << digitsAccum.size() << " digits";
+    pc.outputs().snapshot(Output{"TRD", "DIGITS", 1}, digitsAccum);
     if (mctruth) {
-      LOG(INFO) << "TRD: Sending " << labelsAccum.getNElements() << " labels";
+      LOG(info) << "TRD: Sending " << labelsAccum.getNElements() << " labels";
       // we are flattening the labels and write to managed shared memory container for further communication
-      auto& sharedlabels = pc.outputs().make<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(Output{"TRD", "LABELS", 0, Lifetime::Timeframe});
+      auto& sharedlabels = pc.outputs().make<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(Output{"TRD", "LABELS", 0});
       labelsAccum.flatten_to(sharedlabels);
     }
-    LOG(INFO) << "TRD: Sending ROMode= " << mROMode << " to GRPUpdater";
-    pc.outputs().snapshot(Output{"TRD", "ROMode", 0, Lifetime::Timeframe}, mROMode);
-    LOG(INFO) << "TRD: Sending trigger records";
-    pc.outputs().snapshot(Output{"TRD", "TRGRDIG", 0, Lifetime::Timeframe}, triggers);
+    LOG(info) << "TRD: Sending ROMode= " << mROMode << " to GRPUpdater";
+    pc.outputs().snapshot(Output{"TRD", "ROMode", 0}, mROMode);
+    LOG(info) << "TRD: Sending trigger records";
+    pc.outputs().snapshot(Output{"TRD", "TRKTRGRD", 1}, triggers);
     // we should be only called once; tell DPL that this process is ready to exit
     pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
     finished = true;
@@ -170,6 +210,7 @@ class TRDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
  private:
   Digitizer mDigitizer;
   std::vector<TChain*> mSimChains;
+  const TRDSimParams& mParams{TRDSimParams::Instance()};
   // RS: at the moment using hardcoded flag for continuos readout
   o2::parameters::GRPObject::ROMode mROMode = o2::parameters::GRPObject::PRESENT; // readout mode
 };                                                                                // namespace trd
@@ -182,8 +223,8 @@ o2::framework::DataProcessorSpec getTRDDigitizerSpec(int channel, bool mctruth)
   //  algorithmic description (here a lambda getting called once to setup the actual processing function)
   //  options that can be used for this processor (here: input file names where to take the hits)
   std::vector<OutputSpec> outputs;
-  outputs.emplace_back("TRD", "DIGITS", 0, Lifetime::Timeframe);
-  outputs.emplace_back("TRD", "TRGRDIG", 0, Lifetime::Timeframe);
+  outputs.emplace_back("TRD", "DIGITS", 1, Lifetime::Timeframe);
+  outputs.emplace_back("TRD", "TRKTRGRD", 1, Lifetime::Timeframe);
   if (mctruth) {
     outputs.emplace_back("TRD", "LABELS", 0, Lifetime::Timeframe);
   }

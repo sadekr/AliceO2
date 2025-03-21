@@ -102,8 +102,6 @@ class DataGenerator
   /// get theoretical probability of a value
   double getProbability(value_type v) const { return mModel.getProbability(v); }
 
-  using _iterator_base = std::iterator<std::forward_iterator_tag, result_type>;
-
   /**
    * @class iterator a forward iterator to access the bins
    *
@@ -111,15 +109,17 @@ class DataGenerator
    * - check overhead by the computations in the deref operator
    */
   template <class ContainerT>
-  class iterator : public _iterator_base
+  class iterator
   {
    public:
     iterator(const ContainerT& parent, size_type count = 0) : mParent(parent), mCount(count) {}
     ~iterator() = default;
 
     using self_type = iterator;
-    using value_type = typename _iterator_base::value_type;
-    using reference = typename _iterator_base::reference;
+    using reference = typename ContainerT::value_type&;
+    using pointer = typename ContainerT::value_type*;
+    using difference_type = typename std::iterator_traits<pointer>::difference_type;
+    using iterator_category = std::forward_iterator_tag;
 
     // prefix increment
     self_type& operator++()
@@ -154,8 +154,8 @@ class DataGenerator
     // pointer operator->() const {return &mValue;}
     // reference operator[](size_type n) const;
 
-    bool operator==(const self_type& other) { return mCount == other.mCount; }
-    bool operator!=(const self_type& other) { return not(*this == other); }
+    bool operator==(const self_type& other) const { return mCount == other.mCount; }
+    bool operator!=(const self_type& other) const { return not(*this == other); }
 
    private:
     const ContainerT& mParent;

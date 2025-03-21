@@ -14,11 +14,11 @@
 #ifndef ALICEO2_CONF_CONFIGURATIONMACRO_H_
 #define ALICEO2_CONF_CONFIGURATIONMACRO_H_
 
-#include "FairLogger.h"
 #include "TROOT.h"
 #include "TSystem.h"
 #include "TGlobal.h"
 #include "TFunction.h"
+#include <fairlogger/Logger.h>
 #include <string>
 
 namespace o2
@@ -45,18 +45,19 @@ T GetFromMacro(const std::string& file, const std::string& funcname, const std::
   /** load macro is global function is not already defined **/
   if (!gROOT->GetGlobalFunction(gfunc.c_str())) {
     if (gROOT->LoadMacro(file.c_str()) != 0) {
-      LOG(FATAL) << "Cannot find " << file;
+      LOG(fatal) << "Cannot find " << file;
       return nullptr;
     }
     if (!gROOT->GetGlobalFunction(gfunc.c_str())) {
-      LOG(FATAL) << "Global function '" << gfunc << "' not defined";
+      LOG(fatal) << "Global function '" << gfunc << "' not defined";
       return nullptr;
     }
   }
 
   /** check the return type matches the required one **/
-  if (strcmp(gROOT->GetGlobalFunction(gfunc.c_str())->GetReturnTypeName(), type.c_str())) {
-    LOG(INFO) << "Global function '" << gfunc << "' does not return a '" << type << "' type";
+  auto returnedtype = gROOT->GetGlobalFunction(gfunc.c_str())->GetReturnTypeName();
+  if (strcmp(returnedtype, type.c_str())) {
+    LOG(info) << "Global function '" << gfunc << "' does not return a '" << type << "' type ( but " << returnedtype << " )";
     return nullptr;
   }
 
@@ -65,6 +66,21 @@ T GetFromMacro(const std::string& file, const std::string& funcname, const std::
   auto ptr = (T*)gROOT->GetGlobal(Form("__%s__", unique.c_str()))->GetAddress();
 
   /** success **/
+  return *ptr;
+}
+
+// just-in-time interpret some C++ function using ROOT and make result available to runtime
+// functiondecl: A string coding the function to call (example "bool foo(){ return true; }")
+// funcname: The name of the function to call (example "foo()")
+// type: Return type of function (example "bool")
+// unique: Some unique string identifier under which the result will be stored in gROOT global variable space
+template <typename T>
+T JITAndEvalFunction(const std::string& functiondecl, const std::string& funcname, const std::string& type, const std::string& unique)
+{
+  /** interpret and execute a function and retrieve pointer to the returned type **/
+  auto line = Form("%s; %s __%s__ = %s;", functiondecl.c_str(), type.c_str(), unique.c_str(), funcname.c_str());
+  gROOT->ProcessLine(line);
+  auto ptr = (T*)gROOT->GetGlobal(Form("__%s__", unique.c_str()))->GetAddress();
   return *ptr;
 }
 

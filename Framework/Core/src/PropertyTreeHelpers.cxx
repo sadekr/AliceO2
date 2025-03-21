@@ -11,8 +11,9 @@
 
 #include "PropertyTreeHelpers.h"
 #include "Framework/ConfigParamSpec.h"
-#include "Framework/VariantStringHelpers.h"
 #include "Framework/VariantPropertyTreeHelpers.h"
+#include "Framework/RuntimeError.h"
+#include "Framework/VariantJSONHelpers.h"
 
 #include <boost/program_options/variables_map.hpp>
 
@@ -21,7 +22,17 @@
 
 namespace o2::framework
 {
-
+namespace
+{
+/// Helper to get a Variant from a @a str
+template <VariantType T>
+inline Variant fromString(std::string const& str)
+{
+  std::stringstream ss;
+  ss.str(str);
+  return VariantJSONHelpers::read<T>(ss);
+}
+} // namespace
 void PropertyTreeHelpers::populateDefaults(std::vector<ConfigParamSpec> const& schema,
                                            boost::property_tree::ptree& pt,
                                            boost::property_tree::ptree& provenance)
@@ -35,6 +46,12 @@ void PropertyTreeHelpers::populateDefaults(std::vector<ConfigParamSpec> const& s
       switch (spec.type) {
         case VariantType::Int:
           pt.put(key, spec.defaultValue.get<int>());
+          break;
+        case VariantType::Int8:
+          pt.put(key, spec.defaultValue.get<int8_t>());
+          break;
+        case VariantType::Int16:
+          pt.put(key, spec.defaultValue.get<int16_t>());
           break;
         case VariantType::UInt8:
           pt.put(key, spec.defaultValue.get<uint8_t>());
@@ -62,6 +79,9 @@ void PropertyTreeHelpers::populateDefaults(std::vector<ConfigParamSpec> const& s
           break;
         case VariantType::Bool:
           pt.put(key, spec.defaultValue.get<bool>());
+          break;
+        case VariantType::Dict:
+          pt.put_child(key, boost::property_tree::ptree{});
           break;
         case VariantType::ArrayInt:
           pt.put_child(key, vectorToBranch(spec.defaultValue.get<int*>(), spec.defaultValue.size()));
@@ -96,10 +116,13 @@ void PropertyTreeHelpers::populateDefaults(std::vector<ConfigParamSpec> const& s
         case VariantType::LabeledArrayDouble:
           pt.put_child(key, labeledArrayToBranch(spec.defaultValue.get<LabeledArray<double>>()));
           break;
+        case VariantType::LabeledArrayString:
+          pt.put_child(key, labeledArrayToBranch(spec.defaultValue.get<LabeledArray<std::string>>()));
+          break;
         case VariantType::Unknown:
         case VariantType::Empty:
         default:
-          throw std::runtime_error("Unknown variant type");
+          throw runtime_error_f("Unknown variant type", spec.type);
       }
       provenance.put(key, "default");
     } catch (std::runtime_error& re) {
@@ -127,6 +150,12 @@ void PropertyTreeHelpers::populate(std::vector<ConfigParamSpec> const& schema,
       switch (spec.type) {
         case VariantType::Int:
           pt.put(key, vmap[key].as<int>());
+          break;
+        case VariantType::Int8:
+          pt.put(key, vmap[key].as<int8_t>());
+          break;
+        case VariantType::Int16:
+          pt.put(key, vmap[key].as<int16_t>());
           break;
         case VariantType::UInt8:
           pt.put(key, vmap[key].as<uint8_t>());
@@ -157,34 +186,60 @@ void PropertyTreeHelpers::populate(std::vector<ConfigParamSpec> const& schema,
         case VariantType::Bool:
           pt.put(key, vmap[key].as<bool>());
           break;
-        case VariantType::ArrayInt:
-          pt.put_child(key, vectorToBranch<int>(stringToVector<int>(vmap[key].as<std::string>())));
-          break;
-        case VariantType::ArrayFloat:
-          pt.put_child(key, vectorToBranch<float>(stringToVector<float>(vmap[key].as<std::string>())));
-          break;
-        case VariantType::ArrayDouble:
-          pt.put_child(key, vectorToBranch<double>(stringToVector<double>(vmap[key].as<std::string>())));
-          break;
+        case VariantType::ArrayInt: {
+          auto v = fromString<VariantType::ArrayInt>(vmap[key].as<std::string>());
+          pt.put_child(key, vectorToBranch<int>(v.get<int*>(), v.size()));
+        } break;
+        case VariantType::ArrayFloat: {
+          auto v = fromString<VariantType::ArrayFloat>(vmap[key].as<std::string>());
+          pt.put_child(key, vectorToBranch<float>(v.get<float*>(), v.size()));
+        } break;
+        case VariantType::ArrayDouble: {
+          auto v = fromString<VariantType::ArrayDouble>(vmap[key].as<std::string>());
+          pt.put_child(key, vectorToBranch<double>(v.get<double*>(), v.size()));
+        } break;
         case VariantType::ArrayBool:
           //          pt.put_child(key, vectorToBranch<bool>(stringToVector<bool>(vmap[key].as<std::string>())));
           break;
-        case VariantType::ArrayString:
-          pt.put_child(key, vectorToBranch<std::string>(stringToVector<std::string>(vmap[key].as<std::string>())));
-          break;
-        case VariantType::Array2DInt:
-          pt.put_child(key, array2DToBranch<int>(stringToArray2D<int>(vmap[key].as<std::string>())));
-          break;
-        case VariantType::Array2DFloat:
-          pt.put_child(key, array2DToBranch<float>(stringToArray2D<float>(vmap[key].as<std::string>())));
-          break;
-        case VariantType::Array2DDouble:
-          pt.put_child(key, array2DToBranch<double>(stringToArray2D<double>(vmap[key].as<std::string>())));
+        case VariantType::ArrayString: {
+          auto v = fromString<VariantType::ArrayString>(vmap[key].as<std::string>());
+          pt.put_child(key, vectorToBranch<std::string>(v.get<std::string*>(), v.size()));
+        } break;
+        case VariantType::Array2DInt: {
+          auto v = fromString<VariantType::Array2DInt>(vmap[key].as<std::string>());
+          pt.put_child(key, array2DToBranch<int>(v.get<Array2D<int>>()));
+        } break;
+        case VariantType::Array2DFloat: {
+          auto v = fromString<VariantType::Array2DFloat>(vmap[key].as<std::string>());
+          pt.put_child(key, array2DToBranch<float>(v.get<Array2D<float>>()));
+        } break;
+        case VariantType::Array2DDouble: {
+          auto v = fromString<VariantType::Array2DDouble>(vmap[key].as<std::string>());
+          pt.put_child(key, array2DToBranch<double>(v.get<Array2D<double>>()));
+        } break;
+        case VariantType::LabeledArrayInt: {
+          auto v = fromString<VariantType::LabeledArrayInt>(vmap[key].as<std::string>());
+          pt.put_child(key, labeledArrayToBranch(v.get<LabeledArray<int>>()));
+        } break;
+        case VariantType::LabeledArrayFloat: {
+          auto v = fromString<VariantType::LabeledArrayFloat>(vmap[key].as<std::string>());
+          pt.put_child(key, labeledArrayToBranch(v.get<LabeledArray<float>>()));
+        } break;
+        case VariantType::LabeledArrayDouble: {
+          auto v = fromString<VariantType::LabeledArrayDouble>(vmap[key].as<std::string>());
+          pt.put_child(key, labeledArrayToBranch(v.get<LabeledArray<double>>()));
+        } break;
+        case VariantType::LabeledArrayString: {
+          auto v = fromString<VariantType::LabeledArrayString>(vmap[key].as<std::string>());
+          pt.put_child(key, labeledArrayToBranch(v.get<LabeledArray<std::string>>()));
+        } break;
+        case VariantType::Dict:
+          pt.put_child(key, vmap[key].as<boost::property_tree::ptree>());
           break;
         case VariantType::Unknown:
         case VariantType::Empty:
         default:
-          throw std::runtime_error("Unknown variant type");
+          throw runtime_error("Unknown variant type");
       }
       provenance.put(key, "fairmq");
     } catch (std::runtime_error& re) {
@@ -233,6 +288,12 @@ void PropertyTreeHelpers::populate(std::vector<ConfigParamSpec> const& schema,
         case VariantType::Int:
           pt.put(key, (*it).get_value<int>());
           break;
+        case VariantType::Int8:
+          pt.put(key, (*it).get_value<int8_t>());
+          break;
+        case VariantType::Int16:
+          pt.put(key, (*it).get_value<int16_t>());
+          break;
         case VariantType::UInt8:
           pt.put(key, (*it).get_value<uint8_t>());
           break;
@@ -260,6 +321,7 @@ void PropertyTreeHelpers::populate(std::vector<ConfigParamSpec> const& schema,
         case VariantType::Bool:
           pt.put(key, (*it).get_value<bool>());
           break;
+        case VariantType::Dict:
         case VariantType::ArrayInt:
         case VariantType::ArrayFloat:
         case VariantType::ArrayDouble:
@@ -294,6 +356,14 @@ void PropertyTreeHelpers::populate(std::vector<ConfigParamSpec> const& schema,
             pt.put_child(key, labeledArrayToBranch(std::move(v)));
           }
         }; break;
+        case VariantType::LabeledArrayString: {
+          auto v = labeledArrayFromBranch<std::string>(it.value());
+          if (!replaceLabels(v, spec.defaultValue.get<LabeledArray<std::string>>())) {
+            pt.put_child(key, *it);
+          } else {
+            pt.put_child(key, labeledArrayToBranch(std::move(v)));
+          }
+        }; break;
         case VariantType::Unknown:
         case VariantType::Empty:
         default:
@@ -315,7 +385,7 @@ namespace
 void traverseRecursive(const boost::property_tree::ptree& parent,
                        const boost::property_tree::ptree::path_type& childPath,
                        const boost::property_tree::ptree& child,
-                       PropertyTreeHelpers::WalkerFunction& method)
+                       PropertyTreeHelpers::WalkerFunction<boost::property_tree::ptree>& method)
 {
   using boost::property_tree::ptree;
 
@@ -327,7 +397,8 @@ void traverseRecursive(const boost::property_tree::ptree& parent,
 }
 } // namespace
 
-void PropertyTreeHelpers::traverse(const boost::property_tree::ptree& parent, PropertyTreeHelpers::WalkerFunction& method)
+template <>
+void PropertyTreeHelpers::traverse<boost::property_tree::ptree>(const boost::property_tree::ptree& parent, PropertyTreeHelpers::WalkerFunction<boost::property_tree::ptree>& method)
 {
   traverseRecursive(parent, "", parent, method);
 }

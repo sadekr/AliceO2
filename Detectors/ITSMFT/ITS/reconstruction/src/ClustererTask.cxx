@@ -16,7 +16,7 @@
 #include "ITSReconstruction/ClustererTask.h"
 #include "MathUtils/Cartesian.h"
 #include "MathUtils/Utils.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include <TFile.h>
 #include <TTree.h>
 
@@ -26,7 +26,7 @@ using namespace o2::its;
 ClustererTask::ClustererTask(bool useMC, bool raw) : mRawDataMode(raw),
                                                      mUseMCTruth(useMC && (!raw))
 {
-  LOG(INFO) << Class()->GetName() << ": MC digits mode: " << (mRawDataMode ? "OFF" : "ON")
+  LOG(info) << Class()->GetName() << ": MC digits mode: " << (mRawDataMode ? "OFF" : "ON")
             << " | Use MCtruth: " << (mUseMCTruth ? "ON" : "OFF");
 
   mClusterer.setNChips(o2::itsmft::ChipMappingITS::getNChips());
@@ -87,7 +87,7 @@ void ClustererTask::run(const std::string inpName, const std::string outName)
 
     TFile outFile(outName.data(), "new");
     if (!outFile.IsOpen()) {
-      LOG(FATAL) << "Failed to open output file " << outName;
+      LOG(fatal) << "Failed to open output file " << outName;
     }
 
     TTree outTree("o2sim", "ITS Clusters");
@@ -105,7 +105,7 @@ void ClustererTask::run(const std::string inpName, const std::string outName)
     } else {
       mUseMCTruth = false;
     }
-    LOG(INFO) << Class()->GetName() << " | MCTruth: " << (mUseMCTruth ? "ON" : "OFF");
+    LOG(info) << Class()->GetName() << " | MCTruth: " << (mUseMCTruth ? "ON" : "OFF");
 
     outTree.Branch("ITSClusterPatt", &mPatterns);
 
@@ -136,11 +136,11 @@ void ClustererTask::writeTree(std::string basename, int i)
   auto name = basename + std::to_string(i) + ".root";
   TFile outFile(name.data(), "new");
   if (!outFile.IsOpen()) {
-    LOG(FATAL) << "Failed to open output file " << name;
+    LOG(fatal) << "Failed to open output file " << name;
   }
   TTree outTree("o2sim", "ITS Clusters");
 
-  auto max = (i + 1) * maxROframe;
+  size_t max = (i + 1) * maxROframe;
   auto lastf = (max < mROFRecVec.size()) ? mROFRecVec.begin() + max : mROFRecVec.end();
   std::vector<o2::itsmft::ROFRecord> rofRecBuffer(mROFRecVec.begin() + i * maxROframe, lastf);
   std::vector<o2::itsmft::ROFRecord>* rofRecPtr = &rofRecBuffer;

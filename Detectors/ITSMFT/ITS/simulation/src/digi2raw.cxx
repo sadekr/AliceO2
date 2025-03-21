@@ -29,7 +29,7 @@
 #include "DataFormatsITSMFT/Digit.h"
 #include "ITSMFTSimulation/MC2RawEncoder.h"
 #include "DetectorsCommonDataFormats/DetID.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "CommonUtils/StringUtils.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "DetectorsRaw/HBFUtils.h"
@@ -41,9 +41,8 @@ namespace bpo = boost::program_options;
 constexpr int DefRDHVersion = o2::raw::RDHUtils::getVersion<o2::header::RAWDataHeader>();
 
 void setupLinks(o2::itsmft::MC2RawEncoder<MAP>& m2r, std::string_view outDir, std::string_view outPrefix, std::string_view fileFor);
-void digi2raw(std::string_view inpName, std::string_view outDir, std::string_view fileFor, int verbosity,
-              uint32_t rdhV = DefRDHVersion, bool noEmptyHBF = false,
-              int superPageSizeInB = 1024 * 1024);
+void digi2raw(std::string_view inpName, std::string_view outDir, std::string_view fileFor, int verbosity, uint32_t rdhV = DefRDHVersion, bool enablePadding = false,
+              bool noEmptyHBF = false, bool noEmptyROF = false, int superPageSizeInB = 1024 * 1024);
 
 int main(int argc, char** argv)
 {
@@ -59,10 +58,12 @@ int main(int argc, char** argv)
     add_option("help,h", "Print this help message");
     add_option("verbosity,v", bpo::value<uint32_t>()->default_value(0), "verbosity level [0 = no output]");
     add_option("input-file,i", bpo::value<std::string>()->default_value("itsdigits.root"), "input ITS digits file");
-    add_option("file-for,f", bpo::value<std::string>()->default_value("all"), "single file per: all,flp,cru,link");
+    add_option("file-for,f", bpo::value<std::string>()->default_value("all"), "single file per: all,flp,cruendpoint,link");
     add_option("output-dir,o", bpo::value<std::string>()->default_value("./"), "output directory for raw data");
     add_option("rdh-version,r", bpo::value<uint32_t>()->default_value(DefRDHVersion), "RDH version to use");
+    add_option("enable-padding", bpo::value<bool>()->default_value(false)->implicit_value(true), "enable GBT word padding to 128 bits even for RDH V7");
     add_option("no-empty-hbf,e", bpo::value<bool>()->default_value(false)->implicit_value(true), "do not create empty HBF pages (except for HBF starting TF)");
+    add_option("no-empty-rof", bpo::value<bool>()->default_value(false)->implicit_value(true), "do not create empty ROF blocks");
     add_option("hbfutils-config,u", bpo::value<std::string>()->default_value(std::string(o2::base::NameConf::DIGITIZATIONCONFIGFILE)), "config file for HBFUtils (or none)");
     add_option("configKeyValues", bpo::value<std::string>()->default_value(""), "comma-separated configKeyValues");
 
@@ -95,31 +96,37 @@ int main(int argc, char** argv)
            vm["file-for"].as<std::string>(),
            vm["verbosity"].as<uint32_t>(),
            vm["rdh-version"].as<uint32_t>(),
-           vm["no-empty-hbf"].as<bool>());
-  LOG(INFO) << "HBFUtils settings used for conversion:";
+           vm["enable-padding"].as<bool>(),
+           vm["no-empty-hbf"].as<bool>(),
+           vm["no-empty-rof"].as<bool>());
+  LOG(info) << "HBFUtils settings used for conversion:";
 
   o2::raw::HBFUtils::Instance().print();
 
   return 0;
 }
 
-void digi2raw(std::string_view inpName, std::string_view outDir, std::string_view fileFor, int verbosity, uint32_t rdhV, bool noEmptyHBF, int superPageSizeInB)
+void digi2raw(std::string_view inpName, std::string_view outDir, std::string_view fileFor, int verbosity, uint32_t rdhV, bool enablePadding, bool noEmptyHBF, bool noEmptyROF, int superPageSizeInB)
 {
   TStopwatch swTot;
   swTot.Start();
   using ROFR = o2::itsmft::ROFRecord;
   using ROFRVEC = std::vector<o2::itsmft::ROFRecord>;
   const uint8_t ruSWMin = 0, ruSWMax = 0xff; // seq.ID of 1st and last RU (stave) to convert
+  if (rdhV < 7 && !enablePadding) {
+    enablePadding = true;
+    LOG(info) << "padding is always ON for RDH version " << rdhV;
+  }
 
-  LOG(INFO) << "HBFUtil settings:";
+  LOG(info) << "HBFUtil settings:";
   o2::raw::HBFUtils::Instance().print();
 
   // if needed, create output directory
   if (!std::filesystem::exists(outDir)) {
     if (!std::filesystem::create_directories(outDir)) {
-      LOG(FATAL) << "could not create output directory " << outDir;
+      LOG(fatal) << "could not create output directory " << outDir;
     } else {
-      LOG(INFO) << "created output directory " << outDir;
+      LOG(info) << "created output directory " << outDir;
     }
   }
 
@@ -132,7 +139,7 @@ void digi2raw(std::string_view inpName, std::string_view outDir, std::string_vie
   std::vector<o2::itsmft::Digit> digiVec, *digiVecP = &digiVec;
   std::string digBranchName = o2::utils::Str::concat_string(MAP::getName(), "Digit");
   if (!digTree.GetBranch(digBranchName.c_str())) {
-    LOG(FATAL) << "Failed to find the branch " << digBranchName << " in the tree " << digTreeName;
+    LOG(fatal) << "Failed to find the branch " << digBranchName << " in the tree " << digTreeName;
   }
   digTree.SetBranchAddress(digBranchName.c_str(), &digiVecP);
 
@@ -140,7 +147,7 @@ void digi2raw(std::string_view inpName, std::string_view outDir, std::string_vie
   ROFRVEC rofRecVec, *rofRecVecP = &rofRecVec;
   std::string rofRecName = o2::utils::Str::concat_string(MAP::getName(), "DigitROF");
   if (!digTree.GetBranch(rofRecName.c_str())) {
-    LOG(FATAL) << "Failed to find the branch " << rofRecName << " in the tree " << digTreeName;
+    LOG(fatal) << "Failed to find the branch " << rofRecName << " in the tree " << digTreeName;
   }
   digTree.SetBranchAddress(rofRecName.c_str(), &rofRecVecP);
   ///-------< input
@@ -154,24 +161,28 @@ void digi2raw(std::string_view inpName, std::string_view outDir, std::string_vie
   m2r.setMinMaxRUSW(ruSWMin, ruSWMax);
   m2r.getWriter().setSuperPageSize(superPageSizeInB);
   m2r.getWriter().useRDHVersion(rdhV);
+  m2r.getWriter().useRDHDataFormat(enablePadding ? 0 : 2);
+  if (!enablePadding) { // CRU page alignment padding is used only if no GBT word padding is used
+    m2r.getWriter().setAlignmentSize(o2::itsmft::GBTLink::CRUPageAlignment);
+    m2r.getWriter().setAlignmentPaddingFiller(0xff);
+  }
   m2r.getWriter().setDontFillEmptyHBF(noEmptyHBF);
 
   m2r.setVerbosity(verbosity);
   setupLinks(m2r, outDir, MAP::getName(), fileFor);
   //-------------------------------------------------------------------------------<<<<
-  int lastTreeID = -1;
-  long offs = 0, nEntProc = 0;
+  long nEntProc = 0;
   for (int i = 0; i < digTree.GetEntries(); i++) {
     digTree.GetEntry(i);
     for (const auto& rofRec : rofRecVec) {
       int nDigROF = rofRec.getNEntries();
       if (verbosity) {
-        LOG(INFO) << "Processing ROF:" << rofRec.getROFrame() << " with " << nDigROF << " entries";
+        LOG(info) << "Processing ROF:" << rofRec.getROFrame() << " with " << nDigROF << " entries";
         rofRec.print();
       }
-      if (!nDigROF) {
+      if (!nDigROF && noEmptyROF) {
         if (verbosity) {
-          LOG(INFO) << "Frame is empty"; // ??
+          LOG(info) << "Frame is empty";
         }
         continue;
       }
@@ -206,12 +217,12 @@ const ITSRUMapping itsHWMap[o2::itsmft::ChipMappingITS::getNRUs()] =
     {"alio2-cr1-flp187", 183, 0, 3, 94, 3},
     {"alio2-cr1-flp187", 183, 0, 4, 49, 4},
     {"alio2-cr1-flp187", 183, 0, 5, 52, 5},
-    {"alio2-cr1-flp187", 172, 0, 0, 187, 6},
-    {"alio2-cr1-flp187", 172, 0, 1, 90, 7},
-    {"alio2-cr1-flp187", 172, 0, 2, 102, 8},
-    {"alio2-cr1-flp187", 172, 0, 3, 134, 9},
-    {"alio2-cr1-flp187", 172, 0, 4, 127, 10},
-    {"alio2-cr1-flp187", 172, 0, 5, 259, 11},
+    {"alio2-cr1-flp198", 172, 0, 0, 187, 6},
+    {"alio2-cr1-flp198", 172, 0, 1, 90, 7},
+    {"alio2-cr1-flp198", 172, 0, 2, 102, 8},
+    {"alio2-cr1-flp198", 172, 0, 3, 134, 9},
+    {"alio2-cr1-flp198", 172, 0, 4, 127, 10},
+    {"alio2-cr1-flp198", 172, 0, 5, 259, 11},
     {"alio2-cr1-flp188", 181, 1, 0, 54, 0},
     {"alio2-cr1-flp188", 181, 1, 1, 59, 1},
     {"alio2-cr1-flp188", 181, 1, 2, 61, 2},
@@ -220,14 +231,14 @@ const ITSRUMapping itsHWMap[o2::itsmft::ChipMappingITS::getNRUs()] =
     {"alio2-cr1-flp188", 181, 1, 5, 66, 5},
     {"alio2-cr1-flp188", 181, 1, 6, 64, 6},
     {"alio2-cr1-flp188", 181, 1, 7, 120, 7},
-    {"alio2-cr1-flp188", 196, 1, 0, 199, 8},
-    {"alio2-cr1-flp188", 196, 1, 1, 201, 9},
-    {"alio2-cr1-flp188", 196, 1, 2, 212, 10},
-    {"alio2-cr1-flp188", 196, 1, 3, 217, 11},
-    {"alio2-cr1-flp188", 196, 1, 4, 230, 12},
-    {"alio2-cr1-flp188", 196, 1, 5, 242, 13},
-    {"alio2-cr1-flp188", 196, 1, 6, 244, 14},
-    {"alio2-cr1-flp188", 196, 1, 7, 250, 15},
+    {"alio2-cr1-flp203", 196, 1, 0, 199, 8},
+    {"alio2-cr1-flp203", 196, 1, 1, 201, 9},
+    {"alio2-cr1-flp203", 196, 1, 2, 212, 10},
+    {"alio2-cr1-flp203", 196, 1, 3, 217, 11},
+    {"alio2-cr1-flp203", 196, 1, 4, 230, 12},
+    {"alio2-cr1-flp203", 196, 1, 5, 242, 13},
+    {"alio2-cr1-flp203", 196, 1, 6, 244, 14},
+    {"alio2-cr1-flp203", 196, 1, 7, 250, 15},
     {"alio2-cr1-flp189", 184, 2, 0, 63, 0},
     {"alio2-cr1-flp189", 184, 2, 1, 58, 1},
     {"alio2-cr1-flp189", 184, 2, 2, 44, 2},
@@ -441,13 +452,14 @@ void setupLinks(o2::itsmft::MC2RawEncoder<MAP>& m2r, std::string_view outDir, st
       link->cruID = ruhw.cruHWID;
       link->feeID = mp.RUSW2FEEId(ruID, il);
       link->endPointID = link->idInCRU > 11 ? 1 : 0;
+      link->wordLength = m2r.getWriter().getUsedRDHDataFormat() == 0 ? o2::itsmft::GBTPaddedWordLength : o2::itsmft::GBTWordLength;
       accL += lnkAs[il];
       outFileLink = o2::utils::Str::concat_string(outDir, "/", outPrefix);
       if (fileFor != "all") { // single file for all links
         outFileLink += fmt::format("_{}", ruhw.flp);
         if (fileFor != "flp") {
           outFileLink += fmt::format("_cru{}_{}", ruhw.cruHWID, link->endPointID);
-          if (fileFor != "cru") {
+          if (fileFor != "cruendpoint") {
             outFileLink += fmt::format("_lnk{}_feeid{}", link->idInCRU, link->feeID);
             if (fileFor != "link") {
               throw std::runtime_error("invalid option provided for file grouping");
@@ -458,7 +470,7 @@ void setupLinks(o2::itsmft::MC2RawEncoder<MAP>& m2r, std::string_view outDir, st
       outFileLink += ".raw";
       m2r.getWriter().registerLink(link->feeID, link->cruID, link->idInCRU, link->endPointID, outFileLink);
       if (m2r.getVerbosity()) {
-        LOG(INFO) << "RU" << ruID << '(' << ruhw.ruInLayer << " on lr " << ruhw.layer << ") " << link->describe()
+        LOG(info) << "RU" << ruID << '(' << ruhw.ruInLayer << " on lr " << ruhw.layer << ") " << link->describe()
                   << " -> " << outFileLink;
       }
     }

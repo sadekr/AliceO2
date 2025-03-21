@@ -12,6 +12,7 @@
 #define O2_FRAMEWORK_SERVICEHANDLE_H_
 
 #include <string>
+#include <cstdint>
 
 namespace o2::framework
 {
@@ -19,11 +20,21 @@ namespace o2::framework
 /// The kind of service we are asking for
 enum struct ServiceKind {
   /// A Service which is not thread safe, therefore all accesses to it must be mutexed.
-  Serial,
+  DeviceSerial,
   /// A Service which is thread safe and therefore can be used by many threads the same time without risk
-  Global,
+  DeviceGlobal,
   /// A Service which is specific to a given thread in a thread pool
-  Stream
+  DeviceStream,
+  DataProcessorSerial,
+  DataProcessorGlobal,
+  DataProcessorStream,
+  Serial = DataProcessorSerial,
+  Global = DataProcessorGlobal,
+  Stream = DataProcessorStream
+};
+
+struct ServiceTypeHash {
+  uint32_t hash = 0;
 };
 
 /// Handle to the service hash must be calculated
@@ -33,9 +44,9 @@ struct ServiceHandle {
   /// Unique hash associated to the type of service.
   unsigned int hash;
   /// Type erased pointer to a service
-  void* instance;
+  void* instance = nullptr;
   /// Kind of service
-  ServiceKind kind;
+  ServiceKind kind = ServiceKind::Serial;
   /// Mnemonic name to use for the service.
   std::string name = "unknown";
 };

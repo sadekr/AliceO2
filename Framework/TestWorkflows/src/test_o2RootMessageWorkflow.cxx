@@ -9,6 +9,7 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 #include "Framework/RootSerializationSupport.h"
+#include "Framework/RootMessageContext.h"
 #include "Framework/DataRefUtils.h"
 #include "Framework/ServiceRegistry.h"
 #include "Framework/runDataProcessing.h"
@@ -46,7 +47,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const&)
          singleHisto.FillRandom("gaus", 1000);
          Double_t stats[4];
          singleHisto.GetStats(stats);
-         LOG(INFO) << "sumw" << stats[0] << "\n"
+         LOG(info) << "sumw" << stats[0] << "\n"
                    << "sumw2" << stats[1] << "\n"
                    << "sumwx" << stats[2] << "\n"
                    << "sumwx2" << stats[3] << "\n";
@@ -69,12 +70,12 @@ WorkflowSpec defineDataProcessing(ConfigContext const&)
          }
          Double_t stats[4];
          h->GetStats(stats);
-         LOG(INFO) << "sumw" << stats[0] << "\n"
+         LOG(info) << "sumw" << stats[0] << "\n"
                    << "sumw2" << stats[1] << "\n"
                    << "sumwx" << stats[2] << "\n"
                    << "sumwx2" << stats[3] << "\n";
          auto s = ctx.inputs().get<TObjString*>("string");
 
-         LOG(INFO) << "String is " << s->GetString().Data();
+         LOG(info) << "String is " << s->GetString().Data();
        }}}};
 }

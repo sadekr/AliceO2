@@ -12,6 +12,9 @@
 /// @file  SecondaryVertexingSpec.cxx
 
 #include <vector>
+#include "DataFormatsCalibration/MeanVertexObject.h"
+#include "Framework/CCDBParamSpec.h"
+#include "ReconstructionDataFormats/Decay3Body.h"
 #include "DataFormatsGlobalTracking/RecoContainer.h"
 #include "ReconstructionDataFormats/TrackTPCITS.h"
 #include "ReconstructionDataFormats/GlobalTrackID.h"
@@ -21,13 +24,17 @@
 #include "DetectorsBase/GeometryManager.h"
 #include "GlobalTrackingWorkflow/SecondaryVertexingSpec.h"
 #include "SimulationDataFormat/MCEventLabel.h"
-#include "CommonDataFormat/BunchFilling.h"
-#include "SimulationDataFormat/DigitizationContext.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DetectorsVertexing/SVertexer.h"
+#include "StrangenessTracking/StrangenessTracker.h"
+#include "DetectorsBase/GRPGeomHelper.h"
+#include "DetectorsBase/GlobalParams.h"
 #include "TStopwatch.h"
-
+#include "TPCCalibration/VDriftHelper.h"
+#include "TPCCalibration/CorrectionMapsLoader.h"
 #include "Framework/ConfigParamRegistry.h"
+#include "Framework/DeviceSpec.h"
+#include "TPCCalibration/CorrectionMapsLoader.h"
 
 using namespace o2::framework;
 
@@ -37,6 +44,7 @@ using VRef = o2::dataformats::VtxTrackRef;
 using PVertex = const o2::dataformats::PrimaryVertex;
 using V0 = o2::dataformats::V0;
 using Cascade = o2::dataformats::Cascade;
+using Decay3Body = o2::dataformats::Decay3Body;
 using RRef = o2::dataformats::RangeReference<int, int>;
 using DataRequest = o2::globaltracking::DataRequest;
 
@@ -50,89 +58,260 @@ namespace o2d = o2::dataformats;
 class SecondaryVertexingSpec : public Task
 {
  public:
-  SecondaryVertexingSpec(std::shared_ptr<DataRequest> dr, bool enabCasc) : mDataRequest(dr), mEnableCascades(enabCasc) {}
+  SecondaryVertexingSpec(std::shared_ptr<DataRequest> dr, std::shared_ptr<o2::base::GRPGeomRequest> gr, const o2::tpc::CorrectionMapsLoaderGloOpts& sclOpts, GTrackID::mask_t src, bool enabCasc, bool enable3body, bool enableStrangenessTracking, bool enableCCDBParams, bool useMC) : mDataRequest(dr), mGGCCDBRequest(gr), mSrc(src), mEnableCascades(enabCasc), mEnable3BodyVertices(enable3body), mEnableStrangenessTracking(enableStrangenessTracking), mEnableCCDBParams(enableCCDBParams), mUseMC(useMC)
+  {
+    mTPCCorrMapsLoader.setLumiScaleType(sclOpts.lumiType);
+    mTPCCorrMapsLoader.setLumiScaleMode(sclOpts.lumiMode);
+  }
   ~SecondaryVertexingSpec() override = default;
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
   void endOfStream(EndOfStreamContext& ec) final;
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
+  void updateTimeDependentParams(ProcessingContext& pc);
   std::shared_ptr<DataRequest> mDataRequest;
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
+  o2::tpc::VDriftHelper mTPCVDriftHelper{};
+  o2::tpc::CorrectionMapsLoader mTPCCorrMapsLoader{};
+  GTrackID::mask_t mSrc{};
+  bool mEnableCCDBParams = false;
   bool mEnableCascades = false;
+  bool mEnable3BodyVertices = false;
+  bool mEnableStrangenessTracking = false;
+  bool mUseMC = false;
   o2::vertexing::SVertexer mVertexer;
+  o2::strangeness_tracking::StrangenessTracker mStrTracker;
   TStopwatch mTimer;
 };
 
 void SecondaryVertexingSpec::init(InitContext& ic)
 {
-  //-------- init geometry and field --------//
-  o2::base::GeometryManager::loadGeometry();
-  o2::base::Propagator::initFieldFromGRP();
-  // this is a hack to provide Mat.LUT from the local file, in general will be provided by the framework from CCDB
-  std::string matLUTPath = ic.options().get<std::string>("material-lut-path");
-  std::string matLUTFile = o2::base::NameConf::getMatLUTFileName(matLUTPath);
-  if (o2::utils::Str::pathExists(matLUTFile)) {
-    auto* lut = o2::base::MatLayerCylSet::loadFromFile(matLUTFile);
-    o2::base::Propagator::Instance()->setMatLUT(lut);
-    LOG(INFO) << "Loaded material LUT from " << matLUTFile;
-  } else {
-    LOG(INFO) << "Material LUT " << matLUTFile << " file is absent, only TGeo can be used";
-  }
-  mVertexer.setEnableCascades(mEnableCascades);
-  mVertexer.setNThreads(ic.options().get<int>("threads"));
   mTimer.Stop();
   mTimer.Reset();
-  mVertexer.init();
+  o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
+  //-------- init geometry and field --------//
+  mVertexer.setEnableCascades(mEnableCascades);
+  mVertexer.setEnable3BodyDecays(mEnable3BodyVertices);
+  mVertexer.setNThreads(ic.options().get<int>("threads"));
+  mVertexer.setUseMC(mUseMC);
+  if (mEnableStrangenessTracking) {
+    mStrTracker.setCorrType(o2::base::PropagatorImpl<float>::MatCorrType::USEMatCorrLUT);
+    mStrTracker.setConfigParams(&o2::strangeness_tracking::StrangenessTrackingParamConfig::Instance());
+    mStrTracker.setupThreads(ic.options().get<int>("threads"));
+    mStrTracker.setupFitters();
+    mStrTracker.setMCTruthOn(mUseMC);
+    mVertexer.setStrangenessTracker(&mStrTracker);
+  }
+  if (mSrc[GTrackID::TPC]) {
+    mTPCCorrMapsLoader.init(ic);
+  }
 }
 
 void SecondaryVertexingSpec::run(ProcessingContext& pc)
 {
   double timeCPU0 = mTimer.CpuTime(), timeReal0 = mTimer.RealTime();
   mTimer.Start(false);
+  static std::array<size_t, 3> fitCalls{};
 
   o2::globaltracking::RecoContainer recoData;
   recoData.collectData(pc, *mDataRequest.get());
+  updateTimeDependentParams(pc);
 
-  auto& v0s = pc.outputs().make<std::vector<V0>>(Output{"GLO", "V0S", 0, Lifetime::Timeframe});
-  auto& v0Refs = pc.outputs().make<std::vector<RRef>>(Output{"GLO", "PVTX_V0REFS", 0, Lifetime::Timeframe});
-  auto& cascs = pc.outputs().make<std::vector<Cascade>>(Output{"GLO", "CASCS", 0, Lifetime::Timeframe});
-  auto& cascRefs = pc.outputs().make<std::vector<RRef>>(Output{"GLO", "PVTX_CASCREFS", 0, Lifetime::Timeframe});
-
-  mVertexer.process(recoData);
-  mVertexer.extractSecondaryVertices(v0s, v0Refs, cascs, cascRefs);
+  mVertexer.process(recoData, pc);
 
   mTimer.Stop();
-  LOG(INFO) << "Found " << v0s.size() << " V0s and " << cascs.size() << " cascades, timing: CPU: "
-            << mTimer.CpuTime() - timeCPU0 << " Real: " << mTimer.RealTime() - timeReal0 << " s";
+  auto calls = mVertexer.getNFitterCalls();
+  LOGP(info, "Found {} V0s ({} fits), {} cascades ({} fits), {} 3-body decays ({} fits), {} strange tracks. Timing: CPU: {:.2f} Real: {:.2f} s",
+       mVertexer.getNV0s(), calls[0] - fitCalls[0], mVertexer.getNCascades(), calls[1] - fitCalls[1], mVertexer.getN3Bodies(), calls[2] - fitCalls[2], mVertexer.getNStrangeTracks(),
+       mTimer.CpuTime() - timeCPU0, mTimer.RealTime() - timeReal0);
+  fitCalls = calls;
 }
 
 void SecondaryVertexingSpec::endOfStream(EndOfStreamContext& ec)
 {
-  LOGF(INFO, "Secondary vertexing total timing: Cpu: %.3e Real: %.3e s in %d slots, nThreads = %d",
+  LOGF(info, "Secondary vertexing total timing: Cpu: %.3e Real: %.3e s in %d slots, nThreads = %d",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1, mVertexer.getNThreads());
 }
 
-DataProcessorSpec getSecondaryVertexingSpec(GTrackID::mask_t src, bool enableCasc)
+void SecondaryVertexingSpec::finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+{
+  if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+    return;
+  }
+  if (mTPCVDriftHelper.accountCCDBInputs(matcher, obj)) {
+    return;
+  }
+  if (mTPCCorrMapsLoader.accountCCDBInputs(matcher, obj)) {
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("ITS", "CLUSDICT", 0)) {
+    LOG(info) << "cluster dictionary updated";
+    mStrTracker.setClusterDictionaryITS((const o2::itsmft::TopologyDictionary*)obj);
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("GLO", "MEANVERTEX", 0)) {
+    LOG(info) << "Imposing new MeanVertex: " << ((const o2::dataformats::MeanVertexObject*)obj)->asString();
+    mVertexer.setMeanVertex((const o2::dataformats::MeanVertexObject*)obj);
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("GLO", "SVPARAM", 0)) {
+    LOG(info) << "SVertexer Params updated from ccdb";
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("ITS", "GEOMTGEO", 0)) {
+    LOG(info) << "ITS GeomtetryTGeo loaded from ccdb";
+    o2::its::GeometryTGeo::adopt((o2::its::GeometryTGeo*)obj);
+    return;
+  }
+#ifdef ENABLE_UPGRADES
+  if (matcher == ConcreteDataMatcher("IT3", "CLUSDICT", 0)) {
+    LOG(info) << "cluster dictionary updated";
+    mStrTracker.setClusterDictionaryIT3((const o2::its3::TopologyDictionary*)obj);
+    return;
+  }
+#endif
+}
+
+void SecondaryVertexingSpec::updateTimeDependentParams(ProcessingContext& pc)
+{
+  o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+  if (mSrc[GTrackID::TPC]) {
+    mTPCVDriftHelper.extractCCDBInputs(pc);
+    mTPCCorrMapsLoader.extractCCDBInputs(pc);
+  }
+  static bool initOnceDone = false;
+  if (!initOnceDone) { // this params need to be queried only once
+    initOnceDone = true;
+    mVertexer.init();
+    if (mEnableCCDBParams) {
+      // for reading the calib objects from the CCDB
+      pc.inputs().get<o2::vertexing::SVertexerParams*>("SVParam");
+    }
+    if (pc.services().get<const o2::framework::DeviceSpec>().inputTimesliceId == 0) {
+      // setting and or overwriting the configurable params
+      SVertexerParams::Instance().printKeyValues(true, true);
+    }
+    if (pc.inputs().getPos("itsTGeo") >= 0) {
+      pc.inputs().get<o2::its::GeometryTGeo*>("itsTGeo");
+    }
+    if (mEnableStrangenessTracking) {
+      o2::its::GeometryTGeo* geom = o2::its::GeometryTGeo::Instance();
+      geom->fillMatrixCache(o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2L, o2::math_utils::TransformType::T2GRot, o2::math_utils::TransformType::T2G));
+    }
+
+#ifdef ENABLE_UPGRADES
+    if (o2::GlobalParams::Instance().withITS3) { // hack to trigger loading dictionary
+      pc.inputs().get<o2::its3::TopologyDictionary*>("cldict");
+    }
+#endif
+  }
+  // we may have other params which need to be queried regularly
+  if (mSrc[GTrackID::TPC]) {
+    bool updateMaps = false;
+    if (mTPCCorrMapsLoader.isUpdated()) {
+      mTPCCorrMapsLoader.acknowledgeUpdate();
+      updateMaps = true;
+    }
+    mVertexer.setTPCCorrMaps(&mTPCCorrMapsLoader);
+    if (mTPCVDriftHelper.isUpdated()) {
+      LOGP(info, "Updating TPC fast transform map with new VDrift factor of {} wrt reference {} and DriftTimeOffset correction {} wrt {} from source {}",
+           mTPCVDriftHelper.getVDriftObject().corrFact, mTPCVDriftHelper.getVDriftObject().refVDrift,
+           mTPCVDriftHelper.getVDriftObject().timeOffsetCorr, mTPCVDriftHelper.getVDriftObject().refTimeOffset,
+           mTPCVDriftHelper.getSourceName());
+      mVertexer.setTPCVDrift(mTPCVDriftHelper.getVDriftObject());
+      mTPCVDriftHelper.acknowledgeUpdate();
+      updateMaps = true;
+    }
+    if (updateMaps) {
+      mTPCCorrMapsLoader.updateVDrift(mTPCVDriftHelper.getVDriftObject().corrFact, mTPCVDriftHelper.getVDriftObject().refVDrift, mTPCVDriftHelper.getVDriftObject().getTimeOffset());
+    }
+  }
+  if (mEnableStrangenessTracking) {
+    if (o2::base::Propagator::Instance()->getNominalBz() != mStrTracker.getBz()) {
+      mStrTracker.setBz(o2::base::Propagator::Instance()->getNominalBz());
+      mStrTracker.setupFitters();
+    }
+  }
+
+  pc.inputs().get<o2::dataformats::MeanVertexObject*>("meanvtx");
+}
+
+DataProcessorSpec getSecondaryVertexingSpec(GTrackID::mask_t src, bool enableCasc, bool enable3body, bool enableStrangenesTracking, bool enableCCDBParams,
+                                            bool useMC, bool useGeom, const o2::tpc::CorrectionMapsLoaderGloOpts& sclOpts)
 {
   std::vector<OutputSpec> outputs;
+  Options opts{
+    {"material-lut-path", VariantType::String, "", {"Path of the material LUT file"}},
+    {"threads", VariantType::Int, 1, {"Number of threads"}}};
   auto dataRequest = std::make_shared<DataRequest>();
-
-  bool useMC = false;
+  if (enableCCDBParams) {
+    dataRequest->inputs.emplace_back("SVParam", "GLO", "SVPARAM", 0, Lifetime::Condition, ccdbParamSpec("GLO/Config/SVertexerParam"));
+  }
+  GTrackID::mask_t srcClus{};
+  if (enableStrangenesTracking) {
+    src |= (srcClus = GTrackID::getSourceMask(GTrackID::ITS));
+  }
+  if (GTrackID::includesDet(o2::detectors::DetID::TPC, src) && !src[GTrackID::TPC]) {
+    throw std::runtime_error("Tracks involving TPC were requested w/o requesting TPC-only tracks");
+  }
+  if (src[GTrackID::TPC]) {
+    srcClus |= GTrackID::getSourceMask(GTrackID::TPC);
+  }
+  if (srcClus.any()) {
+    dataRequest->requestClusters(srcClus, useMC);
+  }
+#ifdef ENABLE_UPGRADES
+  if (o2::GlobalParams::Instance().withITS3) { // hack to trigger loading dictionary
+    dataRequest->inputs.emplace_back("cldict", "IT3", "CLUSDICT", Lifetime::Condition, ccdbParamSpec("IT3/Calib/ClusterDictionary"));
+  }
+#endif
   dataRequest->requestTracks(src, useMC);
-  dataRequest->requestPrimaryVertertices(useMC);
+  dataRequest->requestPrimaryVertices(useMC);
+  dataRequest->inputs.emplace_back("meanvtx", "GLO", "MEANVERTEX", 0, Lifetime::Condition, ccdbParamSpec("GLO/Calib/MeanVertex", {}, 1));
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                                                                                                    // orbitResetTime
+                                                              true,                                                                                                     // GRPECS=true
+                                                              false,                                                                                                    // GRPLHCIF
+                                                              true,                                                                                                     // GRPMagField
+                                                              true,                                                                                                     // askMatLUT
+                                                              useGeom || enableStrangenesTracking ? o2::base::GRPGeomRequest::Aligned : o2::base::GRPGeomRequest::None, // geometry
+                                                              dataRequest->inputs,
+                                                              true);
+  if (!useGeom && enableStrangenesTracking) {
+    ggRequest->addInput({"itsTGeo", "ITS", "GEOMTGEO", 0, Lifetime::Condition, framework::ccdbParamSpec("ITS/Config/Geometry")}, dataRequest->inputs);
+  }
+  if (src[GTrackID::TPC]) {
+    o2::tpc::VDriftHelper::requestCCDBInputs(dataRequest->inputs);
+    o2::tpc::CorrectionMapsLoader::requestCCDBInputs(dataRequest->inputs, opts, sclOpts);
+  }
+  outputs.emplace_back("GLO", "V0S_IDX", 0, Lifetime::Timeframe);     // found V0s indices
+  outputs.emplace_back("GLO", "V0S", 0, Lifetime::Timeframe);         // found V0s
+  outputs.emplace_back("GLO", "PVTX_V0REFS", 0, Lifetime::Timeframe); // prim.vertex -> V0s refs
 
-  outputs.emplace_back("GLO", "V0S", 0, Lifetime::Timeframe);           // found V0s
-  outputs.emplace_back("GLO", "PVTX_V0REFS", 0, Lifetime::Timeframe);   // prim.vertex -> V0s refs
+  outputs.emplace_back("GLO", "CASCS_IDX", 0, Lifetime::Timeframe);     // found Cascades indices
   outputs.emplace_back("GLO", "CASCS", 0, Lifetime::Timeframe);         // found Cascades
   outputs.emplace_back("GLO", "PVTX_CASCREFS", 0, Lifetime::Timeframe); // prim.vertex -> Cascades refs
+
+  outputs.emplace_back("GLO", "DECAYS3BODY_IDX", 0, Lifetime::Timeframe); // found 3 body vertices indices
+  outputs.emplace_back("GLO", "DECAYS3BODY", 0, Lifetime::Timeframe);     // found 3 body vertices
+  outputs.emplace_back("GLO", "PVTX_3BODYREFS", 0, Lifetime::Timeframe);  // prim.vertex -> 3 body vertices refs
+
+  if (enableStrangenesTracking) {
+    outputs.emplace_back("GLO", "STRANGETRACKS", 0, Lifetime::Timeframe); // found strange track
+    outputs.emplace_back("GLO", "CLUSUPDATES", 0, Lifetime::Timeframe);
+    if (useMC) {
+      outputs.emplace_back("GLO", "STRANGETRACKS_MC", 0, Lifetime::Timeframe);
+      LOG(info) << "Strangeness tracker will use MC";
+    }
+  }
 
   return DataProcessorSpec{
     "secondary-vertexing",
     dataRequest->inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<SecondaryVertexingSpec>(dataRequest, enableCasc)},
-    Options{{"material-lut-path", VariantType::String, "", {"Path of the material LUT file"}},
-            {"threads", VariantType::Int, 1, {"Number of threads"}}}};
+    AlgorithmSpec{adaptFromTask<SecondaryVertexingSpec>(dataRequest, ggRequest, sclOpts, src, enableCasc, enable3body, enableStrangenesTracking, enableCCDBParams, useMC)},
+    opts};
 }
 
 } // namespace vertexing

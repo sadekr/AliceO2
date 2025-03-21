@@ -10,7 +10,9 @@
 # or submit itself to any jurisdiction.
 
 o2_add_library(PHOSWorkflow
-               SOURCES src/RecoWorkflow.cxx
+               SOURCES src/CellReaderSpec.cxx
+                       src/DigitReaderSpec.cxx
+                       src/RecoWorkflow.cxx
                        src/ReaderSpec.cxx
                        src/CellConverterSpec.cxx
                        src/RawToCellConverterSpec.cxx
@@ -20,7 +22,10 @@ o2_add_library(PHOSWorkflow
                        src/EntropyEncoderSpec.cxx
                        src/EntropyDecoderSpec.cxx
                        src/WriterSpec.cxx
+                       src/EventBuilderSpec.cxx
+                       src/StandaloneAODProducerSpec.cxx
                PUBLIC_LINK_LIBRARIES O2::Framework O2::DataFormatsPHOS
+                                     O2::MathUtils
                                      O2::DPLUtils
                                      O2::PHOSBase
                                      O2::PHOSSimulation
@@ -36,3 +41,18 @@ o2_add_executable(entropy-encoder-workflow
                   COMPONENT_NAME phos
                   SOURCES src/entropy-encoder-workflow.cxx
                   PUBLIC_LINK_LIBRARIES O2::PHOSWorkflow)
+
+o2_add_executable(cell-writer-workflow
+                  COMPONENT_NAME phos
+                  SOURCES src/cell-writer-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::PHOSWorkflow)
+
+o2_add_executable(event-builder
+                  COMPONENT_NAME phos
+                  SOURCES src/event-builder-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::PHOSWorkflow)
+
+o2_add_executable(standalone-aod-producer-workflow
+                  COMPONENT_NAME phos
+                  SOURCES src/phos-standalone-aod-producer-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::PHOSWorkflow O2::MathUtils)

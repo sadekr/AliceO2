@@ -21,7 +21,7 @@
 #include "TRandom.h"
 #include <algorithm>
 #include <cassert>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "DataFormatsTOF/CompressedDataFormat.h"
 
 using namespace o2::tof;
@@ -196,14 +196,15 @@ void WindowFiller::fillOutputContainer(std::vector<Digit>& digits)
     // check if patterns are in the current row
     unsigned int initrow = mFirstIR.orbit * Geo::NWINDOW_IN_ORBIT;
     for (std::vector<PatternData>::reverse_iterator it = mCratePatterns.rbegin(); it != mCratePatterns.rend(); ++it) {
-      //printf("pattern row=%ld current=%ld\n",it->row - initrow,mReadoutWindowCurrent);
+      unsigned int irow = it->row;
+      // printf("pattern row=%ld (%u - %u) current=%ld\n",irow - initrow,irow,initrow,mReadoutWindowCurrent);
 
-      if (it->row - initrow > mReadoutWindowCurrent) {
+      if (irow - initrow > mReadoutWindowCurrent) {
         break;
       }
 
-      if (it->row - initrow < mReadoutWindowCurrent) { // this should not happen
-        LOG(ERROR) << "One pattern skipped because appears to occur early of the current row " << it->row << " < " << mReadoutWindowCurrent << " ?!";
+      if (irow - initrow < mReadoutWindowCurrent) { // this should not happen
+        LOG(error) << "One pattern skipped because appears to occur early of the current row " << it->row << " < " << mReadoutWindowCurrent << " ?!";
       } else {
         uint32_t cpatt = it->pattern;
         auto dpatt = reinterpret_cast<compressed::Diagnostic_t*>(&cpatt);
@@ -302,7 +303,7 @@ void WindowFiller::flushOutputContainer(std::vector<Digit>& digits)
       checkIfReuseFutureDigitsRO();
     }
 
-    int nwindowperTF = o2::raw::HBFUtils::Instance().getNOrbitsPerTF() * Geo::NWINDOW_IN_ORBIT;
+    int nwindowperTF = o2::tof::Utils::getNOrbitInTF() * Geo::NWINDOW_IN_ORBIT;
 
     for (Int_t i = 0; i < MAXWINDOWS; i++) {
       if (mReadoutWindowData.size() < nwindowperTF) {
@@ -345,7 +346,7 @@ void WindowFiller::checkIfReuseFutureDigits()
     int isnext = Int_t(timestamp * Geo::READOUTWINDOW_INV) - (mReadoutWindowCurrent + 1);    // to be replaced with uncalibrated time
 
     if (isnext < 0) { // we jump too ahead in future, digit will be not stored
-      LOG(DEBUG) << "Digit lost because we jump too ahead in future. Current RO window=" << isnext << "\n";
+      LOG(debug) << "Digit lost because we jump too ahead in future. Current RO window=" << isnext << "\n";
 
       // remove digit from array in the future
       int labelremoved = digit->getLabel();
@@ -414,7 +415,7 @@ void WindowFiller::checkIfReuseFutureDigitsRO() // the same but using readout in
     int isnext = row - mReadoutWindowCurrent;
 
     if (isnext < 0) { // we jump too ahead in future, digit will be not stored
-      LOG(DEBUG) << "Digit lost because we jump too ahead in future. Current RO window=" << isnext << "\n";
+      LOG(debug) << "Digit lost because we jump too ahead in future. Current RO window=" << isnext << "\n";
 
       // remove digit from array in the future
       int labelremoved = digit->getLabel();
@@ -447,35 +448,46 @@ void WindowFiller::checkIfReuseFutureDigitsRO() // the same but using readout in
 
 void WindowFiller::fillDiagnosticFrequency()
 {
+  bool isTOFempty = true;
+  mDiagnosticFrequency.clear();
   // fill diagnostic frequency
   for (int j = 0; j < mReadoutWindowData.size(); j++) {
     mDiagnosticFrequency.fillROW();
+    int fd = mReadoutWindowData[j].firstDia();
     for (int ic = 0; ic < 72; ic++) {
+      if (ic) {
+        fd += mReadoutWindowData[j].getDiagnosticInCrate(ic - 1);
+      }
       int dia = mReadoutWindowData[j].getDiagnosticInCrate(ic);
       int slot = 0;
       if (mReadoutWindowData[j].isEmptyCrate(ic)) {
         mDiagnosticFrequency.fillEmptyCrate(ic);
-      }
-      if (dia) {
-        int fd = mReadoutWindowData[j].firstDia();
-        int lastdia = fd + dia;
+      } else {
+        isTOFempty = false;
+        if (dia) {
+          int lastdia = fd + dia;
 
-        ULong64_t key;
-        for (int dd = fd; dd < lastdia; dd++) {
-          if (mPatterns[dd] >= 28) {
-            slot = mPatterns[dd] - 28;
-            key = mDiagnosticFrequency.getTRMKey(ic, slot);
-            continue;
-          }
+          ULong64_t key;
+          for (int dd = fd; dd < lastdia; dd++) {
+            if (mPatterns[dd] >= 28) {
+              slot = mPatterns[dd] - 28;
+              key = mDiagnosticFrequency.getTRMKey(ic, slot);
+              continue;
+            }
 
-          key += (1 << mPatterns[dd]);
+            key += (1 << mPatterns[dd]);
 
-          if (dd + 1 == lastdia || mPatterns[dd + 1] >= 28) {
-            mDiagnosticFrequency.fill(key);
+            if (dd + 1 == lastdia || mPatterns[dd + 1] >= 28) {
+              mDiagnosticFrequency.fill(key);
+            }
           }
         }
       }
     }
+  }
+
+  if (isTOFempty) {
+    mDiagnosticFrequency.fillEmptyTOF();
   }
 
   // fill also noise diagnostic if the counts within the TF is larger than a threashold (default >=11, -> 1 kHZ)
@@ -496,7 +508,7 @@ void WindowFiller::fillDiagnosticFrequency()
       }
 
       //Fill noisy in diagnostic
-      mDiagnosticFrequency.fillNoisy(i + additionalMask);
+      mDiagnosticFrequency.fillNoisy(i + additionalMask, mReadoutWindowData.size());
     }
   }
 }

@@ -21,70 +21,120 @@
 #include "GPUCommonMath.h"
 #include "GPUCommonDef.h"
 
+#ifndef GPUCA_GPUCODE_DEVICE
+#include <string>
+#endif
+
 namespace o2
 {
 namespace its
 {
 
 struct Tracklet final {
-  Tracklet();
-  GPUdi() Tracklet(const int, const int, const Cluster&, const Cluster&, int rof0, int rof1);
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-  unsigned char isEmpty() const;
-  void dump();
-  unsigned char operator<(const Tracklet&) const;
+  GPUhdi() Tracklet();
+  GPUhdi() Tracklet(const int, const int, const Cluster&, const Cluster&, short rof0, short rof1);
+  GPUhdi() Tracklet(const int, const int, float tanL, float phi, short rof0, short rof1);
+  GPUhdi() bool operator==(const Tracklet&) const;
+  GPUhdi() bool operator!=(const Tracklet&) const;
+  GPUhdi() unsigned char isEmpty() const
+  {
+    return firstClusterIndex < 0 || secondClusterIndex < 0;
+  }
+  GPUhdi() auto getDeltaRof() const { return rof[1] - rof[0]; }
+  GPUhdi() void dump();
+  GPUhdi() void dump() const;
+  GPUhdi() void dump(const int, const int);
+  GPUhdi() void dump(const int, const int) const;
+  GPUhdi() unsigned char operator<(const Tracklet&) const;
+#ifndef GPUCA_GPUCODE_DEVICE
+  std::string asString() const
+  {
+    return "fClIdx: " + std::to_string(firstClusterIndex) + " sClIdx: " + std::to_string(secondClusterIndex) +
+           " rof1: " + std::to_string(rof[0]) + " rof2: " + std::to_string(rof[1]) + " delta: " + std::to_string(getDeltaRof());
+  }
 #endif
 
   int firstClusterIndex;
   int secondClusterIndex;
   float tanLambda;
   float phi;
-  unsigned short rof[2];
+  short rof[2];
 };
 
-inline Tracklet::Tracklet() : firstClusterIndex{0}, secondClusterIndex{0}, tanLambda{0.0f}, phi{0.0f}
+GPUhdi() Tracklet::Tracklet() : firstClusterIndex{-1}, secondClusterIndex{-1}, tanLambda{0.0f}, phi{0.0f}
 {
-  // Nothing to do
+  rof[0] = -1;
+  rof[1] = -1;
 }
 
-GPUdi() Tracklet::Tracklet(const int firstClusterOrderingIndex, const int secondClusterOrderingIndex,
-                           const Cluster& firstCluster, const Cluster& secondCluster, int rof0 = -1, int rof1 = -1)
+GPUhdi() Tracklet::Tracklet(const int firstClusterOrderingIndex, const int secondClusterOrderingIndex,
+                            const Cluster& firstCluster, const Cluster& secondCluster, short rof0 = -1, short rof1 = -1)
   : firstClusterIndex{firstClusterOrderingIndex},
     secondClusterIndex{secondClusterOrderingIndex},
     tanLambda{(firstCluster.zCoordinate - secondCluster.zCoordinate) /
               (firstCluster.radius - secondCluster.radius)},
     phi{o2::gpu::GPUCommonMath::ATan2(firstCluster.yCoordinate - secondCluster.yCoordinate,
                                       firstCluster.xCoordinate - secondCluster.xCoordinate)},
-    rof{static_cast<unsigned short>(rof0), static_cast<unsigned short>(rof1)}
+    rof{static_cast<short>(rof0), static_cast<short>(rof1)}
 {
   // Nothing to do
 }
 
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-inline unsigned char Tracklet::isEmpty() const
+GPUhdi() Tracklet::Tracklet(const int idx0, const int idx1, float tanL, float phi, short rof0, short rof1)
+  : firstClusterIndex{idx0},
+    secondClusterIndex{idx1},
+    tanLambda{tanL},
+    phi{phi},
+    rof{static_cast<short>(rof0), static_cast<short>(rof1)}
 {
-  return !firstClusterIndex && !secondClusterIndex && !tanLambda && !phi;
+  // Nothing to do
 }
 
-inline unsigned char Tracklet::operator<(const Tracklet& t) const
+GPUhdi() bool Tracklet::operator==(const Tracklet& rhs) const
 {
-  if (isEmpty() && t.isEmpty()) {
+  return this->firstClusterIndex == rhs.firstClusterIndex &&
+         this->secondClusterIndex == rhs.secondClusterIndex &&
+         this->tanLambda == rhs.tanLambda &&
+         this->phi == rhs.phi &&
+         this->rof[0] == rhs.rof[0] &&
+         this->rof[1] == rhs.rof[1];
+}
+
+GPUhdi() bool Tracklet::operator!=(const Tracklet& rhs) const
+{
+  return this->firstClusterIndex != rhs.firstClusterIndex ||
+         this->secondClusterIndex != rhs.secondClusterIndex ||
+         this->tanLambda != rhs.tanLambda ||
+         this->phi != rhs.phi;
+}
+
+GPUhdi() unsigned char Tracklet::operator<(const Tracklet& t) const
+{
+  if (isEmpty()) {
     return false;
-  } else {
-    if (isEmpty())
-      return false;
   }
   return true;
 }
 
-inline void Tracklet::dump()
+GPUhdi() void Tracklet::dump(const int offsetFirst, const int offsetSecond)
 {
-  std::cout << "firstClusterIndex: " << firstClusterIndex << std::endl;
-  std::cout << "secondClusterIndex: " << secondClusterIndex << std::endl;
-  std::cout << "tanLambda: " << tanLambda << std::endl;
-  std::cout << "phi: " << phi << std::endl;
+  printf("fClIdx: %d sClIdx: %d  rof1: %hu rof2: %hu\n", firstClusterIndex + offsetFirst, secondClusterIndex + offsetSecond, rof[0], rof[1]);
 }
-#endif
+
+GPUhdi() void Tracklet::dump(const int offsetFirst, const int offsetSecond) const
+{
+  printf("fClIdx: %d sClIdx: %d  rof1: %hu rof2: %hu\n", firstClusterIndex + offsetFirst, secondClusterIndex + offsetSecond, rof[0], rof[1]);
+}
+
+GPUhdi() void Tracklet::dump()
+{
+  printf("fClIdx: %d sClIdx: %d  rof1: %hu rof2: %hu\n", firstClusterIndex, secondClusterIndex, rof[0], rof[1]);
+}
+
+GPUhdi() void Tracklet::dump() const
+{
+  printf("fClIdx: %d sClIdx: %d  rof1: %hu rof2: %hu\n", firstClusterIndex, secondClusterIndex, rof[0], rof[1]);
+}
 
 } // namespace its
 } // namespace o2

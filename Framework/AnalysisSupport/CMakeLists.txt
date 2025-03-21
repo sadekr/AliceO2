@@ -18,6 +18,24 @@ endif()
 
 o2_add_library(FrameworkAnalysisSupport
                SOURCES src/Plugin.cxx
+                       src/DataInputDirector.cxx
                        src/AODJAlienReaderHelpers.cxx
+                       src/AODWriterHelpers.cxx
                PRIVATE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_LIST_DIR}/src
-               PUBLIC_LINK_LIBRARIES O2::Framework ${EXTRA_TARGETS})
+               PUBLIC_LINK_LIBRARIES O2::Framework ${EXTRA_TARGETS} ROOT::TreePlayer)
+
+o2_add_library(FrameworkAnalysisRNTupleSupport
+               SOURCES src/RNTuplePlugin.cxx
+               PRIVATE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_LIST_DIR}/src
+               PUBLIC_LINK_LIBRARIES O2::Framework ${EXTRA_TARGETS} ROOT::ROOTNTuple ROOT::ROOTNTupleUtil)
+
+o2_add_library(FrameworkAnalysisTTreeSupport
+               SOURCES src/TTreePlugin.cxx
+               PRIVATE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_LIST_DIR}/src
+               PUBLIC_LINK_LIBRARIES O2::Framework ${EXTRA_TARGETS} ROOT::TreePlayer)
+
+o2_add_test(DataInputDirector NAME test_Framework_test_DataInputDirector
+               SOURCES test/test_DataInputDirector.cxx
+               COMPONENT_NAME Framework
+               LABELS framework
+               PUBLIC_LINK_LIBRARIES O2::FrameworkAnalysisSupport)

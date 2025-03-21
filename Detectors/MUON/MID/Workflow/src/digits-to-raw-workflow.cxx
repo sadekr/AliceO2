@@ -9,7 +9,7 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-/// \file   mid-digits-to-raw.cxx
+/// \file   MID/Workflow/src/digits-to-raw-workflow.cxx
 /// \brief  MID raw to digits workflow
 /// \author Diego Stocco <Diego.Stocco at cern.ch>
 /// \date   02 October 2019
@@ -21,7 +21,7 @@
 #include "Framework/Variant.h"
 #include "MIDWorkflow/DigitReaderSpec.h"
 #include "MIDWorkflow/RawWriterSpec.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 

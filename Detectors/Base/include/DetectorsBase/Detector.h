@@ -16,6 +16,7 @@
 #define ALICEO2_BASE_DETECTOR_H_
 
 #include <map>
+#include <tbb/concurrent_unordered_map.h>
 #include <vector>
 #include <initializer_list>
 #include <memory>
@@ -28,7 +29,6 @@
 #include <typeinfo>
 #include <type_traits>
 #include <string>
-#include <TMessage.h>
 #include "CommonUtils/ShmManager.h"
 #include "CommonUtils/ShmAllocator.h"
 #include <sys/shm.h>
@@ -41,9 +41,7 @@
 
 #include <fairmq/FwdDecls.h>
 
-namespace o2
-{
-namespace base
+namespace o2::base
 {
 
 /// This is the basic class for any AliceO2 detector module, whether it is
@@ -108,6 +106,9 @@ class Detector : public FairDetector
   /// declare alignable volumes of detector
   virtual void addAlignableVolumes() const;
 
+  /// fill parallel geometry with sensitive volumes of detector
+  virtual void fillParallelWorld() const;
+
   /// Sets per wrapper volume parameters
   virtual void defineWrapperVolume(Int_t id, Double_t rmin, Double_t rmax, Double_t zspan);
 
@@ -164,9 +165,9 @@ class Detector : public FairDetector
 
   // interfaces to attach properly encoded hit information to a FairMQ message
   // and to decode it
-  virtual void attachHits(FairMQChannel&, FairMQParts&) = 0;
-  virtual void fillHitBranch(TTree& tr, FairMQParts& parts, int& index) = 0;
-  virtual void collectHits(int eventID, FairMQParts& parts, int& index) = 0;
+  virtual void attachHits(fair::mq::Channel&, fair::mq::Parts&) = 0;
+  virtual void fillHitBranch(TTree& tr, fair::mq::Parts& parts, int& index) = 0;
+  virtual void collectHits(int eventID, fair::mq::Parts& parts, int& index) = 0;
   virtual void mergeHitEntriesAndFlush(int eventID,
                                        TTree& target,
                                        std::vector<int> const& trackoffsets,
@@ -215,6 +216,10 @@ class Detector : public FairDetector
   // which is required for media creation
   static void initFieldTrackingParams(int& mode, float& maxfield);
 
+  /// set the DetID to HitBitIndex mapping. Succeeds if not already set.
+  static void setDetId2HitBitIndex(std::vector<int> const& v) { Detector::sDetId2HitBitIndex = v; }
+  static std::vector<int> const& getDetId2HitBitIndex() { return Detector::sDetId2HitBitIndex; }
+
  protected:
   Detector(const Detector& origin);
 
@@ -232,6 +237,7 @@ class Detector : public FairDetector
 
   static Float_t mDensityFactor; //! factor that is multiplied to all material densities (ONLY for
   // systematic studies)
+  static std::vector<int> sDetId2HitBitIndex; //! global lookup table keeping mapping of DetID to index in hit bit field (used in MCTrack)
 
   ClassDefOverride(Detector, 1); // Base class for ALICE Modules
 };
@@ -244,37 +250,32 @@ inline std::string demangle(const char* name)
   return (status == 0) ? res.get() : name;
 }
 
-void attachShmMessage(void* hitsptr, FairMQChannel& channel, FairMQParts& parts, bool* busy_ptr);
-void* decodeShmCore(FairMQParts& dataparts, int index, bool*& busy);
+void attachShmMessage(void* hitsptr, fair::mq::Channel& channel, fair::mq::Parts& parts, bool* busy_ptr);
+void* decodeShmCore(fair::mq::Parts& dataparts, int index, bool*& busy);
 
 template <typename T>
-T decodeShmMessage(FairMQParts& dataparts, int index, bool*& busy)
+T decodeShmMessage(fair::mq::Parts& dataparts, int index, bool*& busy)
 {
   return reinterpret_cast<T>(decodeShmCore(dataparts, index, busy));
 }
 
 // this goes into the source
-void attachMessageBufferToParts(FairMQParts& parts, FairMQChannel& channel,
-                                void* data, size_t size, void (*func_ptr)(void* data, void* hint), void* hint);
+void attachMessageBufferToParts(fair::mq::Parts& parts, fair::mq::Channel& channel, void* data, TClass* cl);
 
 template <typename Container>
-void attachTMessage(Container const& hits, FairMQChannel& channel, FairMQParts& parts)
+void attachTMessage(Container const& hits, fair::mq::Channel& channel, fair::mq::Parts& parts)
 {
-  TMessage* tmsg = new TMessage();
-  tmsg->WriteObjectAny((void*)&hits, TClass::GetClass(typeid(hits)));
-  attachMessageBufferToParts(
-    parts, channel, tmsg->Buffer(), tmsg->BufferSize(),
-    [](void* data, void* hint) { delete static_cast<TMessage*>(hint); }, tmsg);
+  attachMessageBufferToParts(parts, channel, (void*)&hits, TClass::GetClass(typeid(hits)));
 }
 
-void* decodeTMessageCore(FairMQParts& dataparts, int index);
+void* decodeTMessageCore(fair::mq::Parts& dataparts, int index);
 template <typename T>
-T decodeTMessage(FairMQParts& dataparts, int index)
+T decodeTMessage(fair::mq::Parts& dataparts, int index)
 {
   return static_cast<T>(decodeTMessageCore(dataparts, index));
 }
 
-void attachDetIDHeaderMessage(int id, FairMQChannel& channel, FairMQParts& parts);
+void attachDetIDHeaderMessage(int id, fair::mq::Channel& channel, fair::mq::Parts& parts);
 
 template <typename T>
 TBranch* getOrMakeBranch(TTree& tree, const char* brname, T* ptr)
@@ -328,7 +329,7 @@ class DetImpl : public o2::base::Detector
     }
   }
 
-  void attachHits(FairMQChannel& channel, FairMQParts& parts) override
+  void attachHits(fair::mq::Channel& channel, fair::mq::Parts& parts) override
   {
     int probe = 0;
     // check if there is anything to be attached
@@ -477,6 +478,7 @@ class DetImpl : public o2::base::Detector
     targetbr->ResetAddress();
     targetdata->clear();
     hitbuffervector.clear();
+    hitbuffervector = L(); // swap with empty vector to release mem
     delete targetdata;
   }
 
@@ -501,11 +503,11 @@ class DetImpl : public o2::base::Detector
     int probe = 0;
     using Hit_t = typename std::remove_pointer<decltype(static_cast<Det*>(this)->Det::getHits(0))>::type;
     // remove buffered event from the hit store
-    using Collector_t = std::map<int, std::vector<std::vector<std::unique_ptr<Hit_t>>>>;
+    using Collector_t = tbb::concurrent_unordered_map<int, std::vector<std::vector<std::unique_ptr<Hit_t>>>>;
     auto hitbufferPtr = reinterpret_cast<Collector_t*>(mHitCollectorBufferPtr);
     auto iter = hitbufferPtr->find(eventID);
     if (iter == hitbufferPtr->end()) {
-      LOG(ERROR) << "No buffered hits available for event " << eventID;
+      LOG(error) << "No buffered hits available for event " << eventID;
       return;
     }
 
@@ -518,20 +520,16 @@ class DetImpl : public o2::base::Detector
       probe++;
       name = static_cast<Det*>(this)->getHitBranchNames(probe);
     }
-    {
-      // std::lock_guard<std::mutex> l(mHitBufferMutex);
-      hitbufferPtr->erase(eventID);
-    }
   }
 
  public:
   /// Collect Hits available as incoming message (shared mem or not)
   /// inside this process for later streaming to output. A function needed
   /// by the hit-merger process (not for direct use by users)
-  void collectHits(int eventID, FairMQParts& parts, int& index) override
+  void collectHits(int eventID, fair::mq::Parts& parts, int& index) override
   {
     using Hit_t = typename std::remove_pointer<decltype(static_cast<Det*>(this)->Det::getHits(0))>::type;
-    using Collector_t = std::map<int, std::vector<std::vector<std::unique_ptr<Hit_t>>>>;
+    using Collector_t = tbb::concurrent_unordered_map<int, std::vector<std::vector<std::unique_ptr<Hit_t>>>>;
     static Collector_t hitcollector; // note: we can't put this as member because
     // decltype type deduction doesn't seem to work for class members; so we use a static member
     // and will use some pointer member to communicate this data to other functions
@@ -545,11 +543,10 @@ class DetImpl : public o2::base::Detector
     auto copyToBuffer = [this, eventID](HitPtr_t hitdata, Collector_t& collectbuffer, int probe) {
       std::vector<std::vector<std::unique_ptr<Hit_t>>>* hitvector = nullptr;
       {
-        // we protect reading from this map by a lock
-        // since other threads might delete from the buffer at the same time
-        // std::lock_guard<std::mutex> l(mHitBufferMutex);
         auto eventIter = collectbuffer.find(eventID);
         if (eventIter == collectbuffer.end()) {
+          // key insertion and traversal are thread-safe with tbb so no need
+          // to protect
           collectbuffer[eventID] = std::vector<std::vector<std::unique_ptr<Hit_t>>>();
         }
         hitvector = &(collectbuffer[eventID]);
@@ -589,7 +586,7 @@ class DetImpl : public o2::base::Detector
     }
   }
 
-  void fillHitBranch(TTree& tr, FairMQParts& parts, int& index) override
+  void fillHitBranch(TTree& tr, fair::mq::Parts& parts, int& index) override
   {
     int probe = 0;
     bool* busy = nullptr;
@@ -698,7 +695,7 @@ class DetImpl : public o2::base::Detector
       mCurrentBuffer = (mCurrentBuffer + 1) % NHITBUFFERS;
       while (mShmBusy[mCurrentBuffer] != nullptr && *mShmBusy[mCurrentBuffer]) {
         // this should ideally never happen
-        LOG(INFO) << " BUSY WAITING SIZE ";
+        LOG(info) << " BUSY WAITING SIZE ";
         sleep(1);
       }
 
@@ -741,9 +738,9 @@ class DetImpl : public o2::base::Detector
   int mInitialized = false;
 
   char* mHitCollectorBufferPtr = nullptr; //! pointer to hit (collector) buffer location (strictly internal)
+
   ClassDefOverride(DetImpl, 0);
 };
-} // namespace base
-} // namespace o2
+} // namespace o2::base
 
 #endif

@@ -19,6 +19,8 @@
 
 #include "GPUCommonDef.h"
 #include "TPCFastTransformManager.h"
+#include "GPUCommonLogger.h"
+
 #include <cmath>
 #include <iostream>
 
@@ -26,7 +28,7 @@
 #include "TString.h"
 #include "AliTPCTransform.h"
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -44,35 +46,35 @@ class TPCFastTransformQA
   TPCFastTransformQA();
 
   /// Copy constructor: disabled
-  TPCFastTransformQA(const TPCFastTransformQA&) CON_DELETE;
+  TPCFastTransformQA(const TPCFastTransformQA&) = delete;
 
   /// Assignment operator: disabled
-  TPCFastTransformQA& operator=(const TPCFastTransformQA&) CON_DELETE;
+  TPCFastTransformQA& operator=(const TPCFastTransformQA&) = delete;
 
   /// Destructor
-  ~TPCFastTransformQA() CON_DEFAULT;
+  ~TPCFastTransformQA() = default;
 
   /// _______________  Main functionality  ________________________
 
   /// create fast transformation and perform a quality check
-  int doQA(Long_t TimeStamp);
+  int32_t doQA(long TimeStamp);
 
   /// create perform quality check
-  int doQA(const TPCFastTransform& fastTransform);
+  int32_t doQA(const TPCFastTransform& fastTransform);
 
  private:
   /// Stores an error message
-  int storeError(Int_t code, const char* msg);
+  int32_t storeError(Int_t code, const char* msg);
   TString mError; ///< error string
 };
 
-inline int TPCFastTransformQA::storeError(int code, const char* msg)
+inline int32_t TPCFastTransformQA::storeError(int32_t code, const char* msg)
 {
   mError = msg;
-  std::cout << msg << std::endl;
+  LOG(info) << msg;
   return code;
 }
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

@@ -28,6 +28,7 @@
 #include "EMCALBase/Mapper.h"
 #include "DataFormatsEMCAL/Digit.h"
 #include "DataFormatsEMCAL/TriggerRecord.h"
+#include "EMCALReconstruction/AltroHelper.h"
 
 namespace o2
 {
@@ -36,28 +37,6 @@ namespace emcal
 {
 
 class Geometry;
-
-/// \struct AltroBunch
-/// \brief ALTRO bunch information obtained from digits
-struct AltroBunch {
-  int mStarttime;         ///< Start time of the bunch
-  std::vector<int> mADCs; ///< ADCs belonging to the bunch
-};
-
-/// \struct ChannelData
-/// \brief Structure for mapping digits to Channels within a SRU
-struct ChannelData {
-  int mRow;                               ///< Row of the channel
-  int mCol;                               ///< Column of the channel
-  std::vector<o2::emcal::Digit*> mDigits; ///< Digits for the channel  within the current event
-};
-
-/// \struct SRUDigitContainer
-/// \brief Structure for organizing digits within the SRU
-struct SRUDigitContainer {
-  int mSRUid;                           ///< DDL of the SRU
-  std::map<int, ChannelData> mChannels; ///< Containers for channels within the SRU
-};
 
 /// \union ChannelHeader
 /// \brief Bitfield encoding channel headers
@@ -98,6 +77,7 @@ class RawWriter
   enum class FileFor_t {
     kFullDet, ///< Full detector (EMCAL + DCAL)
     kSubDet,  ///< Subdetector (EMCAL/DCAL separate)
+    kCRORC,   ///< C-RORC card
     kLink     ///< Per link
   };
 
@@ -172,13 +152,15 @@ class RawWriter
                       std::vector<char>& trailer, std::vector<char>& header) const;
 
  protected:
+  void createPayload(o2::emcal::ChannelData channel, o2::emcal::ChannelType_t chanType, int ddlID, std::vector<char>& payload, bool& saturatedBunch);
+
   /// \brief Parse digits vector in channel and create ALTRO bunches
   /// \param channelDigits Vector with digits in the channel for the current event
   ///
   /// Channels are parsed in a time-reversed order. Bunches are selected for ranges of
   /// digits where the ADC value is consecutively above the pedestal. Only bunches having
   /// a min. amount of ADC samples are selected.
-  std::vector<AltroBunch> findBunches(const std::vector<o2::emcal::Digit*>& channelDigits);
+  std::vector<AltroBunch> findBunches(const std::vector<o2::emcal::Digit*>& channelDigits, ChannelType_t channelType);
 
   /// \brief Create channel header
   /// \param hardwareAddress Hardware address
@@ -208,6 +190,18 @@ class RawWriter
   /// - ADC samples
   /// The input data is converted to 10 but ALTRO words and put on the stream.
   std::vector<int> encodeBunchData(const std::vector<int>& data);
+
+  /// \brief Extracting branch index from the hardware address
+  /// \param hwaddress Hardware address of the channel
+  int getBranchIndexFromHwAddress(int hwaddress) { return ((hwaddress >> 11) & 0x1); }
+
+  /// \brief Extracting FEC index in branch from the hardware address
+  /// \param hwaddress Hardware address of the channel
+  int getFecIndexFromHwAddress(int hwaddress) { return ((hwaddress >> 7) & 0xF); }
+
+  /// \brief Extracting Channel index in FEC from the hardware address
+  /// \param hwaddress Hardware address of the channel
+  int getChannelIndexFromHwAddress(int hwaddress) { return (hwaddress & 0xF); }
 
  private:
   int mNADCSamples = 15;                                      ///< Number of time samples

@@ -14,7 +14,7 @@
 #include "PHOSReconstruction/RawReaderMemory.h"
 #include "PHOSReconstruction/RawDecodingError.h"
 #include "DetectorsRaw/RDHUtils.h"
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 
 using namespace o2::phos;
 
@@ -34,15 +34,11 @@ void RawReaderMemory::setRawMemory(const gsl::span<const char> rawmemory)
 o2::header::RDHAny RawReaderMemory::decodeRawHeader(const void* payloadwords)
 {
   auto headerversion = RDHDecoder::getVersion(payloadwords);
-  if (headerversion == 4) {
-    return o2::header::RDHAny(*reinterpret_cast<const o2::header::RAWDataHeaderV4*>(payloadwords));
-  } else if (headerversion == 5) {
-    return o2::header::RDHAny(*reinterpret_cast<const o2::header::RAWDataHeaderV5*>(payloadwords));
-  } else if (headerversion == 6) {
-    return o2::header::RDHAny(*reinterpret_cast<const o2::header::RAWDataHeaderV6*>(payloadwords));
+  if (headerversion < RDHDecoder::getVersion<o2::header::RDHLowest>() || headerversion > RDHDecoder::getVersion<o2::header::RDHHighest>()) {
+    LOG(error) << "Wrong header version " << headerversion;
+    throw RawDecodingError::ErrorType_t::HEADER_DECODING;
   }
-  LOG(ERROR) << "Wrong header version " << int(headerversion);
-  throw RawDecodingError::ErrorType_t::HEADER_DECODING;
+  return {*reinterpret_cast<const o2::header::RDHAny*>(payloadwords)};
 }
 
 void RawReaderMemory::init()
@@ -56,10 +52,10 @@ void RawReaderMemory::init()
 
 void RawReaderMemory::next()
 {
-  //Reads pages till RCU trailer found
-  //Several 8kB pages can be concatenated
-  //RCU trailer expected at the end of payload
-  //but not at the end of each page
+  // Reads pages till RCU trailer found
+  // Several 8kB pages can be concatenated
+  // RCU trailer expected at the end of payload
+  // but not at the end of each page
   mRawPayload.reset();
   mCurrentTrailer.reset();
   bool isDataTerminated = false;
@@ -95,8 +91,15 @@ void RawReaderMemory::next()
   if (mRawBuffer.getNDataWords() > 0) {
     try {
       mCurrentTrailer.constructFromPayloadWords(mRawBuffer.getDataWords());
-    } catch (RCUTrailer::Error e) {
-      LOG(ERROR) << "Trailer decoding error: " << e.what();
+    } catch (RCUTrailer::Error& e) {
+      if (e.getErrorType() == RCUTrailer::Error::ErrorType_t::DECODING_INVALID) {
+        // OS: According to expert old error of PHOS SRU firmware, not
+        //     expected to be fixed soon, hence denoted to warning to
+        //     not alarm the shifters
+        LOG(warn) << "Trailer decoding error: " << e.what();
+      } else {
+        LOG(error) << "Trailer decoding error: " << e.what();
+      }
       throw RawDecodingError::ErrorType_t::HEADER_DECODING;
     }
   }
@@ -144,7 +147,7 @@ void RawReaderMemory::nextPage(bool doResetPayload)
 const o2::header::RDHAny& RawReaderMemory::getRawHeader() const
 {
   if (!mRawHeaderInitialized) {
-    LOG(ERROR) << "Raw header not initialized";
+    LOG(error) << "Raw header not initialized";
     throw RawDecodingError::ErrorType_t::HEADER_INVALID;
   }
   return mRawHeader;

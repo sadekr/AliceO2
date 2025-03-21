@@ -18,15 +18,22 @@
 
 #include <chrono>
 #include "Framework/DataRefUtils.h"
+#include "Framework/CCDBParamSpec.h"
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/ControlService.h"
 #include "Framework/Logger.h"
 #include "Framework/Output.h"
 #include "Framework/Task.h"
-#include "DataFormatsMID/Cluster3D.h"
+#include "DataFormatsMID/Cluster.h"
+#include "DataFormatsMID/ROFRecord.h"
 #include "DataFormatsMID/Track.h"
-#include "MIDTracking/Tracker.h"
+#include "DataFormatsMID/MCClusterLabel.h"
 #include "DetectorsBase/GeometryManager.h"
+#include "MIDTracking/HitMapBuilder.h"
+#include "MIDTracking/Tracker.h"
+#include "MIDSimulation/TrackLabeler.h"
+#include "CommonUtils/NameConf.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 
 namespace of = o2::framework;
 
@@ -37,80 +44,153 @@ namespace mid
 class TrackerDeviceDPL
 {
  public:
+  TrackerDeviceDPL(std::shared_ptr<o2::base::GRPGeomRequest> gr, bool isMC, bool checkMasked) : mGGCCDBRequest(gr), mIsMC(isMC), mCheckMasked(checkMasked) {}
+  ~TrackerDeviceDPL() = default;
+
   void init(o2::framework::InitContext& ic)
   {
-
-    auto geoFilename = ic.options().get<std::string>("geometry-filename");
-    if (!gGeoManager) {
-      o2::base::GeometryManager::loadGeometry(geoFilename);
-    }
-
-    mTracker = std::make_unique<Tracker>(createTransformationFromManager(gGeoManager));
-
-    if (!mTracker->init()) {
-      LOG(ERROR) << "Initialization of MID tracker device failed";
-    }
+    o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
+    mKeepAll = !ic.options().get<bool>("mid-tracker-keep-best");
 
     auto stop = [this]() {
-      LOG(INFO) << "Capacities: ROFRecords: " << mTracker->getTrackROFRecords().capacity() << "  tracks: " << mTracker->getTracks().capacity() << "  clusters: " << mTracker->getClusters().capacity();
-      double scaleFactor = 1.e6 / mNROFs;
-      LOG(INFO) << "Processing time / " << mNROFs << " ROFs: full: " << mTimer.count() * scaleFactor << " us  tracking: " << mTimerAlgo.count() * scaleFactor << " us";
+      double scaleFactor = (mNROFs == 0) ? 0. : 1.e6 / mNROFs;
+      LOG(info) << "Processing time / " << mNROFs << " ROFs: full: " << mTimer.count() * scaleFactor << " us  tracking: " << mTimerTracker.count() * scaleFactor << " us  hitMapBuilder: " << mTimerBuilder.count() << " us";
     };
-    ic.services().get<of::CallbackService>().set(of::CallbackService::Id::Stop, stop);
+    ic.services().get<of::CallbackService>().set<of::CallbackService::Id::Stop>(stop);
   }
 
   void run(o2::framework::ProcessingContext& pc)
   {
     auto tStart = std::chrono::high_resolution_clock::now();
+    updateTimeDependentParams(pc);
 
-    auto msg = pc.inputs().get("mid_clusters");
-    gsl::span<const Cluster2D> clusters = of::DataRefUtils::as<const Cluster2D>(msg);
+    auto clusters = pc.inputs().get<gsl::span<Cluster>>("mid_clusters");
 
-    auto msgROF = pc.inputs().get("mid_clusters_rof");
-    gsl::span<const ROFRecord> inROFRecords = of::DataRefUtils::as<const ROFRecord>(msgROF);
+    auto inROFRecords = pc.inputs().get<gsl::span<ROFRecord>>("mid_clusters_rof");
 
     auto tAlgoStart = std::chrono::high_resolution_clock::now();
     mTracker->process(clusters, inROFRecords);
-    mTimerAlgo += std::chrono::high_resolution_clock::now() - tAlgoStart;
+    mTimerTracker += std::chrono::high_resolution_clock::now() - tAlgoStart;
 
-    pc.outputs().snapshot(of::Output{"MID", "TRACKS", 0, of::Lifetime::Timeframe}, mTracker->getTracks());
-    LOG(DEBUG) << "Sent " << mTracker->getTracks().size() << " tracks.";
-    pc.outputs().snapshot(of::Output{"MID", "TRACKCLUSTERS", 0, of::Lifetime::Timeframe}, mTracker->getClusters());
-    LOG(DEBUG) << "Sent " << mTracker->getClusters().size() << " track clusters.";
+    tAlgoStart = std::chrono::high_resolution_clock::now();
+    std::vector<Track> tracks = mTracker->getTracks();
+    mHitMapBuilder->process(tracks, clusters);
+    mTimerBuilder += std::chrono::high_resolution_clock::now() - tAlgoStart;
 
-    pc.outputs().snapshot(of::Output{"MID", "TRACKROFS", 0, of::Lifetime::Timeframe}, mTracker->getTrackROFRecords());
-    LOG(DEBUG) << "Sent " << mTracker->getTrackROFRecords().size() << " ROFs.";
-    pc.outputs().snapshot(of::Output{"MID", "TRCLUSROFS", 0, of::Lifetime::Timeframe}, mTracker->getClusterROFRecords());
-    LOG(DEBUG) << "Sent " << mTracker->getClusterROFRecords().size() << " ROFs.";
+    if (mIsMC) {
+      std::unique_ptr<const o2::dataformats::MCTruthContainer<MCClusterLabel>> labels = pc.inputs().get<const o2::dataformats::MCTruthContainer<MCClusterLabel>*>("mid_clusterlabels");
+      mTrackLabeler.process(mTracker->getClusters(), tracks, *labels);
+      pc.outputs().snapshot(of::Output{"MID", "TRACKLABELS", 0}, mTrackLabeler.getTracksLabels());
+      LOG(debug) << "Sent " << mTrackLabeler.getTracksLabels().size() << " indexed tracks.";
+      pc.outputs().snapshot(of::Output{"MID", "TRCLUSLABELS", 0}, mTrackLabeler.getTrackClustersLabels());
+      LOG(debug) << "Sent " << mTrackLabeler.getTrackClustersLabels().getIndexedSize() << " indexed track clusters.";
+    }
+
+    pc.outputs().snapshot(of::Output{"MID", "TRACKS", 0}, tracks);
+    LOG(debug) << "Sent " << tracks.size() << " tracks.";
+    pc.outputs().snapshot(of::Output{"MID", "TRACKCLUSTERS", 0}, mTracker->getClusters());
+    LOG(debug) << "Sent " << mTracker->getClusters().size() << " track clusters.";
+
+    pc.outputs().snapshot(of::Output{"MID", "TRACKROFS", 0}, mTracker->getTrackROFRecords());
+    LOG(debug) << "Sent " << mTracker->getTrackROFRecords().size() << " ROFs.";
+    pc.outputs().snapshot(of::Output{"MID", "TRCLUSROFS", 0}, mTracker->getClusterROFRecords());
+    LOG(debug) << "Sent " << mTracker->getClusterROFRecords().size() << " ROFs.";
 
     mTimer += std::chrono::high_resolution_clock::now() - tStart;
     mNROFs += inROFRecords.size();
   }
 
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj)
+  {
+    if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+      return;
+    }
+    if (mCheckMasked) {
+      bool rebuildMaskedChannels = false;
+      if (matcher == of::ConcreteDataMatcher(header::gDataOriginMID, "BAD_CH_TRK", 0)) {
+        LOG(info) << "Update MID_BAD_CH_TRK";
+        mBadChannels = *static_cast<std::vector<ColumnData>*>(obj);
+        rebuildMaskedChannels = true;
+      } else if (matcher == of::ConcreteDataMatcher(header::gDataOriginMID, "REJECTLIST_TRK", 0)) {
+        LOG(info) << "Update MID_REJECTLIST_TRK";
+        mRejectList = *static_cast<std::vector<ColumnData>*>(obj);
+        rebuildMaskedChannels = true;
+      }
+      if (rebuildMaskedChannels) {
+        mHitMapBuilder->setMaskedChannels(mBadChannels, true);
+        mHitMapBuilder->setMaskedChannels(mRejectList, false);
+      }
+    }
+  }
+
  private:
+  void updateTimeDependentParams(o2::framework::ProcessingContext& pc)
+  {
+    // Triggers finalizeCCDB
+    o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+    static bool initOnceDone = false;
+    if (!initOnceDone) {
+      initOnceDone = true;
+      auto geoTrans = createTransformationFromManager(gGeoManager);
+      mTracker = std::make_unique<Tracker>(geoTrans);
+      if (!mTracker->init(mKeepAll)) {
+        LOG(error) << "Initialization of MID tracker device failed";
+      }
+      mHitMapBuilder = std::make_unique<HitMapBuilder>(geoTrans);
+    }
+    pc.inputs().get<std::vector<ColumnData>*>("mid_bad_channels_forTracks");
+    pc.inputs().get<std::vector<ColumnData>*>("mid_rejectlist_forTracks");
+  }
+
+  bool mIsMC = false;
+  bool mKeepAll = false;
+  bool mCheckMasked = false;
+  TrackLabeler mTrackLabeler{};
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
   std::unique_ptr<Tracker> mTracker{nullptr};
-  std::chrono::duration<double> mTimer{0};     ///< full timer
-  std::chrono::duration<double> mTimerAlgo{0}; ///< algorithm timer
-  unsigned int mNROFs{0};                      /// Total number of processed ROFs
+  std::unique_ptr<HitMapBuilder> mHitMapBuilder{nullptr};
+  std::chrono::duration<double> mTimer{0};        ///< full timer
+  std::chrono::duration<double> mTimerTracker{0}; ///< tracker timer
+  std::chrono::duration<double> mTimerBuilder{0}; ///< hit map builder timer
+  unsigned int mNROFs{0};                         /// Total number of processed ROFs
+  std::vector<ColumnData> mBadChannels{};         ///< Bad channels
+  std::vector<ColumnData> mRejectList{};          ///< Reject list
 };
 
-framework::DataProcessorSpec getTrackerSpec()
+framework::DataProcessorSpec getTrackerSpec(bool isMC, bool checkMasked)
 {
-  std::vector<of::InputSpec> inputSpecs{of::InputSpec{"mid_clusters", "MID", "CLUSTERS"}, of::InputSpec{"mid_clusters_rof", "MID", "CLUSTERSROF"}};
-
+  std::vector<of::InputSpec> inputSpecs;
+  inputSpecs.emplace_back("mid_clusters", header::gDataOriginMID, "CLUSTERS");
+  inputSpecs.emplace_back("mid_clusters_rof", header::gDataOriginMID, "CLUSTERSROF");
+  inputSpecs.emplace_back("mid_bad_channels_forTracks", header::gDataOriginMID, "BAD_CH_TRK", 0, of::Lifetime::Condition, of::ccdbParamSpec("MID/Calib/BadChannels"));
+  inputSpecs.emplace_back("mid_rejectlist_forTracks", header::gDataOriginMID, "REJECTLIST_TRK", 0, of::Lifetime::Condition, of::ccdbParamSpec("MID/Calib/RejectList"));
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                             // orbitResetTime
+                                                              false,                             // GRPECS=true
+                                                              false,                             // GRPLHCIF
+                                                              false,                             // GRPMagField
+                                                              false,                             // askMatLUT
+                                                              o2::base::GRPGeomRequest::Aligned, // geometry
+                                                              inputSpecs,
+                                                              true);
   std::vector<of::OutputSpec> outputSpecs{
-    of::OutputSpec{"MID", "TRACKS"},
-    of::OutputSpec{"MID", "TRACKCLUSTERS"},
-    of::OutputSpec{"MID", "TRACKROFS"},
-    of::OutputSpec{"MID", "TRCLUSROFS"}};
+    of::OutputSpec{header::gDataOriginMID, "TRACKS"},
+    of::OutputSpec{header::gDataOriginMID, "TRACKCLUSTERS"},
+    of::OutputSpec{header::gDataOriginMID, "TRACKROFS"},
+    of::OutputSpec{header::gDataOriginMID, "TRCLUSROFS"}};
+
+  if (isMC) {
+    inputSpecs.emplace_back(of::InputSpec{"mid_clusterlabels", header::gDataOriginMID, "CLUSTERSLABELS"});
+
+    outputSpecs.emplace_back(of::OutputSpec{header::gDataOriginMID, "TRACKLABELS"});
+    outputSpecs.emplace_back(of::OutputSpec{header::gDataOriginMID, "TRCLUSLABELS"});
+  }
 
   return of::DataProcessorSpec{
     "MIDTracker",
     {inputSpecs},
     {outputSpecs},
-    of::adaptFromTask<o2::mid::TrackerDeviceDPL>(),
-    of::Options{
-      {"geometry-filename", of::VariantType::String, "", {"Name of the geometry file"}}}};
+    of::adaptFromTask<o2::mid::TrackerDeviceDPL>(ggRequest, isMC, checkMasked),
+    of::Options{{"mid-tracker-keep-best", of::VariantType::Bool, false, {"Keep only best track (default is keep all)"}}}};
 }
 } // namespace mid
 } // namespace o2

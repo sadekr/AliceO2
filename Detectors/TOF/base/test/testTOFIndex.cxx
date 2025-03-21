@@ -12,7 +12,7 @@
 #define BOOST_TEST_MODULE Test TOFIndex
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
-#include "FairLogger.h" // for FairLogger
+#include <fairlogger/Logger.h> // for FairLogger
 #include "TOFBase/Geo.h"
 #include <TRandom.h>
 #include <TStopwatch.h>
@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(testTOFIndex)
                                                          << " --> out:"
                                                          << indextofTest[4]);
             // if (locError && j == 1 && k == 3) {
-            LOG(INFO) << "in:" << indextof[0] << ", " << indextof[1] << ", "
+            LOG(info) << "in:" << indextof[0] << ", " << indextof[1] << ", "
                       << indextof[2] << ", " << indextof[3] << ", "
                       << indextof[4] << " --> out:" << indextofTest[0] << ", "
                       << indextofTest[1] << ", " << indextofTest[2] << ", "

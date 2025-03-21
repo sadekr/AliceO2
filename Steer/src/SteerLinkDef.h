@@ -14,11 +14,12 @@
 #pragma link off all classes;
 #pragma link off all functions;
 
-#pragma link C++ class o2::steer::InteractionSampler + ;
 #pragma link C++ class o2::steer::HitProcessingManager;
 #pragma link C++ class o2::steer::O2RunSim + ;
 #pragma link C++ class o2::steer::O2MCApplicationBase + ;
+#pragma link C++ class o2::steer::O2MCApplicationEvalMat + ;
 #pragma link C++ class o2::steer::O2MCApplication + ;
 #pragma link C++ class o2::steer::MCKinematicsReader + ;
+#pragma link C++ class o2::steer::MaterialBudgetMap + ;
 
 #endif

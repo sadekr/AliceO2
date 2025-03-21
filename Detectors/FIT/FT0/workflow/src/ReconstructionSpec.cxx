@@ -15,11 +15,15 @@
 #include "SimulationDataFormat/MCTruthContainer.h"
 #include "Framework/ControlService.h"
 #include "Framework/Logger.h"
+#include "Framework/CCDBParamSpec.h"
 #include "FT0Workflow/ReconstructionSpec.h"
 #include "DataFormatsFT0/Digit.h"
 #include "DataFormatsFT0/ChannelData.h"
+#include "DataFormatsFT0/DigitFilterParam.h"
+#include "DataFormatsFT0/CalibParam.h"
 #include "DataFormatsFT0/MCLabel.h"
-#include "FT0Calibration/FT0ChannelTimeCalibrationObject.h"
+#include "DataFormatsFT0/SpectraInfoObject.h"
+#include "Framework/CCDBParamSpec.h"
 
 using namespace o2::framework;
 
@@ -32,74 +36,91 @@ void ReconstructionDPL::init(InitContext& ic)
 {
   mTimer.Stop();
   mTimer.Reset();
-  LOG(INFO) << "ReconstructionDPL::init";
+  o2::ft0::ChannelFilterParam::Instance().printKeyValues();
+  o2::ft0::TimeFilterParam::Instance().printKeyValues();
+  // Parameters which are used in reco, too many will be printed if use printKeyValues()
+  LOG(info) << "FT0 param mMinEntriesThreshold: " << CalibParam::Instance().mMinEntriesThreshold;
+  LOG(info) << "FT0 param mMaxEntriesThreshold:" << CalibParam::Instance().mMaxEntriesThreshold;
+  LOG(info) << "FT0 param mMinRMS: " << CalibParam::Instance().mMinRMS;
+  LOG(info) << "FT0 param mMaxSigma: " << CalibParam::Instance().mMaxSigma;
+  LOG(info) << "FT0 param mMaxDiffMean: " << CalibParam::Instance().mMaxDiffMean;
 }
 
 void ReconstructionDPL::run(ProcessingContext& pc)
 {
-  auto& mCCDBManager = o2::ccdb::BasicCCDBManager::instance();
-  mCCDBManager.setURL(mCCDBpath);
-  LOG(INFO) << " set-up CCDB " << mCCDBpath;
   mTimer.Start(false);
   mRecPoints.clear();
+  mRecChData.clear();
   auto digits = pc.inputs().get<gsl::span<o2::ft0::Digit>>("digits");
-  auto digch = pc.inputs().get<gsl::span<o2::ft0::ChannelData>>("digch");
+  auto channels = pc.inputs().get<gsl::span<o2::ft0::ChannelData>>("digch");
   // RS: if we need to process MC truth, uncomment lines below
-  //std::unique_ptr<const o2::dataformats::MCTruthContainer<o2::ft0::MCLabel>> labels;
-  //const o2::dataformats::MCTruthContainer<o2::ft0::MCLabel>* lblPtr = nullptr;
+  // std::unique_ptr<const o2::dataformats::MCTruthContainer<o2::ft0::MCLabel>> labels;
+  // const o2::dataformats::MCTruthContainer<o2::ft0::MCLabel>* lblPtr = nullptr;
   if (mUseMC) {
-    //   labels = pc.inputs().get<const o2::dataformats::MCTruthContainer<o2::ft0::MCLabel>*>("labels");
-    // lblPtr = labels.get();
-    LOG(INFO) << "Ignoring MC info";
+    LOG(info) << "Ignoring MC info";
   }
-  auto caliboffsets = mCCDBManager.get<o2::ft0::FT0ChannelTimeCalibrationObject>("FT0/Calibration/ChannelTimeOffset");
-  mReco.SetChannelOffset(caliboffsets);
-  LOG(DEBUG) << " RecoSpec  mReco.SetChannelOffset(caliboffsets)";
-  /*
-  auto calibslew = mCCDBManager.get<std::array<TGraph, NCHANNELS>>("FT0/SlewingCorr");
-  LOG(DEBUG) << " calibslew " << calibslew;
-  if (calibslew) {
-    mReco.SetSlew(calibslew);
-    LOG(INFO) << " calibslew set slew " << calibslew;
+  if (mUseTimeOffsetCalib) {
+    auto timeOffsetCalibObject = pc.inputs().get<o2::ft0::TimeSpectraInfoObject*>("ft0_timespectra");
+    mReco.SetTimeCalibObject(timeOffsetCalibObject.get());
   }
-  */
-  int nDig = digits.size();
-  LOG(DEBUG) << " nDig " << nDig;
-  mRecPoints.reserve(nDig);
-  mRecChData.resize(digch.size());
-  for (int id = 0; id < nDig; id++) {
-    const auto& digit = digits[id];
-    LOG(DEBUG) << " ndig " << id << " bc " << digit.getBC() << " orbit " << digit.getOrbit();
-    auto channels = digit.getBunchChannelData(digch);
-    gsl::span<o2::ft0::ChannelDataFloat> out_ch(mRecChData);
-    out_ch = out_ch.subspan(digit.ref.getFirstEntry(), digit.ref.getEntries());
-    mRecPoints.emplace_back(mReco.process(digit, channels, out_ch));
-  }
-  // do we ignore MC in this task?
 
-  LOG(DEBUG) << "FT0 reconstruction pushes " << mRecPoints.size() << " RecPoints";
-  pc.outputs().snapshot(Output{mOrigin, "RECPOINTS", 0, Lifetime::Timeframe}, mRecPoints);
-  pc.outputs().snapshot(Output{mOrigin, "RECCHDATA", 0, Lifetime::Timeframe}, mRecChData);
+  if (mUseSlewingCalib) {
+    auto slewingCalibObject = pc.inputs().get<o2::ft0::SlewingCoef*>("ft0_slewing_coef");
+    mReco.SetSlewingCalibObject(slewingCalibObject.get());
+  }
+
+  mRecPoints.reserve(digits.size());
+  mRecChData.reserve(channels.size());
+  mReco.processTF(digits, channels, mRecPoints, mRecChData);
+  // do we ignore MC in this task?
+  LOG(debug) << "FT0 reconstruction pushes " << mRecPoints.size() << " RecPoints";
+  pc.outputs().snapshot(Output{mOrigin, "RECPOINTS", 0}, mRecPoints);
+  pc.outputs().snapshot(Output{mOrigin, "RECCHDATA", 0}, mRecChData);
 
   mTimer.Stop();
+}
+//_______________________________________
+void ReconstructionDPL::finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+{
+  if (matcher == ConcreteDataMatcher("FT0", "TimeSpectraInfo", 0)) {
+    LOG(debug) << "New TimeSpectraInfo is uploaded";
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("FT0", "SlewingCoef", 0)) {
+    LOG(debug) << "New SlewingCoef is uploaded";
+    mUseSlewingCalib = false; // upload only once, slewing should be stable during the run
+    return;
+  }
 }
 
 void ReconstructionDPL::endOfStream(EndOfStreamContext& ec)
 {
-  LOGF(INFO, "FT0 reconstruction total timing: Cpu: %.3e Real: %.3e s in %d slots",
+  LOGF(info, "FT0 reconstruction total timing: Cpu: %.3e Real: %.3e s in %d slots",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
 }
 
-DataProcessorSpec getReconstructionSpec(bool useMC, const std::string ccdbpath)
+DataProcessorSpec getReconstructionSpec(bool useMC, const std::string ccdbpath, bool useTimeOffsetCalib, bool useSlewingCalib)
 {
   std::vector<InputSpec> inputSpec;
   std::vector<OutputSpec> outputSpec;
   inputSpec.emplace_back("digits", o2::header::gDataOriginFT0, "DIGITSBC", 0, Lifetime::Timeframe);
   inputSpec.emplace_back("digch", o2::header::gDataOriginFT0, "DIGITSCH", 0, Lifetime::Timeframe);
   if (useMC) {
-    LOG(INFO) << "Currently Reconstruction does not consume and provide MC truth";
+    LOG(info) << "Currently Reconstruction does not consume and provide MC truth";
     inputSpec.emplace_back("labels", o2::header::gDataOriginFT0, "DIGITSMCTR", 0, Lifetime::Timeframe);
   }
+  if (useTimeOffsetCalib) {
+    inputSpec.emplace_back("ft0_timespectra", "FT0", "TimeSpectraInfo", 0,
+                           Lifetime::Condition,
+                           ccdbParamSpec("FT0/Calib/TimeSpectraInfo", {}, 1));
+  }
+
+  if (useSlewingCalib) {
+    inputSpec.emplace_back("ft0_slewing_coef", "FT0", "SlewingCoef", 0,
+                           Lifetime::Condition,
+                           ccdbParamSpec("FT0/Calib/SlewingCoef"));
+  }
+
   outputSpec.emplace_back(o2::header::gDataOriginFT0, "RECPOINTS", 0, Lifetime::Timeframe);
   outputSpec.emplace_back(o2::header::gDataOriginFT0, "RECCHDATA", 0, Lifetime::Timeframe);
 
@@ -107,7 +128,7 @@ DataProcessorSpec getReconstructionSpec(bool useMC, const std::string ccdbpath)
     "ft0-reconstructor",
     inputSpec,
     outputSpec,
-    AlgorithmSpec{adaptFromTask<ReconstructionDPL>(useMC, ccdbpath)},
+    AlgorithmSpec{adaptFromTask<ReconstructionDPL>(useMC, ccdbpath, useTimeOffsetCalib, useSlewingCalib)},
     Options{}};
 }
 

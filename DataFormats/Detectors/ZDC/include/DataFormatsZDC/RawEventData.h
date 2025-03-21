@@ -33,7 +33,9 @@ constexpr unsigned short Id_w0 = 0x0;
 constexpr unsigned short Id_w1 = 0x1;
 constexpr unsigned short Id_w2 = 0x2;
 constexpr unsigned short Id_wn = 0x3;
-constexpr int NWPerGBTW = 4;
+constexpr int NWPerGBTW = 4;             // 4*32bit=128 bit per GBTW
+constexpr int NBPerGBTW = 4 * NWPerGBTW; // 16B=128 bit per GBTW
+constexpr int PayloadPerGBTW = 10;       // 80 bit per GBTW
 
 struct __attribute__((__packed__)) ChannelDataV0 {
   // First GBT word
@@ -49,7 +51,8 @@ struct __attribute__((__packed__)) ChannelDataV0 {
 
   // Second GBT word
   unsigned fixed_1 : 2;
-  unsigned error : 2;
+  unsigned dLoss : 1;
+  unsigned error : 1;
   unsigned Alice_0 : 1;
   unsigned Alice_1 : 1;
   unsigned Alice_2 : 1;

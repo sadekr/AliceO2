@@ -11,15 +11,16 @@
 #ifndef O2_FRAMEWORK_RUNTIMEERROR_H_
 #define O2_FRAMEWORK_RUNTIMEERROR_H_
 
+#include "BacktraceHelpers.h"
+
 namespace o2::framework
 {
 
 struct RuntimeError {
   static constexpr unsigned int MAX_RUNTIME_ERRORS = 64;
   static constexpr unsigned int MAX_RUNTIME_ERROR_SIZE = 1024;
-  static constexpr unsigned int MAX_BACKTRACE_SIZE = 100;
   char what[MAX_RUNTIME_ERROR_SIZE];
-  void* backtrace[MAX_BACKTRACE_SIZE];
+  void* backtrace[BacktraceHelpers::MAX_BACKTRACE_SIZE];
   int maxBacktrace = 0;
 };
 
@@ -32,6 +33,7 @@ RuntimeErrorRef runtime_error_f(const char*, ...);
 RuntimeError& error_from_ref(RuntimeErrorRef);
 
 void throw_error(RuntimeErrorRef);
+void clean_all_runtime_errors();
 
 } // namespace o2::framework
 

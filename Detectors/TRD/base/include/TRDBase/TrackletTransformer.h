@@ -15,6 +15,7 @@
 #include "TRDBase/Geometry.h"
 #include "DataFormatsTRD/Tracklet64.h"
 #include "DataFormatsTRD/CalibratedTracklet.h"
+#include "DataFormatsTRD/CalVdriftExB.h"
 
 namespace o2
 {
@@ -24,47 +25,36 @@ namespace trd
 class TrackletTransformer
 {
  public:
-  TrackletTransformer();
+  TrackletTransformer() = default;
   ~TrackletTransformer() = default;
 
-  float getXCathode() { return mXCathode; }
-  float getXAnode() { return mXAnode; }
-  float getXDrift() { return mXDrift; }
-  float getXtb0() { return mXtb0; }
+  void init();
 
-  void setXCathode(float x) { mXCathode = x; }
-  void setXAnode(float x) { mXAnode = x; }
-  void setXDrift(float x) { mXDrift = x; }
-  void setXtb0(float x) { mXtb0 = x; }
+  void setCalVdriftExB(const CalVdriftExB* cal) { mCalVdriftExB = cal; };
+  void setApplyXOR() { mApplyXOR = true; }
+  void setApplyShift(bool f) { mApplyShift = f; }
+  bool isShiftApplied() const { return mApplyShift; }
 
-  void loadPadPlane(int hcid);
+  float calculateZ(int padrow, const PadPlane* padPlane) const;
 
-  float calculateY(int hcid, int column, int position);
+  float calculateDy(int hcid, int slope, const PadPlane* padPlane) const;
 
-  float calculateZ(int padrow);
+  float calibrateX(double x) const;
 
-  float calculateDy(int slope, double lorentzAngle, double driftVRatio);
+  std::array<float, 3> transformL2T(int hcid, std::array<double, 3> spacePoint) const;
 
-  float calibrateX(double x, double t0Correction);
+  CalibratedTracklet transformTracklet(Tracklet64 tracklet, bool trackingFrame = true) const;
 
-  std::array<float, 3> transformL2T(int hcid, std::array<double, 3> spacePoint);
-
-  CalibratedTracklet transformTracklet(Tracklet64 tracklet);
-
-  double getTimebin(double x);
+  double getTimebin(int detector, double x) const;
 
  private:
-  o2::trd::Geometry* mGeo;
-  const o2::trd::PadPlane* mPadPlane;
+  Geometry* mGeo{nullptr};
+  bool mApplyXOR{false};
+  bool mApplyShift{true};
 
-  float mXCathode;
   float mXAnode;
-  float mXDrift;
-  float mXtb0;
 
-  float mt0Correction;
-  float mLorentzAngle;
-  float mDriftVRatio;
+  const CalVdriftExB* mCalVdriftExB{nullptr};
 };
 
 } // namespace trd

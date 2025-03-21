@@ -25,7 +25,7 @@
 #include "FairFileHeader.h"       // for FairFileHeader
 #include "FairGeoInterface.h"     // for FairGeoInterface
 #include "FairGeoLoader.h"        // for FairGeoLoader
-#include "FairLogger.h"           // for FairLogger, MESSAGE_ORIGIN
+#include <fairlogger/Logger.h>    // for FairLogger, MESSAGE_ORIGIN
 #include "FairMCEventHeader.h"    // for FairMCEventHeader
 #include "FairMesh.h"             // for FairMesh
 #include "FairModule.h"           // for FairModule
@@ -40,6 +40,8 @@
 #include <TObjString.h>
 #include <Steer/O2MCApplication.h>
 
+#include <Steer/O2MCApplicationEvalMat.h>
+
 namespace o2
 {
 namespace steer
@@ -48,12 +50,12 @@ namespace steer
 class O2RunSim : public FairRunSim
 {
  public:
-  O2RunSim(bool devicemode) : FairRunSim(), mDeviceMode(devicemode) {}
+  O2RunSim(bool devicemode, bool evalmat) : FairRunSim(), mDeviceMode(devicemode), mEvalMat(evalmat) {}
   ~O2RunSim() override = default;
 
   void Init() final
   {
-    LOG(INFO) << "O2RUNSIM SPECIFIC INIT CALLED";
+    LOG(info) << "O2RUNSIM SPECIFIC INIT CALLED";
 
     fRootManager->InitSink();
 
@@ -67,7 +69,11 @@ class O2RunSim : public FairRunSim
     if (mDeviceMode) {
       fApp = new O2MCApplication("Fair", "The Fair VMC App", ListOfModules, MatFname);
     } else {
-      fApp = new O2MCApplicationBase("Fair", "The Fair VMC App", ListOfModules, MatFname);
+      if (!mEvalMat) {
+        fApp = new O2MCApplicationBase("Fair", "The Fair VMC App", ListOfModules, MatFname);
+      } else {
+        fApp = new O2MCApplicationEvalMat("Fair", "The Fair VMC App", ListOfModules, MatFname);
+      }
     }
 
     fApp->SetGenerator(fGen);
@@ -142,7 +148,8 @@ class O2RunSim : public FairRunSim
   }
 
  private:
-  bool mDeviceMode = false;
+  bool mDeviceMode{false};
+  bool mEvalMat{false};
 
   ClassDefOverride(O2RunSim, 0);
 };

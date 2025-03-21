@@ -17,7 +17,7 @@
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/Logger.h"
 #include "GlobalTrackingWorkflowReaders/PrimaryVertexReaderSpec.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "TFile.h"
 #include "TTree.h"
 #include "CommonDataFormat/TimeStamp.h"
@@ -50,7 +50,7 @@ class PrimaryVertexReader : public o2::framework::Task
  protected:
   void connectTree();
 
-  bool mVerbose = false;
+  int mVerbose = 0;
   bool mUseMC = false;
 
   std::vector<PVertex> mVertices, *mVerticesPtr = &mVertices;
@@ -73,6 +73,7 @@ void PrimaryVertexReader::init(InitContext& ic)
 {
   mFileName = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")),
                                             ic.options().get<std::string>("primary-vertex-infile"));
+  mVerbose = ic.options().get<int>("vertex-verbosity");
   connectTree();
 }
 
@@ -81,42 +82,61 @@ void PrimaryVertexReader::run(ProcessingContext& pc)
   auto ent = mTree->GetReadEntry() + 1;
   assert(ent < mTree->GetEntries()); // this should not happen
   mTree->GetEntry(ent);
-  LOG(INFO) << "Pushing " << mVerticesPtr->size() << " vertices at entry " << ent;
+  LOG(info) << "Pushing " << mVerticesPtr->size() << " vertices at entry " << ent;
 
-  pc.outputs().snapshot(Output{"GLO", "PVTX", 0, Lifetime::Timeframe}, mVertices);
-  pc.outputs().snapshot(Output{"GLO", "PVTX_TRMTC", 0, Lifetime::Timeframe}, mPV2MatchIdx);
-  pc.outputs().snapshot(Output{"GLO", "PVTX_TRMTCREFS", 0, Lifetime::Timeframe}, mPV2MatchIdxRef);
+  pc.outputs().snapshot(Output{"GLO", "PVTX", 0}, mVertices);
+  pc.outputs().snapshot(Output{"GLO", "PVTX_TRMTC", 0}, mPV2MatchIdx);
+  pc.outputs().snapshot(Output{"GLO", "PVTX_TRMTCREFS", 0}, mPV2MatchIdxRef);
 
   if (mUseMC) {
-    pc.outputs().snapshot(Output{"GLO", "PVTX_MCTR", 0, Lifetime::Timeframe}, mLabels);
+    pc.outputs().snapshot(Output{"GLO", "PVTX_MCTR", 0}, mLabels);
   }
 
   if (mVerbose) {
-    int cnt = 0;
-    for (const auto& vtx : mVertices) {
-      Label lb;
-      if (mUseMC) {
-        lb = mLabels[cnt];
+    size_t nrec = mPV2MatchIdxRef.size();
+    for (size_t cnt = 0; cnt < nrec; cnt++) {
+      if (cnt < mVertices.size()) {
+        const auto& vtx = mVertices[cnt];
+        Label lb;
+        if (mUseMC) {
+          lb = mLabels[cnt];
+        }
+        LOG(info) << "#" << cnt << " " << mVertices[cnt] << " | MC:" << lb.asString();
+      } else {
+        LOG(info) << "#" << cnt << " this is not a vertex";
       }
-      LOG(INFO) << "#" << cnt << " " << vtx << " | MC:" << lb;
-      LOG(INFO) << "References: " << mPV2MatchIdxRef[cnt];
+      LOG(info) << "References: " << mPV2MatchIdxRef[cnt];
       for (int is = 0; is < GIndex::NSources; is++) {
-        LOG(INFO) << GIndex::getSourceName(is) << " : " << mPV2MatchIdxRef[cnt].getEntriesOfSource(is) << " attached:";
+        int ncontrib = 0, nambig = 0;
         int idMin = mPV2MatchIdxRef[cnt].getFirstEntryOfSource(is), idMax = idMin + mPV2MatchIdxRef[cnt].getEntriesOfSource(is);
+        for (int i = idMin; i < idMax; i++) {
+          if (mPV2MatchIdx[i].isPVContributor()) {
+            ncontrib++;
+          } else if (mPV2MatchIdx[i].isAmbiguous()) {
+            nambig++;
+          }
+        }
+        if (mPV2MatchIdxRef[cnt].getEntriesOfSource(is)) {
+          LOGP(info, "{} : total attached: {}, contributors: {}, ambiguous: {}", GIndex::getSourceName(is), mPV2MatchIdxRef[cnt].getEntriesOfSource(is), ncontrib, nambig);
+        }
+        if (mVerbose < 2) {
+          continue;
+        }
         std::string trIDs;
         int cntT = 0;
         for (int i = idMin; i < idMax; i++) {
-          trIDs += mPV2MatchIdx[i].asString() + " ";
-          if (!((++cntT) % 15)) {
-            LOG(INFO) << trIDs;
-            trIDs = "";
+          if (mVerbose > 2 || mPV2MatchIdx[i].isPVContributor()) {
+            trIDs += mPV2MatchIdx[i].asString() + " ";
+            if (!((++cntT) % 15)) {
+              LOG(info) << trIDs;
+              trIDs = "";
+            }
           }
         }
         if (!trIDs.empty()) {
-          LOG(INFO) << trIDs;
+          LOG(info) << trIDs;
         }
       }
-      cnt++;
     }
   }
 
@@ -146,7 +166,7 @@ void PrimaryVertexReader::connectTree()
     mTree->SetBranchAddress(mVertexLabelsBranchName.c_str(), &mLabelsPtr);
   }
 
-  LOG(INFO) << "Loaded " << mVertexTreeName << " tree from " << mFileName << " with " << mTree->GetEntries() << " entries";
+  LOG(info) << "Loaded " << mVertexTreeName << " tree from " << mFileName << " with " << mTree->GetEntries() << " entries";
 }
 
 DataProcessorSpec getPrimaryVertexReaderSpec(bool useMC)
@@ -168,7 +188,8 @@ DataProcessorSpec getPrimaryVertexReaderSpec(bool useMC)
     Options{
       {"primary-vertex-infile", VariantType::String, "o2_primary_vertex.root", {"Name of the input primary vertex file"}},
       {"vertex-track-matches-infile", VariantType::String, "o2_pvertex_track_matches.root", {"Name of the input file with primary vertex - tracks matches"}},
-      {"input-dir", VariantType::String, "none", {"Input directory"}}}};
+      {"input-dir", VariantType::String, "none", {"Input directory"}},
+      {"vertex-verbosity", VariantType::Int, 0, {"Print vertex/tracks info: 1) number of contributor and attached, 2) dump contributors 3) full dump"}}}};
 }
 
 } // namespace vertexing

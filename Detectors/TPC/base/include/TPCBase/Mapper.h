@@ -233,24 +233,24 @@ class Mapper
     return pos;
   }
 
-  const PadPos padPosRegion(const int cruNumber, const int fecInRegion, const int sampaOnFEC,
+  const PadPos padPosRegion(const int cruNumber, const int fecInPartition, const int sampaOnFEC,
                             const int channelOnSAMPA) const
   {
     const CRU cru(cruNumber);
     const PadRegionInfo& regionInfo = mMapPadRegionInfo[cru.region()];
     const PartitionInfo& partInfo = mMapPartitionInfo[cru.partition()];
-    const int fecInSector = partInfo.getSectorFECOffset() + fecInRegion;
+    const int fecInSector = partInfo.getSectorFECOffset() + fecInPartition;
     const GlobalPadNumber padNumber = globalPadNumber(fecInSector, sampaOnFEC, channelOnSAMPA);
     PadPos pos = padPos(padNumber);
     pos.setRow(pos.getRow() - regionInfo.getGlobalRowOffset());
     return pos;
   }
 
-  const PadROCPos padROCPos(const CRU cru, const int fecInRegion, const int sampaOnFEC,
+  const PadROCPos padROCPos(const CRU cru, const int fecInPartition, const int sampaOnFEC,
                             const int channelOnSAMPA) const
   {
     const PartitionInfo& partInfo = mMapPartitionInfo[cru.partition()];
-    const int fecInSector = partInfo.getSectorFECOffset() + fecInRegion;
+    const int fecInSector = partInfo.getSectorFECOffset() + fecInPartition;
     const GlobalPadNumber padNumber = globalPadNumber(fecInSector, sampaOnFEC, channelOnSAMPA);
     const ROC roc = cru.roc();
     PadROCPos pos(roc, padPos(padNumber));
@@ -260,11 +260,11 @@ class Mapper
     return pos;
   }
 
-  const PadSecPos padSecPos(const CRU cru, const int fecInRegion, const int sampaOnFEC,
+  const PadSecPos padSecPos(const CRU cru, const int fecInPartition, const int sampaOnFEC,
                             const int channelOnSAMPA) const
   {
     const PartitionInfo& partInfo = mMapPartitionInfo[cru.partition()];
-    const int fecInSector = partInfo.getSectorFECOffset() + fecInRegion;
+    const int fecInSector = partInfo.getSectorFECOffset() + fecInPartition;
     const GlobalPadNumber padNumber = globalPadNumber(fecInSector, sampaOnFEC, channelOnSAMPA);
     PadSecPos pos(cru.sector(), padPos(padNumber));
     return pos;
@@ -295,6 +295,13 @@ class Mapper
 
   // ===| pad number and pad row mappings |=====================================
   int getNumberOfRows() const { return mNumberOfPadRowsIROC + mNumberOfPadRowsOROC; }
+
+  /// \return returns number of pad rows in IROCs
+  static constexpr auto getNumberOfRowsInIROC() { return mNumberOfPadRowsIROC; }
+
+  /// \return returns number of pad rows in OROCs
+  static constexpr auto getNumberOfRowsInOROC() { return mNumberOfPadRowsOROC; }
+
   int getNumberOfRowsROC(ROC roc) const
   {
     return (roc.rocType() == RocType::IROC) ? mNumberOfPadRowsIROC : mNumberOfPadRowsOROC;
@@ -363,6 +370,9 @@ class Mapper
     return 0;
   }
 
+  /// \return returns number of pads per side of the TPC
+  static constexpr int getNumberOfPadsPerSide() { return getPadsInSector() * SECTORSPERSIDE; }
+
   /// Convert sector, row, pad to global pad row in sector and pad number
   const PadPos getGlobalPadPos(const PadROCPos& padROC) const
   {
@@ -386,6 +396,14 @@ class Mapper
 
   bool isOutOfSector(GlobalPosition3D posEle, const Sector& sector, const float margin = 0.f) const;
 
+  static bool isEdgePad(int rowInSector, int padInRow);
+  static bool isFirstOrLastRowInStack(int rowInSector);
+  static bool isBelowSpacerCross(int rowInSector, int padInRow);
+  static bool isHighCouplingPad(int rowInSector, int padInRow)
+  {
+    return isEdgePad(rowInSector, padInRow) || isFirstOrLastRowInStack(rowInSector) || isBelowSpacerCross(rowInSector, padInRow);
+  }
+
   static constexpr unsigned short getNumberOfIROCs() { return 36; }
   static constexpr unsigned short getNumberOfOROCs() { return 36; }
   static constexpr unsigned short getPadsInIROC() { return mPadsInIROC; }
@@ -395,7 +413,7 @@ class Mapper
   static constexpr unsigned short getPadsInOROC() { return mPadsInOROC; }
   static constexpr unsigned short getPadsInSector() { return mPadsInSector; }
 
-  unsigned short getNumberOfPads(const GEMstack gemStack) const
+  static constexpr unsigned short getNumberOfPads(const GEMstack gemStack)
   {
     switch (gemStack) {
       case IROCgem: {
@@ -425,6 +443,9 @@ class Mapper
     }
     return getPadsInOROC();
   }
+
+  const std::vector<PadPos>& getMapGlobalPadToPadPos() const { return mMapGlobalPadToPadPos; }
+  const std::vector<int>& getMapFECIDGlobalPad() const { return mMapFECIDGlobalPad; }
 
   const std::vector<float>& getTraceLengthsIROC() const { return mTraceLengthsIROC; }
   const std::vector<float>& getTraceLengthsOROC() const { return mTraceLengthsOROC; }
@@ -502,15 +523,17 @@ class Mapper
                            float(double(pos.X()) * sn + double(pos.Y() * cs)));
   }
 
-  static constexpr unsigned int NSECTORS{36};                                                                                                                      ///< total number of sectors in the TPC
-  static constexpr unsigned int NREGIONS{10};                                                                                                                      ///< total number of regions in one sector
-  static constexpr unsigned int PADROWS{152};                                                                                                                      ///< total number of pad rows
-  static constexpr unsigned int PADSPERREGION[NREGIONS]{1200, 1200, 1440, 1440, 1440, 1440, 1600, 1600, 1600, 1600};                                               ///< number of pads per CRU
-  static constexpr unsigned int GLOBALPADOFFSET[NREGIONS]{0, 1200, 2400, 3840, 5280, 6720, 8160, 9760, 11360, 12960};                                              ///< offset of number of pads for region
-  static constexpr unsigned int ROWSPERREGION[NREGIONS]{17, 15, 16, 15, 18, 16, 16, 14, 13, 12};                                                                   ///< number of pad rows for region
-  static constexpr unsigned int ROWOFFSET[NREGIONS]{0, 17, 32, 48, 63, 81, 97, 113, 127, 140};                                                                     ///< offset to calculate local row from global row
-  static constexpr float REGIONAREA[NREGIONS]{374.4f, 378.f, 453.6f, 470.88f, 864.f, 864.f, 1167.36f, 1128.96f, 1449.6f, 1456.8f};                                 ///< volume of each region in cm^2
-  static constexpr float PADAREA[NREGIONS]{1 / 0.312f, 1 / 0.315f, 1 / 0.315f, 1 / 0.327f, 1 / 0.6f, 1 / 0.6f, 1 / 0.7296f, 1 / 0.7056f, 1 / 0.906f, 1 / 0.9105f}; ///< inverse size of the pad area padwidth*padLength
+  static constexpr unsigned int NSECTORS{36};                                                                                                                         ///< total number of sectors in the TPC
+  static constexpr unsigned int NREGIONS{10};                                                                                                                         ///< total number of regions in one sector
+  static constexpr unsigned int PADROWS{152};                                                                                                                         ///< total number of pad rows
+  static constexpr unsigned int NENDPOINTS{2};                                                                                                                        ///< number of end points
+  static constexpr unsigned int PADSPERREGION[NREGIONS]{1200, 1200, 1440, 1440, 1440, 1440, 1600, 1600, 1600, 1600};                                                  ///< number of pads per CRU
+  static constexpr unsigned int GLOBALPADOFFSET[NREGIONS]{0, 1200, 2400, 3840, 5280, 6720, 8160, 9760, 11360, 12960};                                                 ///< offset of number of pads for region
+  static constexpr unsigned int ROWSPERREGION[NREGIONS]{17, 15, 16, 15, 18, 16, 16, 14, 13, 12};                                                                      ///< number of pad rows for region
+  static constexpr unsigned int ROWOFFSET[NREGIONS]{0, 17, 32, 48, 63, 81, 97, 113, 127, 140};                                                                        ///< offset to calculate local row from global row
+  static constexpr unsigned int ROWOFFSETSTACK[4]{0, 63, 97, 127};                                                                                                    ///< offset to calculate local row from global row
+  static constexpr float REGIONAREA[NREGIONS]{374.4f, 378.f, 453.6f, 470.88f, 864.f, 864.f, 1167.36f, 1128.96f, 1449.6f, 1456.8f};                                    ///< volume of each region in cm^2
+  static constexpr float INVPADAREA[NREGIONS]{1 / 0.312f, 1 / 0.315f, 1 / 0.315f, 1 / 0.327f, 1 / 0.6f, 1 / 0.6f, 1 / 0.7296f, 1 / 0.7056f, 1 / 0.906f, 1 / 0.9105f}; ///< inverse size of the pad area padwidth*padLength
   static constexpr unsigned REGION[PADROWS] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
@@ -528,7 +551,7 @@ class Mapper
     {0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4},             // region 7
     {0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5},                // region 8
     {0, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5}                    // region 9
-  };                                                        ///< additional pads per row compared to first row
+  }; ///< additional pads per row compared to first row
   const inline static std::vector<unsigned int> OFFSETCRULOCAL[NREGIONS]{
     {0, 66, 132, 198, 266, 334, 402, 472, 542, 612, 684, 756, 828, 902, 976, 1050, 1124},         // region 0
     {0, 76, 152, 228, 306, 384, 462, 542, 622, 702, 784, 866, 948, 1032, 1116},                   // region 1
@@ -540,7 +563,7 @@ class Mapper
     {0, 110, 220, 332, 444, 556, 670, 784, 898, 1014, 1130, 1246, 1364, 1482},                    // region 7
     {0, 118, 236, 356, 476, 598, 720, 844, 968, 1092, 1218, 1344, 1472},                          // region 8
     {0, 128, 258, 388, 520, 652, 784, 918, 1052, 1188, 1324, 1462}                                // region 9
-  };                                                                                              ///< row offset in cru for given local pad row
+  }; ///< row offset in cru for given local pad row
   const inline static std::vector<unsigned int> PADSPERROW[NREGIONS]{
     {66, 66, 66, 68, 68, 68, 70, 70, 70, 72, 72, 72, 74, 74, 74, 74, 76},      // region 0
     {76, 76, 76, 78, 78, 78, 80, 80, 80, 82, 82, 82, 84, 84, 84},              // region 1
@@ -552,7 +575,7 @@ class Mapper
     {110, 110, 112, 112, 112, 114, 114, 114, 116, 116, 116, 118, 118, 118},    // region 7
     {118, 118, 120, 120, 122, 122, 124, 124, 124, 126, 126, 128, 128},         // region 8
     {128, 130, 130, 132, 132, 132, 134, 134, 136, 136, 138, 138}               // region 9
-  };                                                                           ///< number of pads per row in region
+  }; ///< number of pads per row in region
   static constexpr unsigned int OFFSETCRUGLOBAL[PADROWS]{
     0, 66, 132, 198, 266, 334, 402, 472, 542, 612, 684, 756, 828, 902, 976, 1050, 1124,         // region 0
     0, 76, 152, 228, 306, 384, 462, 542, 622, 702, 784, 866, 948, 1032, 1116,                   // region 1
@@ -564,7 +587,20 @@ class Mapper
     0, 110, 220, 332, 444, 556, 670, 784, 898, 1014, 1130, 1246, 1364, 1482,                    // region 7
     0, 118, 236, 356, 476, 598, 720, 844, 968, 1092, 1218, 1344, 1472,                          // region 8
     0, 128, 258, 388, 520, 652, 784, 918, 1052, 1188, 1324, 1462                                // region 9
-  };                                                                                            ///< row offset in cru for given global pad row
+  }; ///< row offset in cru for given global pad row
+
+  static constexpr unsigned int LinksPerRegionPerEndpoint[NREGIONS][NENDPOINTS]{
+    {8, 7},   // region 0
+    {8, 7},   // region 1
+    {9, 9},   // region 2
+    {9, 9},   // region 3
+    {9, 9},   // region 4
+    {9, 9},   // region 5
+    {10, 10}, // region 6
+    {10, 10}, // region 7
+    {10, 10}, // region 8
+    {10, 10}, // region 9
+  }; ///< number of links per region per end point
 
  private:
   Mapper(const std::string& mappingDir);
@@ -668,7 +704,7 @@ inline const DigitPos Mapper::findDigitPosFromLocalPosition(const LocalPosition3
   CRU cru;
   for (const PadRegionInfo& padRegion : mMapPadRegionInfo) {
     cru = CRU(sec, padRegion.getRegion());
-    pad = padRegion.findPad(pos);
+    pad = padRegion.findPad(pos.X(), pos.Y(), (pos.Z() >= 0) ? Side::A : Side::C); // <--- to avoid calling a non-inlined library function layer for LocalPosition3D
     if (pad.isValid()) {
       break;
     }

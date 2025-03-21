@@ -19,13 +19,15 @@
 namespace o2::its
 {
 struct Cluster;
+template <uint8_t N>
 class Road;
 class Cell;
 struct TrackingFrameInfo;
 class TrackITSExt;
+class GPUFrameworkExternalAllocator;
 } // namespace o2::its
 
-namespace GPUCA_NAMESPACE::gpu
+namespace o2::gpu
 {
 class GPUChainITS : public GPUChain
 {
@@ -35,25 +37,25 @@ class GPUChainITS : public GPUChain
   ~GPUChainITS() override;
   void RegisterPermanentMemoryAndProcessors() override;
   void RegisterGPUProcessors() override;
-  int Init() override;
-  int PrepareEvent() override;
-  int Finalize() override;
-  int RunChain() override;
+  int32_t Init() override;
+  int32_t PrepareEvent() override;
+  int32_t Finalize() override;
+  int32_t RunChain() override;
   void MemorySize(size_t& gpuMem, size_t& pageLockedHostMem) override;
-
-  int PrepareAndRunITSTrackFit(std::vector<o2::its::Road>& roads, std::vector<const o2::its::Cluster*>& clusters, std::vector<const o2::its::Cell*>& cells, const std::vector<std::vector<o2::its::TrackingFrameInfo>>& tf, std::vector<o2::its::TrackITSExt>& tracks);
-  int RunITSTrackFit(std::vector<o2::its::Road>& roads, std::vector<const o2::its::Cluster*>& clusters, std::vector<const o2::its::Cell*>& cells, const std::vector<std::vector<o2::its::TrackingFrameInfo>>& tf, std::vector<o2::its::TrackITSExt>& tracks);
 
   o2::its::TrackerTraits* GetITSTrackerTraits();
   o2::its::VertexerTraits* GetITSVertexerTraits();
+  o2::its::TimeFrame* GetITSTimeframe();
 
  protected:
-  GPUChainITS(GPUReconstruction* rec, unsigned int maxTracks = GPUCA_MAX_ITS_FIT_TRACKS);
+  GPUChainITS(GPUReconstruction* rec, uint32_t maxTracks = GPUCA_MAX_ITS_FIT_TRACKS);
   std::unique_ptr<o2::its::TrackerTraits> mITSTrackerTraits;
   std::unique_ptr<o2::its::VertexerTraits> mITSVertexerTraits;
+  std::unique_ptr<o2::its::TimeFrame> mITSTimeFrame;
+  std::unique_ptr<o2::its::GPUFrameworkExternalAllocator> mFrameworkAllocator;
 
-  unsigned int mMaxTracks;
+  uint32_t mMaxTracks;
 };
-} // namespace GPUCA_NAMESPACE::gpu
+} // namespace o2::gpu
 
 #endif

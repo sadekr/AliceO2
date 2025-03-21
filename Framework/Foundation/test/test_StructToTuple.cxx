@@ -9,14 +9,14 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#define BOOST_TEST_MODULE Test Framework Traits
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
-
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 #include "Framework/StructToTuple.h"
 
-struct Foo {
+struct Foo0 {
+};
+
+struct Foo1 {
+  int foo = 1;
 };
 
 // FIXME: this should really struct Bar : Foo, but a c++17 bug
@@ -27,17 +27,39 @@ struct Bar {
   int bar = 2;
 };
 
+TEST_CASE("SimpleDestructuring")
+{
+  Foo0 foo0;
+  auto t0 = o2::framework::homogeneous_apply_refs([](auto i) -> bool { return i > 1; }, foo0);
+  REQUIRE(t0.size() == 0);
+  Foo1 foo1;
+  auto t1 = o2::framework::homogeneous_apply_refs([](auto i) -> bool { return i > 1; }, foo1);
+
+  REQUIRE(t1.size() == 1);
+
+  // Should work with refs as well. When moving to C++20 this was
+  // not the case initially.
+  Foo1 const&& foo1ref = std::move(foo1);
+  auto t1ref = o2::framework::homogeneous_apply_refs([](auto i) -> bool { return i > 1; }, foo1ref);
+  REQUIRE(t1ref.size() == 1);
+
+  Bar bar;
+  auto t = o2::framework::homogeneous_apply_refs([](auto i) -> bool { return i > 1; }, bar);
+  REQUIRE(t[0] == false);
+  REQUIRE(t[1] == true);
+}
+
 /// Largest supported struct
 struct FooMax {
-  int foo1 = 1;
-  int foo2 = 2;
-  int foo3 = 3;
-  int foo4 = 4;
-  int foo5 = 5;
-  int foo6 = 6;
-  int foo7 = 7;
-  int foo8 = 8;
-  int foo9 = 9;
+  int foo01 = 1;
+  int foo02 = 2;
+  int foo03 = 3;
+  int foo04 = 4;
+  int foo05 = 5;
+  int foo06 = 6;
+  int foo07 = 7;
+  int foo08 = 8;
+  int foo09 = 9;
   int foo10 = 10;
   int foo11 = 11;
   int foo12 = 12;
@@ -68,14 +90,77 @@ struct FooMax {
   int foo37 = 37;
   int foo38 = 38;
   int foo39 = 39;
+  int foo101 = 1;
+  int foo102 = 2;
+  int foo103 = 3;
+  int foo104 = 4;
+  int foo105 = 5;
+  int foo106 = 6;
+  int foo107 = 7;
+  int foo108 = 8;
+  int foo109 = 9;
+  int foo110 = 10;
+  int foo111 = 11;
+  int foo112 = 12;
+  int foo113 = 13;
+  int foo114 = 14;
+  int foo115 = 15;
+  int foo116 = 16;
+  int foo117 = 17;
+  int foo118 = 18;
+  int foo119 = 19;
+  int foo120 = 20;
+  int foo121 = 21;
+  int foo122 = 22;
+  int foo123 = 23;
+  int foo124 = 24;
+  int foo125 = 25;
+  int foo126 = 26;
+  int foo127 = 27;
+  int foo128 = 28;
+  int foo129 = 29;
+  int foo130 = 30;
+  int foo131 = 31;
+  int foo132 = 32;
+  int foo133 = 33;
+  int foo134 = 34;
+  int foo135 = 35;
+  int foo136 = 36;
+  int foo137 = 37;
+  int foo138 = 38;
+  int foo139 = 39;
 };
 
-BOOST_AUTO_TEST_CASE(TestStructToTuple)
+struct FooNested {
+  int foo;
+};
+
+struct Foo2 {
+  FooNested foo{
+    .foo = 100};
+  FooNested foo2{
+    .foo = 20};
+  int foo3 = 40;
+};
+
+TEST_CASE("TestStructToTuple")
 {
   FooMax fooMax;
 
   auto t5 = o2::framework::homogeneous_apply_refs([](auto i) -> bool { return i > 20; }, fooMax);
-  BOOST_CHECK_EQUAL(t5[0], false);
-  BOOST_CHECK_EQUAL(t5[19], false);
-  BOOST_CHECK_EQUAL(t5[20], true);
+  REQUIRE(t5[0] == false);
+  REQUIRE(t5[19] == false);
+  REQUIRE(t5[20] == true);
+  Foo2 nestedFoo;
+  auto t6 = o2::framework::homogeneous_apply_refs([](auto e) -> bool {
+    if constexpr (std::is_same_v<decltype(e), FooNested>) {
+      o2::framework::homogeneous_apply_refs([](auto n) -> bool { return n > 20; }, e);
+      return true;
+    } else {
+      return e > 20;
+    }
+  },
+                                                  nestedFoo);
+  REQUIRE(t6.size() == 3);
+  REQUIRE(t6[0] == true);
 }

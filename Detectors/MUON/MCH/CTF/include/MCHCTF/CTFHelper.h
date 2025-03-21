@@ -35,7 +35,7 @@ class CTFHelper
 
   CTFHeader createHeader()
   {
-    CTFHeader h{0, 1, 0, // dummy timestamp, version 1.0
+    CTFHeader h{o2::detectors::DetID::MCH, 0, 1, 0, // dummy timestamp, version 1.0
                 uint32_t(mROFData.size()), uint32_t(mDigData.size()), 0, 0};
     if (mROFData.size()) {
       h.firstOrbit = mROFData[0].getBCData().orbit;
@@ -52,7 +52,7 @@ class CTFHelper
   class _Iter
   {
    public:
-    using difference_type = int64_t;
+    using difference_type = std::ptrdiff_t;
     using value_type = T;
     using pointer = const T*;
     using reference = const T&;
@@ -61,52 +61,98 @@ class CTFHelper
     _Iter(const gsl::span<const D>& data, bool end = false) : mData(data), mIndex(end ? M * data.size() : 0){};
     _Iter() = default;
 
-    const I& operator++()
+    inline I& operator++() noexcept
     {
       ++mIndex;
-      return (I&)(*this);
+      return static_cast<I&>(*this);
     }
 
-    const I& operator--()
+    inline I operator++(int)
+    {
+      I res = *(static_cast<I*>(this));
+      ++mIndex;
+      return res;
+    }
+
+    inline I& operator--() noexcept
     {
       mIndex--;
-      return (I&)(*this);
+      return static_cast<I&>(*this);
     }
 
-    difference_type operator-(const I& other) const { return mIndex - other.mIndex; }
-
-    difference_type operator-(size_t idx) const { return mIndex - idx; }
-
-    const I& operator-(size_t idx)
+    inline I operator--(int)
     {
-      mIndex -= idx;
-      return (I&)(*this);
+      I res = *(static_cast<I*>(this));
+      --mIndex;
+      return res;
     }
 
-    bool operator!=(const I& other) const { return mIndex != other.mIndex; }
-    bool operator==(const I& other) const { return mIndex == other.mIndex; }
-    bool operator>(const I& other) const { return mIndex > other.mIndex; }
-    bool operator<(const I& other) const { return mIndex < other.mIndex; }
+    I& operator+=(difference_type i) noexcept
+    {
+      mIndex += i;
+      return static_cast<I&>(*this);
+    }
+
+    I operator+(difference_type i) const
+    {
+      I res = *(const_cast<I*>(static_cast<const I*>(this)));
+      return res += i;
+    }
+
+    I& operator-=(difference_type i) noexcept
+    {
+      mIndex -= i;
+      return static_cast<I&>(*this);
+    }
+
+    I operator-(difference_type i) const
+    {
+      I res = *(const_cast<I*>(static_cast<const I*>(this)));
+      return res -= i;
+    }
+
+    difference_type operator-(const I& other) const noexcept { return mIndex - other.mIndex; }
+
+    inline friend I operator+(difference_type i, const I& iter) { return iter + i; };
+
+    bool operator!=(const I& other) const noexcept { return mIndex != other.mIndex; }
+    bool operator==(const I& other) const noexcept { return mIndex == other.mIndex; }
+    bool operator>(const I& other) const noexcept { return mIndex > other.mIndex; }
+    bool operator<(const I& other) const noexcept { return mIndex < other.mIndex; }
+    bool operator>=(const I& other) const noexcept { return mIndex >= other.mIndex; }
+    bool operator<=(const I& other) const noexcept { return mIndex <= other.mIndex; }
 
    protected:
     gsl::span<const D> mData{};
-    size_t mIndex = 0;
+    difference_type mIndex = 0;
   };
 
   //_______________________________________________
   // BC difference wrt previous if in the same orbit, otherwise the abs.value.
   // For the very 1st entry return 0 (diff wrt 1st BC in the CTF header)
-  class Iter_bcIncROF : public _Iter<Iter_bcIncROF, ROFRecord, uint16_t>
+  class Iter_bcIncROF : public _Iter<Iter_bcIncROF, ROFRecord, int16_t>
   {
    public:
-    using _Iter<Iter_bcIncROF, ROFRecord, uint16_t>::_Iter;
+    using _Iter<Iter_bcIncROF, ROFRecord, int16_t>::_Iter;
     value_type operator*() const
     {
       if (mIndex) {
         if (mData[mIndex].getBCData().orbit == mData[mIndex - 1].getBCData().orbit) {
-          return mData[mIndex].getBCData().bc - mData[mIndex - 1].getBCData().bc;
+          return value_type(mData[mIndex].getBCData().bc - mData[mIndex - 1].getBCData().bc);
         } else {
-          return mData[mIndex].getBCData().bc;
+          return value_type(mData[mIndex].getBCData().bc);
+        }
+      }
+      return 0;
+    }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      if (id) {
+        if (mData[id].getBCData().orbit == mData[id - 1].getBCData().orbit) {
+          return value_type(mData[id].getBCData().bc - mData[id - 1].getBCData().bc);
+        } else {
+          return value_type(mData[id].getBCData().bc);
         }
       }
       return 0;
@@ -115,11 +161,16 @@ class CTFHelper
 
   //_______________________________________________
   // Orbit difference wrt previous. For the very 1st entry return 0 (diff wrt 1st BC in the CTF header)
-  class Iter_orbitIncROF : public _Iter<Iter_orbitIncROF, ROFRecord, uint32_t>
+  class Iter_orbitIncROF : public _Iter<Iter_orbitIncROF, ROFRecord, int32_t>
   {
    public:
-    using _Iter<Iter_orbitIncROF, ROFRecord, uint32_t>::_Iter;
-    value_type operator*() const { return mIndex ? mData[mIndex].getBCData().orbit - mData[mIndex - 1].getBCData().orbit : 0; }
+    using _Iter<Iter_orbitIncROF, ROFRecord, int32_t>::_Iter;
+    value_type operator*() const { return value_type(mIndex ? mData[mIndex].getBCData().orbit - mData[mIndex - 1].getBCData().orbit : 0); }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      return value_type(id ? mData[id].getBCData().orbit - mData[id - 1].getBCData().orbit : 0);
+    }
   };
 
   //_______________________________________________
@@ -129,6 +180,7 @@ class CTFHelper
    public:
     using _Iter<Iter_nDigitsROF, ROFRecord, uint32_t>::_Iter;
     value_type operator*() const { return mData[mIndex].getNEntries(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].getNEntries(); }
   };
 
   //_______________________________________________
@@ -137,6 +189,7 @@ class CTFHelper
    public:
     using _Iter<Iter_tfTime, Digit, int32_t>::_Iter;
     value_type operator*() const { return mData[mIndex].getTime(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].getTime(); }
   };
 
   //_______________________________________________
@@ -145,6 +198,7 @@ class CTFHelper
    public:
     using _Iter<Iter_nSamples, Digit, uint16_t>::_Iter;
     value_type operator*() const { return mData[mIndex].getNofSamples(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].getNofSamples(); }
   };
 
   //_______________________________________________
@@ -153,6 +207,7 @@ class CTFHelper
    public:
     using _Iter<Iter_isSaturated, Digit, uint8_t>::_Iter;
     value_type operator*() const { return mData[mIndex].isSaturated(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].isSaturated(); }
   };
 
   //_______________________________________________
@@ -161,6 +216,7 @@ class CTFHelper
    public:
     using _Iter<Iter_detID, Digit, int16_t>::_Iter;
     value_type operator*() const { return mData[mIndex].getDetID(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].getDetID(); }
   };
 
   //_______________________________________________
@@ -169,6 +225,7 @@ class CTFHelper
    public:
     using _Iter<Iter_padID, Digit, int16_t>::_Iter;
     value_type operator*() const { return mData[mIndex].getPadID(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].getPadID(); }
   };
 
   //_______________________________________________
@@ -177,6 +234,7 @@ class CTFHelper
    public:
     using _Iter<Iter_ADC, Digit, uint32_t>::_Iter;
     value_type operator*() const { return mData[mIndex].getADC(); }
+    value_type operator[](difference_type i) const { return mData[mIndex + i].getADC(); }
   };
 
   //<<< =========================== ITERATORS ========================================

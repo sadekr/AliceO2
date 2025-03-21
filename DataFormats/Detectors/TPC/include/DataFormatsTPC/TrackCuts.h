@@ -37,18 +37,25 @@ class TrackCuts
 {
  public:
   TrackCuts() = default;
-  TrackCuts(float PMin, float PMax, float NClusMin);
+  TrackCuts(float PMin, float PMax, float NClusMin, float dEdxMin = 0, float dEdxMax = 1e10);
 
   bool goodTrack(o2::tpc::TrackTPC const& track);
 
   void setPMin(float PMin) { mPMin = PMin; }
   void setPMax(float PMax) { mPMax = PMax; }
   void setNClusMin(float NClusMin) { mNClusMin = NClusMin; }
+  void setdEdxMin(float dEdxMin) { mdEdxMin = dEdxMin; }
+  void setdEdxMax(float dEdxMax) { mdEdxMax = dEdxMax; }
+  /// try to remove looper cutting on (abs(z_out) - abs(z_in)) < -10), not very precise
+  void setCutLooper(bool cut) { mCutLooper = cut; }
 
  private:
-  float mPMin{0};     // min momentum allowed
-  float mPMax{1e10};  // max momentum allowed
-  float mNClusMin{0}; // min number of clusters in track allowed
+  float mPMin{0};         ///< min momentum allowed
+  float mPMax{1e10};      ///< max momentum allowed
+  float mNClusMin{0};     ///< min number of clusters in track allowed
+  float mdEdxMin{0};      ///< min dEdx
+  float mdEdxMax{1e10};   ///< max dEdx
+  bool mCutLooper{false}; ///< cut looper comparing zout-zin
 
   ClassDefNV(TrackCuts, 1)
 };

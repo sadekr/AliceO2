@@ -10,19 +10,25 @@
 // or submit itself to any jurisdiction.
 
 #include <cmath>
+#include <memory>
 #include <regex>
 #include <string>
+#include <string_view>
 #include <fmt/format.h>
 #include <fmt/printf.h>
 
 #include "TSystem.h"
 #include "TObject.h"
+#include "TClass.h"
+#include "TKey.h"
 #include "TObjArray.h"
 #include "TCanvas.h"
 #include "TH1.h"
 #include "TFile.h"
 #include "TChain.h"
+#include "TGrid.h"
 
+#include "CommonUtils/StringUtils.h"
 #include "Framework/Logger.h"
 #include "TPCBase/Mapper.h"
 #include "TPCBase/Utils.h"
@@ -65,7 +71,6 @@ TH1* utils::getBinInfoXY(int& binx, int& biny, float& bincx, float& bincy)
   biny = h->GetYaxis()->FindBin(y);
   bincx = h->GetXaxis()->GetBinCenter(binx);
   bincy = h->GetYaxis()->GetBinCenter(biny);
-  //printf("binx, biny: %d %d\n",binx,biny);
 
   return h;
 }
@@ -100,58 +105,92 @@ void utils::addFECInfo()
   }
   const int nPads = mapper.getNumberOfPadsInRowROC(roc, row);
   const int pad = cpad + nPads / 2;
-  //printf("row %d, cpad %d, pad %d, nPads %d\n", row, cpad, pad, nPads);
   if (pad < 0 || pad >= (int)nPads) {
     return;
   }
   const int channel = mapper.getPadNumberInROC(PadROCPos(roc, row, pad));
+  const int padOffset = (roc > 35) * Mapper::getPadsInIROC();
 
   const auto& fecInfo = mapper.getFECInfo(PadROCPos(roc, row, pad));
+  const int cruNumber = mapper.getCRU(ROC(roc).getSector(), channel + padOffset);
+  const CRU cru(cruNumber);
+  const PartitionInfo& partInfo = mapper.getMapPartitionInfo()[cru.partition()];
+  const int nFECs = partInfo.getNumberOfFECs();
+  const int fecOffset = (nFECs + 1) / 2;
+  const int fecInPartition = fecInfo.getIndex() - partInfo.getSectorFECOffset();
+  const int dataWrapperID = fecInPartition >= fecOffset;
+  const int globalLinkID = (fecInPartition % fecOffset) + dataWrapperID * 12;
 
   const std::string title = fmt::format(
     "#splitline{{#lower[.1]{{#scale[.5]{{"
     "{}{:02d} ({:02d}) row: {:02d}, pad: {:03d}, globalpad: {:05d} (in roc)"
     "}}}}}}{{#scale[.5]{{FEC: "
-    "{:02d}, Chip: {:02d}, Chn: {:02d}, Value: {:.3f}"
+    "{:02d}, Chip: {:02d}, Chn: {:02d}, CRU: {:d}, Link: {:02d} ({}{:02d}), Value: {:.3f}"
     "}}}}",
-    (roc / 18 % 2 == 0) ? "A" : "C", roc % 18, roc, row, pad, channel, fecInfo.getIndex(), fecInfo.getSampaChip(), fecInfo.getSampaChannel(), binValue);
+    (roc / 18 % 2 == 0) ? "A" : "C", roc % 18, roc, row, pad, channel, fecInfo.getIndex(), fecInfo.getSampaChip(),
+    fecInfo.getSampaChannel(), cruNumber % CRU::CRUperSector, globalLinkID, dataWrapperID ? "B" : "A", globalLinkID % 12, binValue);
 
   h->SetTitle(title.data());
 }
 
-void utils::saveCanvases(TObjArray& arr, std::string_view outDir, std::string_view types, std::string_view rootFileName)
+void utils::saveCanvases(TObjArray& arr, std::string_view outDir, std::string_view types, std::string_view singleOutFileName, std::string nameAdd)
 {
-  for (auto c : arr) {
-    utils::saveCanvas(*static_cast<TCanvas*>(c), outDir, types);
+  if (types.size()) {
+    for (auto c : arr) {
+      utils::saveCanvas(*static_cast<TCanvas*>(c), outDir, types, nameAdd);
+    }
   }
 
-  if (rootFileName.size()) {
-    std::unique_ptr<TFile> outFile(TFile::Open(fmt::format("{}/NoiseAndPedestalCanvases.root", outDir).data(), "recreate"));
-    arr.Write(arr.GetName(), TObject::kSingleKey);
-    outFile->Close();
+  if (singleOutFileName.size()) {
+    const auto outFileNames = o2::utils::Str::tokenize(singleOutFileName.data(), ',');
+    for (const auto& outFileName : outFileNames) {
+      auto fileName = fmt::format("{}/{}", outDir, outFileName);
+      if (o2::utils::Str::endsWith(outFileName, ".root")) {
+        std::unique_ptr<TFile> outFile(TFile::Open(fileName.data(), "recreate"));
+        arr.Write(arr.GetName(), TObject::kSingleKey);
+        outFile->Close();
+      } else if (o2::utils::Str::endsWith(outFileName, ".pdf")) {
+        const auto nCanv = arr.GetEntries();
+        for (int i = 0; i < nCanv; ++i) {
+          auto fileName2 = fileName;
+          if (i == 0) {
+            fileName2 += "(";
+          } else if (i == nCanv - 1) {
+            fileName2 += ")";
+          }
+          auto c = static_cast<TCanvas*>(arr.UncheckedAt(i));
+          c->Print(fileName2.data(), fmt::format("Title:{}", c->GetTitle()).data());
+        }
+      }
+    }
   }
 }
 
-void utils::saveCanvases(std::vector<TCanvas*> canvases, std::string_view outDir, std::string_view types, std::string_view rootFileName)
+void utils::saveCanvases(std::vector<TCanvas*>& canvases, std::string_view outDir, std::string_view types, std::string_view singleOutFileName, std::string nameAdd)
 {
   TObjArray arr;
   for (auto c : canvases) {
     arr.Add(c);
   }
 
-  saveCanvases(arr, outDir, types, rootFileName);
+  saveCanvases(arr, outDir, types, singleOutFileName, nameAdd);
 }
 
-void utils::saveCanvas(TCanvas& c, std::string_view outDir, std::string_view types)
+void utils::saveCanvas(TCanvas& c, std::string_view outDir, std::string_view types, std::string nameAdd)
 {
+  if (!types.size()) {
+    return;
+  }
   const auto typesVec = tokenize(types, ",");
   for (const auto& type : typesVec) {
-    c.SaveAs(fmt::format("{}/{}.{}", outDir, c.GetName(), type).data());
+    c.SaveAs(fmt::format("{}/{}{}.{}", outDir, c.GetName(), nameAdd, type).data());
   }
 }
 
 std::vector<CalPad*> utils::readCalPads(const std::string_view fileName, const std::vector<std::string>& calPadNames)
 {
+  using CalPadMapType = std::unordered_map<std::string, CalPad>;
+
   std::vector<CalPad*> calPads(calPadNames.size());
 
   std::unique_ptr<TFile> file(TFile::Open(fileName.data()));
@@ -159,8 +198,19 @@ std::vector<CalPad*> utils::readCalPads(const std::string_view fileName, const s
     return calPads;
   }
 
-  for (size_t iCalPad = 0; iCalPad < calPadNames.size(); ++iCalPad) {
-    file->GetObject(calPadNames[iCalPad].data(), calPads[iCalPad]);
+  // check if we have a map of calPads
+  auto firstKey = (TKey*)file->GetListOfKeys()->At(0);
+  const auto clMap = TClass::GetClass(typeid(CalPadMapType));
+  if (std::string_view(firstKey->GetClassName()) == std::string_view(clMap->GetName())) {
+    auto calPadMap = firstKey->ReadObject<CalPadMapType>();
+    for (size_t iCalPad = 0; iCalPad < calPadNames.size(); ++iCalPad) {
+      calPads[iCalPad] = new CalPad(calPadMap->at(calPadNames[iCalPad]));
+    }
+    delete calPadMap;
+  } else {
+    for (size_t iCalPad = 0; iCalPad < calPadNames.size(); ++iCalPad) {
+      file->GetObject(calPadNames[iCalPad].data(), calPads[iCalPad]);
+    }
   }
 
   return calPads;
@@ -225,7 +275,7 @@ void utils::mergeCalPads(std::string_view outputFileName, std::string_view input
 }
 
 //______________________________________________________________________________
-TChain* utils::buildChain(std::string_view command, std::string_view treeName, std::string_view treeTitle)
+TChain* utils::buildChain(std::string_view command, std::string_view treeName, std::string_view treeTitle, bool checkSubDir)
 {
   const TString files = gSystem->GetFromPipe(command.data());
   std::unique_ptr<TObjArray> arrFiles(files.Tokenize("\n"));
@@ -236,8 +286,31 @@ TChain* utils::buildChain(std::string_view command, std::string_view treeName, s
 
   auto c = new TChain(treeName.data(), treeTitle.data());
   for (const auto o : *arrFiles) {
-    LOGP(info, "Adding file '{}'", o->GetName());
-    c->AddFile(o->GetName());
+    if (o2::utils::Str::beginsWith(o->GetName(), "alien://") && !gGrid && !TGrid::Connect("alien://")) {
+      LOGP(fatal, "could not open alien connection to read {}", o->GetName());
+    }
+
+    if (checkSubDir) {
+      std::unique_ptr<TFile> f(TFile::Open(o->GetName()));
+      if (!f->IsOpen() || f->IsZombie()) {
+        continue;
+      }
+      for (auto ok : *f->GetListOfKeys()) {
+        auto k = static_cast<TKey*>(ok);
+        if (std::string_view(k->GetClassName()) != "TDirectoryFile") {
+          continue;
+        }
+        auto df = f->Get<TDirectoryFile>(k->GetName());
+        if (df->GetListOfKeys() && df->GetListOfKeys()->FindObject(treeName.data())) {
+          const auto fullTreePath = fmt::format("{}/{}", df->GetName(), treeName);
+          c->AddFile(o->GetName(), TTree::kMaxEntries, fullTreePath.data());
+          LOGP(info, "Adding file '{}', with tree {}", o->GetName(), fullTreePath);
+        }
+      }
+    } else {
+      LOGP(info, "Adding file '{}'", o->GetName());
+      c->AddFile(o->GetName());
+    }
   }
 
   return c;

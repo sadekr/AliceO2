@@ -24,11 +24,13 @@
 #include "DataFormatsTPC/ClusterNativeHelper.h"
 #include "TPCReconstruction/TPCFastTransformHelperO2.h"
 
+#include "CorrectionMapsHelper.h"
 #include "TPCFastTransform.h"
-#include "TPCdEdxCalibrationSplines.h"
 #include "GPUO2Interface.h"
+#include "GPUO2InterfaceUtils.h"
 #include "GPUO2InterfaceConfiguration.h"
 #include "TPCPadGainCalib.h"
+#include "CalibdEdxContainer.h"
 
 using namespace o2::gpu;
 
@@ -59,26 +61,28 @@ BOOST_AUTO_TEST_CASE(CATracking_test1)
   config.configProcessing.ompThreads = 4;         //4 threads if we run on the CPU, 1 = default, 0 = auto-detect
   config.configProcessing.runQA = false;          //Run QA after tracking
   config.configProcessing.eventDisplay = nullptr; //Ptr to event display backend, for running standalone OpenGL event display
-  //config.configProcessing.eventDisplay = new GPUDisplayBackendGlfw;
 
-  config.configGRP.solenoidBz = solenoidBz;
-  config.configGRP.continuousMaxTimeBin = continuous ? GPUSettings::TPC_MAX_TF_TIME_BIN : 0; //Number of timebins in timeframe if continuous, 0 otherwise
+  config.configGRP.solenoidBzNominalGPU = solenoidBz;
+  config.configGRP.grpContinuousMaxTimeBin = continuous ? GPUSettings::TPC_MAX_TF_TIME_BIN : 0; // Number of timebins in timeframe if continuous, 0 otherwise
 
   config.configReconstruction.tpc.nWays = 3;               //Should always be 3!
   config.configReconstruction.tpc.nWaysOuter = true;       //Will create outer param for TRD
   config.configReconstruction.tpc.searchWindowDZDR = 2.5f; //Should always be 2.5 for looper-finding and/or continuous tracking
   config.configReconstruction.tpc.trackReferenceX = refX;
 
-  config.configWorkflow.steps.set(GPUDataTypes::RecoStep::TPCConversion, GPUDataTypes::RecoStep::TPCSliceTracking,
+  config.configWorkflow.steps.set(GPUDataTypes::RecoStep::TPCConversion, GPUDataTypes::RecoStep::TPCSectorTracking,
                                   GPUDataTypes::RecoStep::TPCMerging, GPUDataTypes::RecoStep::TPCCompression, GPUDataTypes::RecoStep::TPCdEdx);
   config.configWorkflow.inputs.set(GPUDataTypes::InOutType::TPCClusters);
   config.configWorkflow.outputs.set(GPUDataTypes::InOutType::TPCMergedTracks);
 
   std::unique_ptr<TPCFastTransform> fastTransform(TPCFastTransformHelperO2::instance()->create(0));
+  std::unique_ptr<CorrectionMapsHelper> fastTransformHelper(new CorrectionMapsHelper());
+  fastTransformHelper->setCorrMap(fastTransform.get());
   config.configCalib.fastTransform = fastTransform.get();
-  std::unique_ptr<o2::gpu::TPCdEdxCalibrationSplines> dEdxSplines = GPUO2Interface::getdEdxCalibrationSplinesDefault();
-  config.configCalib.dEdxSplines = dEdxSplines.get();
-  std::unique_ptr<TPCPadGainCalib> gainCalib = GPUO2Interface::getPadGainCalibDefault();
+  config.configCalib.fastTransformHelper = fastTransformHelper.get();
+  auto dEdxCalibContainer = GPUO2InterfaceUtils::getCalibdEdxContainerDefault();
+  config.configCalib.dEdxCalibContainer = dEdxCalibContainer.get();
+  std::unique_ptr<TPCPadGainCalib> gainCalib = GPUO2InterfaceUtils::getPadGainCalibDefault();
   config.configCalib.tpcPadGain = gainCalib.get();
 
   tracker.Initialize(config);

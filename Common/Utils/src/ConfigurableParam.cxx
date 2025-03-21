@@ -9,11 +9,13 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-//first version 8/2018, Sandro Wenzel
+// first version 8/2018, Sandro Wenzel
 
 #include "CommonUtils/ConfigurableParam.h"
 #include "CommonUtils/StringUtils.h"
 #include "CommonUtils/KeyValParam.h"
+#include "CommonUtils/ConfigurableParamReaders.h"
+#define BOOST_BIND_GLOBAL_PLACEHOLDERS
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/ini_parser.hpp>
@@ -29,7 +31,7 @@
 #include <cassert>
 #include <iostream>
 #include <string>
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 #include <typeinfo>
 #include "TDataMember.h"
 #include "TDataType.h"
@@ -46,7 +48,6 @@ std::vector<ConfigurableParam*>* ConfigurableParam::sRegisteredParamClasses = nu
 boost::property_tree::ptree* ConfigurableParam::sPtree = nullptr;
 std::map<std::string, std::pair<std::type_info const&, void*>>* ConfigurableParam::sKeyToStorageMap = nullptr;
 std::map<std::string, ConfigurableParam::EParamProvenance>* ConfigurableParam::sValueProvenanceMap = nullptr;
-std::string ConfigurableParam::sInputDir = "";
 std::string ConfigurableParam::sOutputDir = "";
 EnumRegistry* ConfigurableParam::sEnumRegistry = nullptr;
 
@@ -71,7 +72,7 @@ bool keyInTree(boost::property_tree::ptree* pt, const std::string& key)
   try {
     reply = pt->get_optional<std::string>(key).is_initialized();
   } catch (std::exception const& e) {
-    LOG(ERROR) << "ConfigurableParam: Exception when checking for key " << key << " : " << e.what();
+    LOG(error) << "ConfigurableParam: Exception when checking for key " << key << " : " << e.what();
   }
   return reply;
 }
@@ -105,7 +106,7 @@ void EnumRegistry::add(const std::string& key, const TDataMember* dm)
   //   auto opt = (TOptionListItem*)opts->At(i);
   //   std::pair<std::string, int> val(opt->fOptName, (int)opt->fValue);
   //   legalVals.vvalues.push_back(val);
-  //   LOG(INFO) << "Adding legal value " << val.first << " " << val.second;
+  //   LOG(info) << "Adding legal value " << val.first << " " << val.second;
   // }
 
   auto entry = std::pair<std::string, EnumLegalValues>(key, legalVals);
@@ -121,7 +122,6 @@ std::string EnumRegistry::toString() const
     out.append("\n");
   }
 
-  LOG(INFO) << out;
   return out;
 }
 
@@ -171,7 +171,7 @@ int EnumLegalValues::getIntValue(const std::string& value) const
 void ConfigurableParam::writeINI(std::string const& filename, std::string const& keyOnly)
 {
   if (sOutputDir == "/dev/null") {
-    LOG(DEBUG) << "ignoring writing of ini file " << filename;
+    LOG(debug) << "ignoring writing of ini file " << filename;
     return;
   }
   auto outfilename = o2::utils::Str::concat_string(sOutputDir, filename);
@@ -182,7 +182,7 @@ void ConfigurableParam::writeINI(std::string const& filename, std::string const&
       kTree.add_child(keyOnly, sPtree->get_child(keyOnly));
       boost::property_tree::write_ini(outfilename, kTree);
     } catch (const boost::property_tree::ptree_bad_path& err) {
-      LOG(FATAL) << "non-existing key " << keyOnly << " provided to writeINI";
+      LOG(fatal) << "non-existing key " << keyOnly << " provided to writeINI";
     }
   } else {
     boost::property_tree::write_ini(outfilename, *sPtree);
@@ -191,55 +191,30 @@ void ConfigurableParam::writeINI(std::string const& filename, std::string const&
 
 // ------------------------------------------------------------------
 
-boost::property_tree::ptree ConfigurableParam::readConfigFile(std::string const& filepath)
+bool ConfigurableParam::configFileExists(std::string const& filepath)
 {
-  auto inpfilename = o2::utils::Str::concat_string(sInputDir, filepath);
-  if (!std::filesystem::exists(inpfilename)) {
-    LOG(FATAL) << inpfilename << " : config file does not exist!";
-  }
-
-  boost::property_tree::ptree pt;
-
-  if (boost::iends_with(inpfilename, ".ini")) {
-    pt = readINI(inpfilename);
-  } else if (boost::iends_with(inpfilename, ".json")) {
-    pt = readJSON(inpfilename);
-  } else {
-    LOG(FATAL) << "Configuration file must have either .ini or .json extension";
-  }
-
-  return pt;
+  return std::filesystem::exists(o2::utils::Str::concat_string(ConfigurableParamReaders::getInputDir(), filepath));
 }
 
 // ------------------------------------------------------------------
 
-boost::property_tree::ptree ConfigurableParam::readINI(std::string const& filepath)
+void ConfigurableParam::setValue(std::string const& key, std::string const& valuestring)
 {
-  boost::property_tree::ptree pt;
-  try {
-    boost::property_tree::read_ini(filepath, pt);
-  } catch (const boost::property_tree::ptree_error& e) {
-    LOG(FATAL) << "Failed to read INI config file " << filepath << " (" << e.what() << ")";
-  } catch (...) {
-    LOG(FATAL) << "Unknown error when reading INI config file ";
+  if (!sIsFullyInitialized) {
+    initialize();
   }
-
-  return pt;
-}
-
-// ------------------------------------------------------------------
-
-boost::property_tree::ptree ConfigurableParam::readJSON(std::string const& filepath)
-{
-  boost::property_tree::ptree pt;
-
+  assert(sPtree);
   try {
-    boost::property_tree::read_json(filepath, pt);
-  } catch (const boost::property_tree::ptree_error& e) {
-    LOG(FATAL) << "Failed to read JSON config file " << filepath << " (" << e.what() << ")";
+    if (sPtree->get_optional<std::string>(key).is_initialized()) {
+      sPtree->put(key, valuestring);
+      auto changed = updateThroughStorageMapWithConversion(key, valuestring);
+      if (changed != EParamUpdateStatus::Failed) {
+        sValueProvenanceMap->find(key)->second = kRT; // set to runtime
+      }
+    }
+  } catch (std::exception const& e) {
+    std::cerr << "Error in setValue (string) " << e.what() << "\n";
   }
-
-  return pt;
 }
 
 // ------------------------------------------------------------------
@@ -247,10 +222,10 @@ boost::property_tree::ptree ConfigurableParam::readJSON(std::string const& filep
 void ConfigurableParam::writeJSON(std::string const& filename, std::string const& keyOnly)
 {
   if (sOutputDir == "/dev/null") {
-    LOG(INFO) << "ignoring writing of json file " << filename;
+    LOG(info) << "ignoring writing of json file " << filename;
     return;
   }
-  initPropertyTree();     // update the boost tree before writing
+  initPropertyTree(); // update the boost tree before writing
   auto outfilename = o2::utils::Str::concat_string(sOutputDir, filename);
   if (!keyOnly.empty()) { // write ini for selected key only
     try {
@@ -258,7 +233,7 @@ void ConfigurableParam::writeJSON(std::string const& filename, std::string const
       kTree.add_child(keyOnly, sPtree->get_child(keyOnly));
       boost::property_tree::write_json(outfilename, kTree);
     } catch (const boost::property_tree::ptree_bad_path& err) {
-      LOG(FATAL) << "non-existing key " << keyOnly << " provided to writeJSON";
+      LOG(fatal) << "non-existing key " << keyOnly << " provided to writeJSON";
     }
   } else {
     boost::property_tree::write_json(outfilename, *sPtree);
@@ -277,14 +252,14 @@ void ConfigurableParam::initPropertyTree()
 
 // ------------------------------------------------------------------
 
-void ConfigurableParam::printAllKeyValuePairs()
+void ConfigurableParam::printAllKeyValuePairs(bool useLogger)
 {
   if (!sIsFullyInitialized) {
     initialize();
   }
   std::cout << "####\n";
   for (auto p : *sRegisteredParamClasses) {
-    p->printKeyValues(true);
+    p->printKeyValues(true, useLogger);
   }
   std::cout << "----\n";
 }
@@ -401,7 +376,7 @@ void ConfigurableParam::updateFromFile(std::string const& configFile, std::strin
     return;
   }
 
-  boost::property_tree::ptree pt = readConfigFile(cfgfile);
+  boost::property_tree::ptree pt = ConfigurableParamReaders::readConfigFile(cfgfile);
 
   std::vector<std::pair<std::string, std::string>> keyValPairs;
   auto request = o2::utils::Str::tokenize(paramsList, ',', true);
@@ -433,9 +408,9 @@ void ConfigurableParam::updateFromFile(std::string const& configFile, std::strin
       }
     }
   } catch (std::exception const& error) {
-    LOG(ERROR) << "Error while updating params " << error.what();
+    LOG(error) << "Error while updating params " << error.what();
   } catch (...) {
-    LOG(ERROR) << "Unknown while updating params ";
+    LOG(error) << "Unknown while updating params ";
   }
 
   // make sure all requested params were retrieved
@@ -448,7 +423,7 @@ void ConfigurableParam::updateFromFile(std::string const& configFile, std::strin
   try {
     setValues(keyValPairs);
   } catch (std::exception const& error) {
-    LOG(ERROR) << "Error while setting values " << error.what();
+    LOG(error) << "Error while setting values " << error.what();
   }
 }
 
@@ -472,14 +447,12 @@ void ConfigurableParam::updateFromString(std::string const& configString)
     std::vector<std::pair<std::string, std::string>> pairs;
 
     for (auto& token : tokens) {
-      auto keyval = o2::utils::Str::tokenize(token, '=');
-      if (keyval.size() != 2) {
-        LOG(FATAL) << "Illegal command-line key/value string: " << token;
+      auto s = token.find('=');
+      if (s == 0 || s == std::string::npos || s == token.size() - 1) {
+        LOG(fatal) << "Illegal command-line key/value string: " << token;
         continue;
       }
-
-      std::pair<std::string, std::string> pair = std::make_pair(keyval[0], o2::utils::Str::trim_copy(keyval[1]));
-      pairs.push_back(pair);
+      pairs.emplace_back(token.substr(0, s), token.substr(s + 1, token.size()));
     }
 
     return pairs;
@@ -514,7 +487,7 @@ void ConfigurableParam::updateFromString(std::string const& configString)
 
   const auto& kv = o2::conf::KeyValParam::Instance();
   if (getProvenance("keyval.input_dir") != kCODE) {
-    sInputDir = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(kv.input_dir));
+    ConfigurableParamReaders::setInputDir(o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(kv.input_dir)));
   }
   if (getProvenance("keyval.output_dir") != kCODE) {
     if (kv.output_dir == "/dev/null") {
@@ -533,6 +506,8 @@ void ConfigurableParam::setValues(std::vector<std::pair<std::string, std::string
     return el.size() > 0 && (el.at(0) == '[') && (el.at(el.size() - 1) == ']');
   };
 
+  bool nonFatal = getenv("ALICEO2_CONFIGURABLEPARAM_WRONGKEYISNONFATAL") != nullptr;
+
   // Take a vector of param key/value pairs
   // and update the storage map for each of them by calling setValue.
   // 1. For string/scalar types this is simple.
@@ -545,7 +520,11 @@ void ConfigurableParam::setValues(std::vector<std::pair<std::string, std::string
     std::string value = o2::utils::Str::trim_copy(keyValue.second);
 
     if (!keyInTree(sPtree, key)) {
-      LOG(FATAL) << "Inexistant ConfigurableParam key: " << key;
+      if (nonFatal) {
+        LOG(warn) << "Ignoring non-existent ConfigurableParam key: " << key;
+        continue;
+      }
+      LOG(fatal) << "Inexistant ConfigurableParam key: " << key;
     }
 
     if (sEnumRegistry->contains(key)) {
@@ -590,7 +569,7 @@ void ConfigurableParam::setEnumValue(const std::string& key, const std::string& 
 {
   int val = (*sEnumRegistry)[key]->getIntValue(value);
   if (val == -1) {
-    LOG(FATAL) << "Illegal value "
+    LOG(fatal) << "Illegal value "
                << value << " for enum " << key
                << ". Legal string|int values:\n"
                << (*sEnumRegistry)[key]->toString() << std::endl;
@@ -632,7 +611,7 @@ ConfigurableParam::EParamUpdateStatus ConfigurableParam::updateThroughStorageMap
   auto key = mainkey + "." + subkey;
   auto iter = sKeyToStorageMap->find(key);
   if (iter == sKeyToStorageMap->end()) {
-    LOG(WARN) << "Cannot update parameter " << key << " not found";
+    LOG(warn) << "Cannot update parameter " << key << " not found";
     return ConfigurableParam::EParamUpdateStatus::Failed;
   }
 
@@ -641,7 +620,7 @@ ConfigurableParam::EParamUpdateStatus ConfigurableParam::updateThroughStorageMap
 
   // check that type matches
   if (iter->second.first != tinfo) {
-    LOG(WARN) << "Types do not match; cannot update value";
+    LOG(warn) << "Types do not match; cannot update value";
     return ConfigurableParam::EParamUpdateStatus::Failed;
   }
 
@@ -787,7 +766,7 @@ ConfigurableParam::EParamUpdateStatus ConvertAndCopy<char>(std::string const& va
 {
   int intvalue = boost::lexical_cast<int>(valuestring);
   if (intvalue > std::numeric_limits<char>::max() || intvalue < std::numeric_limits<char>::min()) {
-    LOG(ERROR) << "Cannot assign " << valuestring << " to a char variable";
+    LOG(error) << "Cannot assign " << valuestring << " to a char variable";
     return ConfigurableParam::EParamUpdateStatus::Failed;
   }
   char addr = intvalue;
@@ -803,7 +782,7 @@ ConfigurableParam::EParamUpdateStatus ConvertAndCopy<unsigned char>(std::string 
 {
   unsigned int intvalue = boost::lexical_cast<int>(valuestring);
   if (intvalue > std::numeric_limits<unsigned char>::max() || intvalue < std::numeric_limits<unsigned char>::min()) {
-    LOG(ERROR) << "Cannot assign " << valuestring << " to an unsigned char variable";
+    LOG(error) << "Cannot assign " << valuestring << " to an unsigned char variable";
     return ConfigurableParam::EParamUpdateStatus::Failed;
   }
   unsigned char addr = intvalue;
@@ -819,7 +798,7 @@ ConfigurableParam::EParamUpdateStatus ConfigurableParam::updateThroughStorageMap
   // check if key_exists
   auto iter = sKeyToStorageMap->find(key);
   if (iter == sKeyToStorageMap->end()) {
-    LOG(WARN) << "Cannot update parameter " << key << " (parameter not found) ";
+    LOG(warn) << "Cannot update parameter " << key << " (parameter not found) ";
     return ConfigurableParam::EParamUpdateStatus::Failed;
   }
 

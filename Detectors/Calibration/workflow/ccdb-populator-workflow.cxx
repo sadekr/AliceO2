@@ -12,6 +12,7 @@
 #include "Framework/DataProcessorSpec.h"
 #include "CCDBPopulatorSpec.h"
 #include "CommonUtils/ConfigurableParam.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 
@@ -20,6 +21,7 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 {
   // option allowing to set parameters
   std::vector<o2::framework::ConfigParamSpec> options{
+    {"name-extention", VariantType::String, "", {"optional extention of device name"}},
     {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}}};
 
   std::swap(workflowOptions, options);
@@ -31,7 +33,8 @@ void customize(std::vector<o2::framework::CompletionPolicy>& policies)
   // we customize the pipeline processors to consume data as it comes
   using CompletionPolicy = o2::framework::CompletionPolicy;
   using CompletionPolicyHelpers = o2::framework::CompletionPolicyHelpers;
-  policies.push_back(CompletionPolicyHelpers::defineByName("ccdb-populator.*", CompletionPolicy::CompletionOp::Consume));
+  auto& pol = policies.emplace_back(CompletionPolicyHelpers::defineByName("ccdb-populator.*", CompletionPolicy::CompletionOp::Consume));
+  pol.order = CompletionPolicy::CompletionOrder::Slot;
 }
 
 // ------------------------------------------------------------------
@@ -42,6 +45,6 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
 {
   WorkflowSpec specs;
   o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
-  specs.emplace_back(getCCDBPopulatorDeviceSpec());
+  specs.emplace_back(getCCDBPopulatorDeviceSpec(o2::base::NameConf::getCCDBServer(), configcontext.options().get<std::string>("name-extention")));
   return specs;
 }

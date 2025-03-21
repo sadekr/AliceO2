@@ -13,7 +13,7 @@
 /// \brief GUI (bottom buttons) for visualisation
 /// \author julian.myrcha@cern.ch
 /// \author p.nowakowski@cern.ch
-/// \author m.chwasiuk@cern.ch
+/// \author michal.chwesiuk@cern.ch
 
 #ifndef ALICE_O2_EVENTVISUALISATION_EVENTMANAGERFRAME_H
 #define ALICE_O2_EVENTVISUALISATION_EVENTMANAGERFRAME_H
@@ -23,9 +23,13 @@
 #include <TASImage.h>
 
 class TGTextButton;
+class TGRadioButton;
+class TGButtonGroup;
 class TGCompositeFrame;
 class TGNumberEntry;
 class TGLabel;
+class TGNumberEntryField;
+class TGDoubleHSlider;
 
 namespace o2
 {
@@ -34,25 +38,73 @@ namespace event_visualisation
 
 class EventManagerFrame : public TGMainFrame
 {
+ public:
+  enum DisplayMode { OnlineMode,
+                     SavedMode,
+                     SequentialMode };
+  enum RunMode { NewestRun,
+                 SyntheticRun,
+                 CosmicsRun,
+                 PhysicsRun };
+
  private:
+  static EventManagerFrame* mInstance;     // Instance
+  TGDoubleHSlider* mTimeFrameSlider;       // Slider to narrow TimeFrame data
+  TGNumberEntryField* mTimeFrameSliderMin; // Number entry for slider's min.
+  TGNumberEntryField* mTimeFrameSliderMax; // Number entry for slider's max.
+  TGLabel* mSavedScreenshotFileName;       // name of the saved screenshot file
+  TGTextButton* mOnlineModeBtn;            // needed as we would like to make it selected
+  TGTextButton* mSavedModeBtn;             // needed as we would like to make it shared
+  TGTextButton* mSequentialModeBtn;        // needed as we would like to make it shared
+  TGRadioButton* mNewestRunBtn;            // needed as we would like to control button state
+  TGRadioButton* mSyntheticRunBtn;         // needed as we would like to control button state
+  TGRadioButton* mCosmicsRunBtn;           // needed as we would like to control button state
+  TGRadioButton* mPhysicsRunBtn;           // needed as we would like to control button state
+
   Float_t mTime;  // Auto-load time in seconds
   TTimer* mTimer; // Timer for automatic event loading
   bool mTimerRunning;
   bool inTick = false;
-  bool setInTick();   // try set inTick, return true if set, false if already set
-  void clearInTick(); // safely clears inTick
-  void checkMemory(); // check memory used end exit(-1) if it is too much
-  static TGTextButton* makeButton(TGCompositeFrame* p, const char* txt, Int_t width = 0,
-                                  Int_t lo = 0, Int_t ro = 0, Int_t to = 0, Int_t bo = 0);
-  bool CopyImage(TASImage* dst, TASImage* src, Int_t x_dst, Int_t y_dst, Int_t x_src, Int_t y_src, UInt_t w_src, UInt_t h_src);
+  bool mUpdateGui = true; // gui needs updatinb
+  TString mDefaultDataDirectory;
+  long memoryUsedInfo = 0L; // used to track memory leaks
+  bool setInTick();         // try set inTick, return true if set, false if already set
+  void clearInTick();       // safely clears inTick
+  void checkMemory();       // check memory used end exit(-1) if it is too much
+  void updateGUI();         // updates
+  void changeRunMode(RunMode runMode);
+  static TGTextButton* makeButton(TGCompositeFrame* p, const char* txt, Int_t width = 0, const char* txttooltip = nullptr,
+                                  Int_t lo = 8, Int_t ro = 8, Int_t to = 4, Int_t bo = 4);
+  static TGRadioButton* makeRadioButton(TGButtonGroup* g, const char* txt, Int_t width = 0, const char* txttooltip = nullptr, bool checked = false,
+                                        Int_t lo = 8, Int_t ro = 8, Int_t to = 0, Int_t bo = 0);
+  static TGDoubleHSlider* makeSlider(TGCompositeFrame* p, const char* txt, Int_t width = 0,
+                                     Int_t lo = 2, Int_t ro = 2, Int_t to = 2, Int_t bo = 2);
+  static void makeSliderRangeEntries(TGCompositeFrame* parent, int height,
+                                     TGNumberEntryField*& minEntry, const TString& minToolTip,
+                                     TGNumberEntryField*& maxEntry, const TString& maxToolTip);
+  void createOutreachScreenshot();
 
  protected:
   o2::event_visualisation::EventManager* mEventManager; // Model object.
   TGNumberEntry* mEventId;                              // Display/edit current event id
  public:
+  /// Returns an instance of EventManagerFrame
+  static EventManagerFrame& getInstance();
+  enum ERange {
+    MaxRange = 100
+  };
+  float getMinTimeFrameSliderValue() const;
+  float getMaxTimeFrameSliderValue() const;
+
+  void setRunMode(EventManagerFrame::RunMode runMode);
+
   EventManagerFrame(o2::event_visualisation::EventManager& eventManager);
   ~EventManagerFrame() override;
   ClassDefOverride(EventManagerFrame, 0); // GUI window for AliEveEventManager.
+
+ private:
+  RunMode mRunMode = EventManagerFrame::SyntheticRun;
+  DisplayMode mDisplayMode = EventManagerFrame::OnlineMode;
 
  public: // slots
   void DoFirstEvent();
@@ -65,12 +117,22 @@ class EventManagerFrame : public TGMainFrame
   void DoOnlineMode();
   void DoSavedMode();
   void DoTimeTick();
+  void DoSequentialMode();
+  void DoNewestData();
+  void DoSyntheticData();
+  void DoCosmicsData();
+  void DoPhysicsData();
   void DoTerminate();
   void StopTimer();
   void StartTimer();
+  void DoTimeFrameSliderChanged();
+
+ public: // static functions
+  static std::vector<std::string> getSourceDirectory(EventManagerFrame::RunMode runMode, EventManagerFrame::DisplayMode displayMode);
+  static RunMode decipherRunMode(TString name, RunMode defaultRun = SyntheticRun);
 };
 
 } // namespace event_visualisation
 } // namespace o2
 
-#endif //ALICE_O2_EVENTVISUALISATION_EVENTMANAGERFRAME_H
+#endif // ALICE_O2_EVENTVISUALISATION_EVENTMANAGERFRAME_H

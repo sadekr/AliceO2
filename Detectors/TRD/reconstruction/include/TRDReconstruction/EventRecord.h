@@ -12,12 +12,9 @@
 #ifndef ALICEO2_TRD_EVENTRECORD_H
 #define ALICEO2_TRD_EVENTRECORD_H
 
-#include <iosfwd>
-#include "Rtypes.h"
-#include "TH2F.h"
 #include "CommonDataFormat/InteractionRecord.h"
 #include "CommonDataFormat/RangeReference.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "DataFormatsTRD/Tracklet64.h"
 #include "DataFormatsTRD/RawDataStats.h"
 #include "DataFormatsTRD/Digit.h"
@@ -33,94 +30,92 @@ class TriggerRecord;
 
 /// \class EventRecord
 /// \brief Stores a TRD event
-/// adapted from TriggerRecord
-
 class EventRecord
 {
   using BCData = o2::InteractionRecord;
 
  public:
   EventRecord() = default;
-  EventRecord(BCData& bunchcrossing) : mBCData(bunchcrossing)
-  {
-    mTracklets.reserve(30);
-    mDigits.reserve(20);
-  }
+  EventRecord(BCData bunchcrossing) : mBCData(bunchcrossing) {}
   ~EventRecord() = default;
 
-  void setBCData(const BCData& data) { mBCData = data; }
-
   const BCData& getBCData() const { return mBCData; }
-  BCData& getBCData() { return mBCData; }
 
-  //Digit information
-  std::vector<Digit>& getDigits();
-  void addDigits(Digit& digit);
-  void addDigits(std::vector<Digit>::iterator& start, std::vector<Digit>::iterator& end);
+  void addDigit(Digit digit) { mDigits.push_back(digit); }
+  void addTracklet(Tracklet64 tracklet) { mTracklets.push_back(tracklet); }
 
-  //tracklet information
-  std::vector<Tracklet64>& getTracklets();
-  void addTracklet(Tracklet64& tracklet);
-  void addTracklets(std::vector<Tracklet64>::iterator& start, std::vector<Tracklet64>::iterator& end);
-  void addTracklets(std::vector<Tracklet64>& tracklets);
-  void popTracklets(int popcount);
-  //void printStream(std::ostream& stream) const;
-  void sortByHCID();
+  const std::vector<Digit>& getDigits() const { return mDigits; }
+  const std::vector<Tracklet64>& getTracklets() const { return mTracklets; }
+  bool getIsCalibTrigger() const { return mIsCalibTrigger; }
+  float getTotalTime() const { return mTimeTaken; }
+  float getDigitTime() const { return mTimeTakenForDigits; }
+  float getTrackletTime() const { return mTimeTakenForTracklets; }
+  DataCountersPerTrigger getCounters() const { return mCounters; }
+  DataCountersPerTrigger& getCounters() { return mCounters; }
 
-  bool operator==(const EventRecord& o) const
-  {
-    return mBCData == o.mBCData; //&& mDigits == o.mDigits && mTracklets == o.mTracklets ;
-  }
-  void clear()
-  {
-    mDigits.clear();
-    mTracklets.clear();
-  }
+  // needed, in order to check if a trigger already exist for this bunch crossing
+  bool operator==(const EventRecord& o) const { return mBCData == o.mBCData; }
+
+  // sort the tracklets (and optionally digits) by detector, pad row, pad column
+  void sortData(bool sortDigits);
+
+  void incTrackletTime(float timeadd) { mTimeTakenForTracklets += timeadd; }
+  void incDigitTime(float timeadd) { mTimeTakenForDigits += timeadd; }
+  void incTime(float duration) { mTimeTaken += duration; }
+  void setIsCalibTrigger() { mIsCalibTrigger = true; }
 
  private:
   BCData mBCData;                       /// orbit and Bunch crossing data of the physics trigger
   std::vector<Digit> mDigits{};         /// digit data, for this event
   std::vector<Tracklet64> mTracklets{}; /// tracklet data, for this event
-  o2::trd::TRDDataCountersPerEvent mEventStats;
+  float mTimeTaken = 0.;                // total parsing time [us] (including digit and tracklet parsing time)
+  float mTimeTakenForDigits = 0.;       // time take to process tracklet data blocks [us].
+  float mTimeTakenForTracklets = 0.;    // time take to process digit data blocks [us].
+  bool mIsCalibTrigger = false;         // flag calibration trigger
+  DataCountersPerTrigger mCounters;     // optionally collect statistics per trigger
 };
 
-class EventStorage
+/// \class EventRecordContainer
+/// \brief Stores the TRD data for one TF i.e. a vector of EventRecords and some statistics
+class EventRecordContainer
 {
-  //store a timeframes events for later collating sending on as a message
+
  public:
-  EventStorage() = default;
-  ~EventStorage() = default;
-  //storage of eventrecords
-  //a vector of eventrecords and the associated funationality to go with it.
-  void clear() { mEventRecords.clear(); }
-  void addDigits(InteractionRecord& ir, Digit& digit);
-  void addDigits(InteractionRecord& ir, std::vector<Digit>::iterator start, std::vector<Digit>::iterator end);
-  void addTracklet(InteractionRecord& ir, Tracklet64& tracklet);
-  void addTracklets(InteractionRecord& ir, std::vector<Tracklet64>& tracklets);
-  void addTracklets(InteractionRecord& ir, std::vector<Tracklet64>::iterator& start, std::vector<Tracklet64>::iterator& end);
-  void unpackData(std::vector<TriggerRecord>& triggers, std::vector<Tracklet64>& tracklets, std::vector<Digit>& digits);
-  void sendData(o2::framework::ProcessingContext& pc, bool displaytracklets = false);
-  EventRecord& getEventRecord(InteractionRecord& ir);
-  //this could replace by keeing a running total on addition TODO
-  void sumTrackletsDigitsTriggers(uint64_t& tracklets, uint64_t& digits, uint64_t& triggers);
-  int sumTracklets();
-  int sumDigits();
-  std::vector<Tracklet64>& getTracklets(InteractionRecord& ir);
-  std::vector<Digit>& getDigits(InteractionRecord& ir);
-  void printIR();
-  void setHisto(TH1F* packagetime) { mPackagingTime = packagetime; }
-  //TODO what would be nice is to write this out as a root tree event by event instead of using the sendData method where its all packaged together to then be unpackaged again.
-  TRDDataCountersPerTimeFrame mTFStats;
+  EventRecordContainer() = default;
+  ~EventRecordContainer() = default;
+
+  void sendData(o2::framework::ProcessingContext& pc, bool generatestats, bool sortDigits, bool sendLinkStats);
+
+  void setCurrentEventRecord(const InteractionRecord& ir);
+  EventRecord& getCurrentEventRecord() { return mEventRecords.at(mCurrEventRecord); }
+
+  // statistics to keep
+  void incLinkErrorFlags(int hcid, unsigned int flag) { mTFStats.mLinkErrorFlag[hcid] |= flag; }
+  void incLinkNoData(int hcid) { mTFStats.mLinkNoData[hcid]++; }
+  void incLinkWords(int hcid, int count) { mTFStats.mLinkWords[hcid] += count; }
+  void incLinkWordsRead(int hcid, int count) { mTFStats.mLinkWordsRead[hcid] += count; }
+  void incLinkWordsRejected(int hcid, int count) { mTFStats.mLinkWordsRejected[hcid] += count; }
+  void incMajorVersion(int version) { mTFStats.mDataFormatRead[version]++; }
+
+  void incParsingError(int error, int hcid)
+  {
+    mTFStats.mParsingErrors[error]++;
+    if (hcid >= 0) { // hcid==-1 is reserved for those errors where we don't have the corresponding link ID
+      if (error == NoError) {
+        mTFStats.mParsingOK[hcid]++;
+      } else {
+        mTFStats.mParsingErrorsByLink.push_back(hcid * TRDLastParsingError + error);
+      }
+    }
+  }
+  void reset();
+  void accumulateStats();
 
  private:
+  int mCurrEventRecord = 0;
   std::vector<EventRecord> mEventRecords;
-  //these 2 are hacks to be able to send bak a blank vector if interaction record is not found.
-  std::vector<Tracklet64> mDummyTracklets;
-  std::vector<Digit> mDummyDigits;
-  TH1F* mPackagingTime{nullptr};
+  TRDDataCountersPerTimeFrame mTFStats;
 };
-
-std::ostream& operator<<(std::ostream& stream, const EventRecord& trg);
 
 } // namespace o2::trd
 

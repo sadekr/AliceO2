@@ -14,11 +14,14 @@
 #include <vector>
 
 #include "GlobalTracking/MatchTPCITS.h"
+#include "GlobalTracking/MatchTPCITSParams.h"
 #include "DataFormatsITSMFT/TopologyDictionary.h"
 #include "DataFormatsTPC/Constants.h"
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/Task.h"
 #include "Framework/DataRefUtils.h"
+#include "Framework/CCDBParamSpec.h"
+#include "Framework/DeviceSpec.h"
 #include <string>
 #include "TStopwatch.h"
 #include "Framework/ConfigParamRegistry.h"
@@ -26,7 +29,6 @@
 #include "ReconstructionDataFormats/TrackTPCITS.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "SimulationDataFormat/DigitizationContext.h"
 #include "DataFormatsITS/TrackITS.h"
 #include "DataFormatsITSMFT/Cluster.h"
 #include "DataFormatsITSMFT/CompCluster.h"
@@ -36,15 +38,23 @@
 #include "DataFormatsTPC/WorkflowHelper.h"
 #include "DetectorsBase/GeometryManager.h"
 #include "DetectorsBase/Propagator.h"
+#include "DetectorsBase/GlobalParams.h"
 #include "ITSMFTBase/DPLAlpideParam.h"
+#include "ITSBase/GeometryTGeo.h"
 #include "GlobalTracking/MatchTPCITSParams.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
-#include "DataFormatsParameters/GRPObject.h"
+#include "DetectorsCommonDataFormats/DetectorNameConf.h"
+#include "DataFormatsParameters/GRPECSObject.h"
 #include "Headers/DataHeader.h"
 #include "CommonDataFormat/BunchFilling.h"
-#include "CommonDataFormat/FlatHisto2D.h"
 #include "DataFormatsGlobalTracking/RecoContainer.h"
 #include "ITSMFTReconstruction/ClustererParam.h"
+#include "DetectorsBase/GRPGeomHelper.h"
+#include "TPCCalibration/VDriftHelper.h"
+#include "TPCCalibration/CorrectionMapsLoader.h"
+
+#ifdef ENABLE_UPGRADES
+#include "ITS3Reconstruction/TopologyDictionary.h"
+#endif
 
 using namespace o2::framework;
 using MCLabelsCl = o2::dataformats::MCTruthContainer<o2::MCCompLabel>;
@@ -59,17 +69,26 @@ namespace globaltracking
 class TPCITSMatchingDPL : public Task
 {
  public:
-  TPCITSMatchingDPL(std::shared_ptr<DataRequest> dr, bool useFT0, bool calib, bool skipTPCOnly, bool useMC)
-    : mDataRequest(dr), mUseFT0(useFT0), mCalibMode(calib), mSkipTPCOnly(skipTPCOnly), mUseMC(useMC) {}
+  TPCITSMatchingDPL(std::shared_ptr<DataRequest> dr, std::shared_ptr<o2::base::GRPGeomRequest> gr, const o2::tpc::CorrectionMapsLoaderGloOpts& sclOpts,
+                    bool useFT0, bool calib, bool skipTPCOnly, bool useMC)
+    : mDataRequest(dr), mGGCCDBRequest(gr), mUseFT0(useFT0), mCalibMode(calib), mSkipTPCOnly(skipTPCOnly), mUseMC(useMC)
+  {
+    mTPCCorrMapsLoader.setLumiScaleType(sclOpts.lumiType);
+    mTPCCorrMapsLoader.setLumiScaleMode(sclOpts.lumiMode);
+  }
   ~TPCITSMatchingDPL() override = default;
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
   void endOfStream(framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
+  void updateTimeDependentParams(ProcessingContext& pc);
   std::shared_ptr<DataRequest> mDataRequest;
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
+  o2::tpc::VDriftHelper mTPCVDriftHelper{};
+  o2::tpc::CorrectionMapsLoader mTPCCorrMapsLoader{};
   o2::globaltracking::MatchTPCITS mMatching; // matching engine
-  o2::itsmft::TopologyDictionary mITSDict;   // cluster patterns dictionary
   bool mUseFT0 = false;
   bool mCalibMode = false;
   bool mSkipTPCOnly = false; // to use only externally constrained tracks (for test only)
@@ -81,102 +100,167 @@ void TPCITSMatchingDPL::init(InitContext& ic)
 {
   mTimer.Stop();
   mTimer.Reset();
-  //-------- init geometry and field --------//
-  o2::base::GeometryManager::loadGeometry();
-  o2::base::Propagator::initFieldFromGRP();
-  std::unique_ptr<o2::parameters::GRPObject> grp{o2::parameters::GRPObject::loadFrom()};
-  mMatching.setSkipTPCOnly(mSkipTPCOnly);
-  mMatching.setITSTriggered(!grp->isDetContinuousReadOut(o2::detectors::DetID::ITS));
-  const auto& alpParams = o2::itsmft::DPLAlpideParam<o2::detectors::DetID::ITS>::Instance();
-  if (mMatching.isITSTriggered()) {
-    mMatching.setITSROFrameLengthMUS(alpParams.roFrameLengthTrig / 1.e3); // ITS ROFrame duration in \mus
-  } else {
-    mMatching.setITSROFrameLengthInBC(alpParams.roFrameLengthInBC); // ITS ROFrame duration in \mus
-  }
-  mMatching.setMCTruthOn(mUseMC);
-  mMatching.setUseFT0(mUseFT0);
-  mMatching.setVDriftCalib(mCalibMode);
+  int lane = ic.services().get<const o2::framework::DeviceSpec>().inputTimesliceId;
+  int maxLanes = ic.services().get<const o2::framework::DeviceSpec>().maxInputTimeslices;
+  mMatching.setDebugTreeFileName(maxLanes == 1 ? "dbg_TPCITSmatch.root" : fmt::format("dbg_TPCITSmatch_{}.root", lane));
+  o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
   mMatching.setNThreads(std::max(1, ic.options().get<int>("nthreads")));
   mMatching.setUseBCFilling(!ic.options().get<bool>("ignore-bc-check"));
-  //
-  std::string dictPath = o2::itsmft::ClustererParam<o2::detectors::DetID::ITS>::Instance().dictFilePath;
-  std::string dictFile = o2::base::NameConf::getAlpideClusterDictionaryFileName(o2::detectors::DetID::ITS, dictPath, "bin");
-  if (o2::utils::Str::pathExists(dictFile)) {
-    mITSDict.readBinaryFile(dictFile);
-    LOG(INFO) << "Matching is running with a provided ITS dictionary: " << dictFile;
-  } else {
-    LOG(INFO) << "Dictionary " << dictFile << " is absent, Matching expects ITS cluster patterns";
-  }
-  mMatching.setITSDictionary(&mITSDict);
-
-  // this is a hack to provide Mat.LUT from the local file, in general will be provided by the framework from CCDB
-  std::string matLUTPath = ic.options().get<std::string>("material-lut-path");
-  std::string matLUTFile = o2::base::NameConf::getMatLUTFileName(matLUTPath);
-  if (o2::utils::Str::pathExists(matLUTFile)) {
-    auto* lut = o2::base::MatLayerCylSet::loadFromFile(matLUTFile);
-    o2::base::Propagator::Instance()->setMatLUT(lut);
-    LOG(INFO) << "Loaded material LUT from " << matLUTFile;
-  } else {
-    LOG(INFO) << "Material LUT " << matLUTFile << " file is absent, only TGeo can be used";
-  }
-
-  int dbgFlags = ic.options().get<int>("debug-tree-flags");
-  mMatching.setDebugFlag(dbgFlags);
-
-  // set bunch filling. Eventually, this should come from CCDB
-  if (mMatching.getUseBCFilling()) {
-    const auto* digctx = o2::steer::DigitizationContext::loadFromFile();
-    const auto& bcfill = digctx->getBunchFilling();
-    mMatching.setBunchFilling(bcfill);
-  }
-  mMatching.init();
-  //
+  mMatching.setDebugFlag(ic.options().get<int>("debug-tree-flags"));
+  mTPCCorrMapsLoader.init(ic);
 }
 
 void TPCITSMatchingDPL::run(ProcessingContext& pc)
 {
-  const auto* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(pc.inputs().getFirstValid(true));
-  LOG(INFO) << " startOrbit: " << dh->firstTForbit;
   mTimer.Start(false);
   RecoContainer recoData;
   recoData.collectData(pc, *mDataRequest.get());
+  updateTimeDependentParams(pc); // Make sure this is called after recoData.collectData, which may load some conditions
 
-  mMatching.run(recoData);
+  static pmr::vector<o2::MCCompLabel> dummyMCLab, dummyMCLabAB;
+  static pmr::vector<o2::dataformats::Triplet<float, float, float>> dummyCalib;
 
-  pc.outputs().snapshot(Output{"GLO", "TPCITS", 0, Lifetime::Timeframe}, mMatching.getMatchedTracks());
-  pc.outputs().snapshot(Output{"GLO", "TPCITSAB_REFS", 0, Lifetime::Timeframe}, mMatching.getABTrackletRefs());
-  pc.outputs().snapshot(Output{"GLO", "TPCITSAB_CLID", 0, Lifetime::Timeframe}, mMatching.getABTrackletClusterIDs());
-  if (mUseMC) {
-    pc.outputs().snapshot(Output{"GLO", "TPCITS_MC", 0, Lifetime::Timeframe}, mMatching.getMatchLabels());
-    pc.outputs().snapshot(Output{"GLO", "TPCITSAB_MC", 0, Lifetime::Timeframe}, mMatching.getMatchLabels());
-  }
+  auto& matchedTracks = pc.outputs().make<std::vector<o2::dataformats::TrackTPCITS>>(Output{"GLO", "TPCITS", 0});
+  auto& ABTrackletRefs = pc.outputs().make<std::vector<o2::itsmft::TrkClusRef>>(Output{"GLO", "TPCITSAB_REFS", 0});
+  auto& ABTrackletClusterIDs = pc.outputs().make<std::vector<int>>(Output{"GLO", "TPCITSAB_CLID", 0});
+  auto& matchLabels = mUseMC ? pc.outputs().make<std::vector<o2::MCCompLabel>>(Output{"GLO", "TPCITS_MC", 0}) : dummyMCLab;
+  auto& ABTrackletLabels = mUseMC ? pc.outputs().make<std::vector<o2::MCCompLabel>>(Output{"GLO", "TPCITSAB_MC", 0}) : dummyMCLabAB;
+  auto& calib = mCalibMode ? pc.outputs().make<std::vector<o2::dataformats::Triplet<float, float, float>>>(Output{"GLO", "TPCITS_VDTGL", 0}) : dummyCalib;
 
-  if (mCalibMode) {
-    auto* hdtgl = mMatching.getHistoDTgl();
-    pc.outputs().snapshot(Output{"GLO", "TPCITS_VDHDTGL", 0, Lifetime::Timeframe}, (*hdtgl).getBase());
-    hdtgl->clear();
-  }
+  mMatching.run(recoData, matchedTracks, ABTrackletRefs, ABTrackletClusterIDs, matchLabels, ABTrackletLabels, calib);
+
   mTimer.Stop();
 }
 
 void TPCITSMatchingDPL::endOfStream(EndOfStreamContext& ec)
 {
   mMatching.end();
-  LOGF(INFO, "TPC-ITS matching total timing: Cpu: %.3e Real: %.3e s in %d slots",
+  LOGF(info, "TPC-ITS matching total timing: Cpu: %.3e Real: %.3e s in %d slots",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
+  mMatching.reportTiming();
 }
 
-DataProcessorSpec getTPCITSMatchingSpec(GTrackID::mask_t src, bool useFT0, bool calib, bool skipTPCOnly, bool useMC)
+void TPCITSMatchingDPL::finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+{
+  if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+    return;
+  }
+  if (mTPCVDriftHelper.accountCCDBInputs(matcher, obj)) {
+    return;
+  }
+  if (mTPCCorrMapsLoader.accountCCDBInputs(matcher, obj)) {
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("GLO", "ITSTPCPARAM", 0)) {
+    LOG(info) << "ITS-TPC Matching params updated from ccdb";
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("ITS", "CLUSDICT", 0)) {
+    LOG(info) << "its cluster dictionary updated";
+    mMatching.setITSDictionary((const o2::itsmft::TopologyDictionary*)obj);
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("ITS", "ALPIDEPARAM", 0)) {
+    LOG(info) << "ITS Alpide param updated";
+    const auto& par = o2::itsmft::DPLAlpideParam<o2::detectors::DetID::ITS>::Instance();
+    par.printKeyValues();
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("ITS", "GEOMTGEO", 0)) {
+    LOG(info) << "ITS GeometryTGeo loaded from ccdb";
+    o2::its::GeometryTGeo::adopt((o2::its::GeometryTGeo*)obj);
+    return;
+  }
+#ifdef ENABLE_UPGRADES
+  if (matcher == ConcreteDataMatcher("IT3", "CLUSDICT", 0)) {
+    LOG(info) << "it3 cluster dictionary updated";
+    mMatching.setIT3Dictionary((const o2::its3::TopologyDictionary*)obj);
+    return;
+  }
+#endif
+}
+
+void TPCITSMatchingDPL::updateTimeDependentParams(ProcessingContext& pc)
+{
+  o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+  mTPCVDriftHelper.extractCCDBInputs(pc);
+  mTPCCorrMapsLoader.extractCCDBInputs(pc);
+  static bool initOnceDone = false;
+  if (!initOnceDone) { // this params need to be queried only once
+    initOnceDone = true;
+    pc.inputs().get<o2::globaltracking::MatchTPCITSParams*>("MatchParam");
+
+    //  Note: ITS/CLUSDICT and ITS/ALPIDEPARAM are requested/loaded by the recocontainer
+    const auto& alpParams = o2::itsmft::DPLAlpideParam<o2::detectors::DetID::ITS>::Instance();
+    if (mMatching.isITSTriggered()) {
+      mMatching.setITSROFrameLengthMUS(alpParams.roFrameLengthTrig / 1.e3); // ITS ROFrame duration in \mus
+    } else {
+      mMatching.setITSROFrameLengthInBC(alpParams.roFrameLengthInBC); // ITS ROFrame duration in \mus
+    }
+    mMatching.setITSTimeBiasInBC(alpParams.roFrameBiasInBC);
+    mMatching.setSkipTPCOnly(mSkipTPCOnly);
+    mMatching.setITSTriggered(!o2::base::GRPGeomHelper::instance().getGRPECS()->isDetContinuousReadOut(o2::detectors::DetID::ITS));
+    mMatching.setNHBPerTF(o2::base::GRPGeomHelper::instance().getGRPECS()->getNHBFPerTF());
+    mMatching.setMCTruthOn(mUseMC);
+    mMatching.setUseFT0(mUseFT0);
+    mMatching.setVDriftCalib(mCalibMode);
+    if (o2::base::GRPGeomHelper::instance().getGRPECS()->getRunType() != o2::parameters::GRPECSObject::RunType::COSMICS) {
+      mMatching.setBunchFilling(o2::base::GRPGeomHelper::instance().getGRPLHCIF()->getBunchFilling());
+    } else {
+      mMatching.setCosmics(true);
+    }
+    if (pc.inputs().getPos("itsTGeo") >= 0) {
+      pc.inputs().get<o2::its::GeometryTGeo*>("itsTGeo");
+    }
+    mMatching.init();
+    // check consistency of material correction options
+    if (mMatching.getUseMatCorrFlag() == o2::base::Propagator::MatCorrType::USEMatCorrTGeo && !o2::base::GeometryManager::isGeometryLoaded()) {
+      LOGP(fatal, "USEMatCorrTGeo cannot work w/o  full geometry request in the GRPGeomHelper");
+    }
+  }
+  // we may have other params which need to be queried regularly
+  bool updateMaps = false;
+  if (mTPCCorrMapsLoader.isUpdated()) {
+    mTPCCorrMapsLoader.acknowledgeUpdate();
+    updateMaps = true;
+  }
+  mMatching.setTPCCorrMaps(&mTPCCorrMapsLoader);
+
+  if (mTPCVDriftHelper.isUpdated()) {
+    LOGP(info, "Updating TPC fast transform map with new VDrift factor of {} wrt reference {} and DriftTimeOffset correction {} wrt {} from source {}",
+         mTPCVDriftHelper.getVDriftObject().corrFact, mTPCVDriftHelper.getVDriftObject().refVDrift,
+         mTPCVDriftHelper.getVDriftObject().timeOffsetCorr, mTPCVDriftHelper.getVDriftObject().refTimeOffset,
+         mTPCVDriftHelper.getSourceName());
+    mMatching.setTPCVDrift(mTPCVDriftHelper.getVDriftObject());
+    mTPCVDriftHelper.acknowledgeUpdate();
+    updateMaps = true;
+  }
+  if (updateMaps) {
+    mTPCCorrMapsLoader.updateVDrift(mTPCVDriftHelper.getVDriftObject().corrFact, mTPCVDriftHelper.getVDriftObject().refVDrift, mTPCVDriftHelper.getVDriftObject().getTimeOffset());
+  }
+}
+
+DataProcessorSpec getTPCITSMatchingSpec(GTrackID::mask_t src, bool useFT0, bool calib, bool skipTPCOnly, bool useGeom, bool useMC, const o2::tpc::CorrectionMapsLoaderGloOpts& sclOpts)
 {
   std::vector<OutputSpec> outputs;
   auto dataRequest = std::make_shared<DataRequest>();
   if ((src & GTrackID::getSourcesMask("TPC-TRD,TPC-TOF,TPC-TRD-TOF")).any()) { // preliminary stage of extended workflow ?
     dataRequest->setMatchingInputStrict();
   }
+  dataRequest->inputs.emplace_back("MatchParam", "GLO", "ITSTPCPARAM", 0, Lifetime::Condition, ccdbParamSpec("GLO/Config/ITSTPCParam"));
 
   dataRequest->requestTracks(src, useMC);
   dataRequest->requestTPCClusters(false);
-  dataRequest->requestITSClusters(useMC); // Only ITS clusters labels are needed for the afterburner
+// Only ITS clusters labels are needed for the afterburner and request possibly for ITS3
+#ifdef ENABLE_UPGRADES
+  if (o2::GlobalParams::Instance().withITS3) {
+    dataRequest->requestIT3Clusters(useMC);
+  } else {
+    dataRequest->requestITSClusters(useMC);
+  }
+#else
+  dataRequest->requestITSClusters(useMC);
+#endif
   if (useFT0) {
     dataRequest->requestFT0RecPoints(false);
   }
@@ -185,24 +269,41 @@ DataProcessorSpec getTPCITSMatchingSpec(GTrackID::mask_t src, bool useFT0, bool 
   outputs.emplace_back("GLO", "TPCITSAB_CLID", 0, Lifetime::Timeframe); // cluster indices of ITS tracklets attached by the AfterBurner
 
   if (calib) {
-    outputs.emplace_back("GLO", "TPCITS_VDHDTGL", 0, Lifetime::Timeframe);
+    outputs.emplace_back("GLO", "TPCITS_VDTGL", 0, Lifetime::Timeframe);
   }
 
   if (useMC) {
     outputs.emplace_back("GLO", "TPCITS_MC", 0, Lifetime::Timeframe);
     outputs.emplace_back("GLO", "TPCITSAB_MC", 0, Lifetime::Timeframe); // AfterBurner ITS tracklet MC
   }
+  // Note: ITS/CLUSDICT and ITS/ALPIDEPARAM are requested/loaded by the recocontainer
+
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(true,                                                                         // orbitResetTime
+                                                              true,                                                                         // GRPECS=true
+                                                              true,                                                                         // GRPLHCIF
+                                                              true,                                                                         // GRPMagField
+                                                              true,                                                                         // askMatLUT
+                                                              useGeom ? o2::base::GRPGeomRequest::Aligned : o2::base::GRPGeomRequest::None, // geometry
+                                                              dataRequest->inputs,
+                                                              true); // query only once all objects except mag.field
+  if (!useGeom) {                                                    // load ITS GeomTGeo since the full geometry is not loaded
+    ggRequest->addInput({"itsTGeo", "ITS", "GEOMTGEO", 0, Lifetime::Condition, ccdbParamSpec("ITS/Config/Geometry")}, dataRequest->inputs);
+  }
+
+  Options opts{
+    {"nthreads", VariantType::Int, 1, {"Number of afterburner threads"}},
+    {"ignore-bc-check", VariantType::Bool, false, {"Do not check match candidate against BC filling"}},
+    {"debug-tree-flags", VariantType::Int, 0, {"DebugFlagTypes bit-pattern for debug tree"}}};
+
+  o2::tpc::VDriftHelper::requestCCDBInputs(dataRequest->inputs);
+  o2::tpc::CorrectionMapsLoader::requestCCDBInputs(dataRequest->inputs, opts, sclOpts);
 
   return DataProcessorSpec{
     "itstpc-track-matcher",
     dataRequest->inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<TPCITSMatchingDPL>(dataRequest, useFT0, calib, skipTPCOnly, useMC)},
-    Options{
-      {"nthreads", VariantType::Int, 1, {"Number of afterburner threads"}},
-      {"material-lut-path", VariantType::String, "", {"Path of the material LUT file"}},
-      {"ignore-bc-check", VariantType::Bool, false, {"Do not check match candidate against BC filling"}},
-      {"debug-tree-flags", VariantType::Int, 0, {"DebugFlagTypes bit-pattern for debug tree"}}}};
+    AlgorithmSpec{adaptFromTask<TPCITSMatchingDPL>(dataRequest, ggRequest, sclOpts, useFT0, calib, skipTPCOnly, useMC)},
+    opts};
 }
 
 } // namespace globaltracking

@@ -19,7 +19,7 @@
 #include <TSystem.h>    // for TSystem, gSystem
 #include <cstdio>       // for printf, fprintf, fclose, fopen, FILE
 #include <cstring>      // for memcpy
-#include "FairLogger.h" // for FairLogger
+#include <fairlogger/Logger.h> // for FairLogger
 #include "TMath.h"      // for BinarySearch, Sort
 #include "TMathBase.h"  // for Abs
 #include "TNamed.h"     // for TNamed
@@ -771,7 +771,7 @@ void MagneticWrapperChebyshev::getTPCIntegralCylindrical(const Double_t* rphiz, 
     return;
   }
   if (id >= mNumberOfParameterizationTPC) {
-    LOG(ERROR) << "MagneticWrapperChebyshev::getTPCIntegralCylindrical: Wrong TPCParam segment " << id;
+    LOG(error) << "MagneticWrapperChebyshev::getTPCIntegralCylindrical: Wrong TPCParam segment " << id;
     b[0] = b[1] = b[2] = 0;
     return;
   }
@@ -792,7 +792,7 @@ void MagneticWrapperChebyshev::getTPCRatIntegralCylindrical(const Double_t* rphi
     return;
   }
   if (id >= mNumberOfParameterizationTPCRat) {
-    LOG(ERROR) << "MagneticWrapperChebyshev::getTPCRatIntegralCylindrical: Wrong TPCRatParam segment " << id;
+    LOG(error) << "MagneticWrapperChebyshev::getTPCRatIntegralCylindrical: Wrong TPCRatParam segment " << id;
     b[0] = b[1] = b[2] = 0;
     return;
   }
@@ -808,7 +808,7 @@ void MagneticWrapperChebyshev::getTPCRatIntegralCylindrical(const Double_t* rphi
 void checkExpected(char const* expected, TString& buffs)
 {
   if (!buffs.BeginsWith(expected)) {
-    LOG(ERROR) << R"(MagneticWrapperChebyshev::loadData: Expected: ")" << expected << R"( <name>", found ")" << buffs.Data() << "\"\nStop\n";
+    LOG(error) << R"(MagneticWrapperChebyshev::loadData: Expected: ")" << expected << R"( <name>", found ")" << buffs.Data() << "\"\nStop\n";
     exit(1);
   }
 }
@@ -903,7 +903,7 @@ void MagneticWrapperChebyshev::loadData(const char* inpfile)
   Chebyshev3DCalc::readLine(buffs, stream);
 
   if (!buffs.BeginsWith("END ") && !buffs.Contains(GetName())) {
-    LOG(ERROR) << R"(MagneticWrapperChebyshev::loadData: Expected: "END )"
+    LOG(error) << R"(MagneticWrapperChebyshev::loadData: Expected: "END )"
                << GetName() << R"( ", found ")" << buffs.Data() << "\"\nStop\n";
     exit(1);
   }
@@ -1206,7 +1206,7 @@ void MagneticWrapperChebyshev::buildTable(Int_t npar, TObjArray* parArr, Int_t& 
   nSegYDipArr.Set(nZSeg);
   float xyz[3];
   for (int iz = 0; iz < nZSeg; iz++) {
-    printf("\nZSegment#%d  %+e : %+e\n", iz, tmpSegZ[iz], tmpSegZ[iz + 1]);
+    LOGF(debug, "\nZSegment#%d  %+e : %+e\n", iz, tmpSegZ[iz], tmpSegZ[iz + 1]);
     int ny = segmentDimension(&tmpSegY, parArr, npar, 1, 1, -1, 1, -1, tmpSegZ[iz], tmpSegZ[iz + 1]) - 1;
     segYArr.Set(ny + nYSeg);
     for (int iy = 0; iy < ny; iy++) {
@@ -1214,7 +1214,7 @@ void MagneticWrapperChebyshev::buildTable(Int_t npar, TObjArray* parArr, Int_t& 
     }
     begSegYDipArr[iz] = nYSeg;
     nSegYDipArr[iz] = ny;
-    printf(" Found %d YSegments, to start from %d\n", ny, begSegYDipArr[iz]);
+    LOGF(debug, " Found %d YSegments, to start from %d\n", ny, begSegYDipArr[iz]);
 
     // for each slice in Z and Y create segmentation in X
     begSegXDipArr.Set(nYSeg + ny);
@@ -1223,7 +1223,7 @@ void MagneticWrapperChebyshev::buildTable(Int_t npar, TObjArray* parArr, Int_t& 
 
     for (int iy = 0; iy < ny; iy++) {
       int isg = nYSeg + iy;
-      printf("\n   YSegment#%d  %+e : %+e\n", iy, tmpSegY[iy], tmpSegY[iy + 1]);
+      LOGF(debug, "\n   YSegment#%d  %+e : %+e\n", iy, tmpSegY[iy], tmpSegY[iy + 1]);
       int nx =
         segmentDimension(&tmpSegX, parArr, npar, 0, 1, -1, tmpSegY[iy], tmpSegY[iy + 1], tmpSegZ[iz], tmpSegZ[iz + 1]) -
         1;
@@ -1234,7 +1234,7 @@ void MagneticWrapperChebyshev::buildTable(Int_t npar, TObjArray* parArr, Int_t& 
       }
       begSegXDipArr[isg] = nXSeg;
       nSegXDipArr[isg] = nx;
-      printf("   Found %d XSegments, to start from %d\n", nx, begSegXDipArr[isg]);
+      LOGF(debug, "   Found %d XSegments, to start from %d\n", nx, begSegXDipArr[isg]);
 
       segIDArr.Set(nXSeg + nx);
 

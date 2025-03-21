@@ -21,19 +21,44 @@ ConfigParamSpec ccdbPathSpec(std::string const& path)
   return ConfigParamSpec{"ccdb-path", VariantType::String, path, {fmt::format("Path in CCDB ({})", path)}, ConfigParamKind::kGeneric};
 }
 
-ConfigParamSpec ccdbRunDependent(bool defaultValue)
+ConfigParamSpec ccdbRunDependent(int defaultValue)
 {
-  return ConfigParamSpec{"ccdb-run-dependent", VariantType::Bool, defaultValue, {"Give object for specific run number"}, ConfigParamKind::kGeneric};
+  return ConfigParamSpec{"ccdb-run-dependent", VariantType::Int, defaultValue, {"Give object for specific run number"}, ConfigParamKind::kGeneric};
 }
 
-std::vector<ConfigParamSpec> ccdbParamSpec(std::string const& path, bool runDependent)
+ConfigParamSpec ccdbQueryRateSpec(int r)
+{
+  return ConfigParamSpec{"ccdb-query-rate", VariantType::Int, r, {"Query after once every N TFs"}, ConfigParamKind::kGeneric};
+}
+
+ConfigParamSpec ccdbMetadataSpec(std::string const& key, std::string const& defaultValue)
+{
+  return ConfigParamSpec{fmt::format("ccdb-metadata-{}", key),
+                         VariantType::String,
+                         defaultValue,
+                         {fmt::format("CCDB metadata {}", key)},
+                         ConfigParamKind::kGeneric};
+}
+
+std::vector<ConfigParamSpec> ccdbParamSpec(std::string const& path, std::vector<CCDBMetadata> metadata, int qrate)
+{
+  return ccdbParamSpec(path, false, metadata, qrate);
+}
+
+std::vector<ConfigParamSpec> ccdbParamSpec(std::string const& path, int runDependent, std::vector<CCDBMetadata> metadata, int qrate)
 {
   // Add here CCDB objecs which should be considered run dependent
-  static std::vector<std::string> runDependentObjects = {"GLO/GRP"};
-  if (std::any_of(runDependentObjects.begin(), runDependentObjects.end(), [&path](std::string const& s) { return path == s; })) {
-    runDependent = true;
+  std::vector<ConfigParamSpec> result{ccdbPathSpec(path)};
+  if (runDependent > 0) {
+    result.push_back(ccdbRunDependent(runDependent));
   }
-  return {ccdbPathSpec(path), ccdbRunDependent(runDependent)};
+  if (qrate != 0) {
+    result.push_back(ccdbQueryRateSpec(qrate < 0 ? std::numeric_limits<int>::max() : qrate));
+  }
+  for (auto& [key, value] : metadata) {
+    result.push_back(ccdbMetadataSpec(key, value));
+  }
+  return result;
 }
 
 ConfigParamSpec startTimeParamSpec(int64_t t)

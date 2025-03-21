@@ -18,10 +18,13 @@
 #include "TOFBase/Geo.h"
 #include "DetectorsRaw/RDHUtils.h"
 
+#include <fairlogger/Logger.h>
+
 #include <cstring>
 #include <iostream>
 
-//#define DECODER_PARANOID
+// o2::ctf::CTFIOSize iosize;
+#define ENCODER_PARANOID
 //#define CHECKER_COUNTER
 
 #ifdef DECODER_PARANOID
@@ -72,7 +75,10 @@
 #define GET_DRMHEADW5_EVENTCRC(x) DRM_EVCRC(x)
 #define GET_DRMDATATRAILER_LOCEVCNT(x) DRM_LOCEVCNT(x)
 
-// TRM getter
+// LTM getters
+#define GET_LTMDATAHEADER_EVENTWORDS(x) LTM_EVENTSIZE(x)
+
+// TRM getters
 #define GET_TRMDATAHEADER_SLOTID(x) TOF_GETGEO(x)
 #define GET_TRMDATAHEADER_EVENTCNT(x) TRM_EVCNT_GH(x)
 #define GET_TRMDATAHEADER_EVENTWORDS(x) TRM_EVWORDS(x)
@@ -112,8 +118,17 @@ bool Compressor<RDH, verbose, paranoid>::processHBF()
   mEncoderRDH = reinterpret_cast<RDH*>(mEncoderPointer);
   auto rdh = mDecoderRDH;
 
+  if (!o2::raw::RDHUtils::checkRDH(rdh, false)) {
+    LOG(warning) << "Bad RDH found in TOF compressor -> skip it";
+    o2::raw::RDHUtils::checkRDH(rdh, true);
+    return true;
+  }
+
+  uint8_t rdhFormat = o2::raw::RDHUtils::getDataFormat(mDecoderPointer);
+  setDecoderCRUZEROES(!rdhFormat);
+
   /** check that we got the first RDH open **/
-  if (rdh->stop || rdh->pageCnt != 0) {
+  if (!rdh || rdh->stop || rdh->pageCnt != 0) {
     std::cout << colorRed
               << "[FATAL] this does not look like the first RDH in the HBF"
               << colorReset
@@ -147,6 +162,17 @@ bool Compressor<RDH, verbose, paranoid>::processHBF()
     auto memorySize = rdh->memorySize;
     auto offsetToNext = rdh->offsetToNext;
     auto drmPayload = memorySize - headerSize;
+
+    if (drmPayload < 0) {
+      LOG(warning) << "link = " << rdh->feeId << ": memorySize  < headerSize (" << memorySize << " < " << headerSize << ")";
+      return true;
+    }
+
+    if (mDecoderSaveBufferDataSize + drmPayload >= mDecoderSaveBufferSize) {
+      // avoid to allocate memory out of the buffer
+      LOG(warning) << "link = " << rdh->feeId << ": beyond the buffer size " << mDecoderSaveBufferSize;
+      return true;
+    }
 
     /** copy DRM payload to save buffer **/
     std::memcpy(mDecoderSaveBuffer + mDecoderSaveBufferDataSize, reinterpret_cast<const char*>(rdh) + headerSize, drmPayload);
@@ -183,13 +209,25 @@ bool Compressor<RDH, verbose, paranoid>::processHBF()
   }
 
   /** copy RDH open to encoder buffer **/
+
+  if (mEncoderPointer + mDecoderRDH->headerSize >= mEncoderPointerMax) {
+    LOG(warning) << "link = " << rdh->feeId << ": beyond the buffer size mEncoderPointer+mDecoderRDH->headerSize = " << mEncoderPointer + mDecoderRDH->headerSize << " >= "
+                 << "mEncoderPointerMax = " << mEncoderPointerMax;
+    encoderRewind();
+    return true;
+  }
   std::memcpy(mEncoderPointer, mDecoderRDH, mDecoderRDH->headerSize);
   mEncoderPointer = reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(mEncoderPointer) + rdh->headerSize);
 
   /** process DRM data **/
   mDecoderPointer = reinterpret_cast<const uint32_t*>(mDecoderSaveBuffer);
   mDecoderPointerMax = reinterpret_cast<const uint32_t*>(mDecoderSaveBuffer + mDecoderSaveBufferDataSize);
+  int nsteps = 0;
   while (mDecoderPointer < mDecoderPointerMax) {
+    nsteps++;
+    if (nsteps > 3 && !(nsteps % 4)) {
+      LOG(debug) << "processHBF: nsteps in while loop = " << nsteps << ", infity loop?";
+    }
     mEventCounter++;
     if (processDRM()) {            // if this breaks, we did not run the checker and the summary is not reset!
       mDecoderSummary = {nullptr}; // reset it like this, perhaps a better way can be found
@@ -213,8 +251,24 @@ bool Compressor<RDH, verbose, paranoid>::processHBF()
     mErrorCounter++;
   }
 
+  // before to move to RDH close check we are not already out of buffer (it is the last chance to call rewind and not to store RDH open)
+  if (mEncoderPointer >= mEncoderPointerMax) {
+    LOG(error) << "link = " << rdh->feeId << ": beyond the buffer size mEncoderPointer in RDH open = " << mEncoderPointer << " >= "
+               << "mEncoderPointerMax = " << mEncoderPointerMax;
+    long byteOutOfBuffer = mEncoderPointer + rdh->headerSize - mEncoderPointerMax;
+    LOG(error) << "byte out of buffer = " << byteOutOfBuffer;
+
+    encoderRewind();
+    return true;
+  }
+
   /** copy RDH close to encoder buffer **/
   /** CAREFUL WITH THE PAGE COUNTER **/
+  if (mEncoderPointer + rdh->headerSize >= mEncoderPointerMax) {
+    LOG(warning) << "link = " << rdh->feeId << ": beyond the buffer size mEncoderPointer+rdh->headerSize = " << mEncoderPointer + rdh->headerSize << " >= "
+                 << "mEncoderPointerMax = " << mEncoderPointerMax;
+    return true;
+  }
   mEncoderRDH = reinterpret_cast<RDH*>(mEncoderPointer);
   std::memcpy(mEncoderRDH, rdh, rdh->headerSize);
   mEncoderRDH->memorySize = rdh->headerSize;
@@ -371,7 +425,8 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
   /** encode Crate Header **/
   *mEncoderPointer = 0x80000000;
   *mEncoderPointer |= GET_DRMHEADW1_PARTSLOTMASK(*mDecoderSummary.drmHeadW1) << 12;
-  *mEncoderPointer |= GET_DRMDATAHEADER_DRMID(*mDecoderSummary.drmDataHeader) << 24;
+  // R+OLD  *mEncoderPointer |= GET_DRMDATAHEADER_DRMID(*mDecoderSummary.drmDataHeader) << 24;
+  *mEncoderPointer |= (mDecoderRDH->feeId & 0xFF) << 24;
   *mEncoderPointer |= GET_DRMHEADW3_GBTBUNCHCNT(*mDecoderSummary.drmHeadW3);
   if (verbose && mEncoderVerbose) {
     auto crateHeader = reinterpret_cast<compressed::CrateHeader_t*>(mEncoderPointer);
@@ -380,7 +435,10 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
     auto slotPartMask = crateHeader->slotPartMask;
     printf("%s %08x Crate header          (drmID=%d, bunchID=%d, slotPartMask=0x%x) %s \n", colorGreen, *mEncoderPointer, drmID, bunchID, slotPartMask, colorReset);
   }
-  encoderNext();
+  if (encoderNext()) {
+    encoderRewind();
+    return true;
+  }
 
   /** encode Crate Orbit **/
   *mEncoderPointer = *mDecoderSummary.tofOrbit;
@@ -389,10 +447,18 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
     auto orbitID = crateOrbit->orbitID;
     printf("%s %08x Crate orbit           (orbitID=%u) %s \n", colorGreen, *mEncoderPointer, orbitID, colorReset);
   }
-  encoderNext();
+  if (encoderNext()) {
+    encoderRewind();
+    return true;
+  }
 
   /** loop over DRM payload **/
+  int nsteps = 0;
   while (true) {
+    nsteps++;
+    if (nsteps > 19 && !(nsteps % 20)) {
+      LOG(debug) << "processDRM: nsteps in while loop = " << nsteps << ", infity loop?";
+    }
 
     /** LTM global header detected **/
     if (IS_LTM_GLOBAL_HEADER(*mDecoderPointer)) {
@@ -418,19 +484,13 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
         printf(" %08x DRM Data Trailer      (locEvCnt=%d) \n", *mDecoderPointer, locEvCnt);
       }
       decoderNext();
-      if (paranoid && decoderParanoid()) {
-        return true;
-      }
 
       /** filler detected **/
-      if (IS_FILLER(*mDecoderPointer)) {
+      while ((mDecoderPointer < mDecoderPointerMax) && IS_FILLER(*mDecoderPointer)) {
         if (verbose && mDecoderVerbose) {
           printf(" %08x Filler \n", *mDecoderPointer);
         }
         decoderNext();
-        if (paranoid && decoderParanoid()) {
-          return true;
-        }
       }
 
       /** encode Crate Trailer **/
@@ -451,7 +511,10 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
         auto NumberOfErrors = CrateTrailer->numberOfErrors;
         printf("%s %08x Crate trailer         (EventCounter=%d, NumberOfDiagnostics=%d, NumberOfErrors=%d) %s \n", colorGreen, *mEncoderPointer, EventCounter, NumberOfDiagnostics, NumberOfErrors, colorReset);
       }
-      encoderNext();
+      if (encoderNext()) {
+        encoderRewind();
+        return true;
+      }
 
       /** encode Diagnostic Words **/
       for (int iword = 0; iword < mCheckerSummary.nDiagnosticWords; ++iword) {
@@ -463,7 +526,10 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
           auto faultBits = Diagnostic->faultBits;
           printf("%s %08x Diagnostic            (slotId=%d, faultBits=0x%x) %s \n", colorGreen, *mEncoderPointer, slotId, faultBits, colorReset);
         }
-        encoderNext();
+        if (encoderNext()) {
+          encoderRewind();
+          return true;
+        }
       }
 
       /** encode TDC errors **/
@@ -483,7 +549,10 @@ bool Compressor<RDH, verbose, paranoid>::processDRM()
               auto tdcID = Error->tdcID;
               printf("%s %08x Error                 (slotId=%d, chain=%d, tdcId=%d, errorFlags=0x%x) %s \n", colorGreen, *mEncoderPointer, slotID, chain, tdcID, errorFlags, colorReset);
             }
-            encoderNext();
+            if (encoderNext()) {
+              encoderRewind();
+              return true;
+            }
           }
 #endif
           mDecoderSummary.trmErrors[itrm][ichain] = 0;
@@ -539,8 +608,15 @@ bool Compressor<RDH, verbose, paranoid>::processLTM()
 {
   /** process LTM **/
 
+  mDecoderSummary.ltmDataHeader = mDecoderPointer;
+  uint32_t eventWords = GET_LTMDATAHEADER_EVENTWORDS(*mDecoderPointer); // this is the total event size, including header/trailer
+  uint32_t payload = eventWords - 2;
   if (verbose && mDecoderVerbose) {
-    printf(" %08x LTM Global Header \n", *mDecoderPointer);
+    auto ltmDataHeader = reinterpret_cast<const raw::LTMDataHeader_t*>(mDecoderPointer);
+    auto eventWords = ltmDataHeader->eventWords;
+    auto cycloneErr = ltmDataHeader->cycloneErr;
+    auto fault = ltmDataHeader->cycloneErr;
+    printf(" %08x LTM Data Header       (eventWords=%d, cycloneErr=%d, fault=%d) \n", *mDecoderPointer, eventWords, cycloneErr, fault);
   }
   decoderNext();
   if (paranoid && decoderParanoid()) {
@@ -548,21 +624,21 @@ bool Compressor<RDH, verbose, paranoid>::processLTM()
   }
 
   /** loop over LTM payload **/
-  while (true) {
-    /** LTM global trailer detected **/
-    if (IS_LTM_GLOBAL_TRAILER(*mDecoderPointer)) {
-      if (verbose && mDecoderVerbose) {
-        printf(" %08x LTM Global Trailer \n", *mDecoderPointer);
-      }
-      decoderNext();
-      if (paranoid && decoderParanoid()) {
-        return true;
-      }
-      break;
-    }
-
+  for (int i = 0; i < payload; ++i) {
     if (verbose && mDecoderVerbose) {
-      printf(" %08x LTM data \n", *mDecoderPointer);
+      printf(" %08x LTM Data \n", *mDecoderPointer);
+    }
+    decoderNext();
+    if (paranoid && decoderParanoid()) {
+      return true;
+    }
+  }
+
+  /** LTM global trailer detected **/
+  if (IS_LTM_GLOBAL_TRAILER(*mDecoderPointer)) {
+    mDecoderSummary.ltmDataTrailer = mDecoderPointer;
+    if (verbose && mDecoderVerbose) {
+      printf(" %08x LTM Global Trailer \n", *mDecoderPointer);
     }
     decoderNext();
     if (paranoid && decoderParanoid()) {
@@ -595,7 +671,12 @@ bool Compressor<RDH, verbose, paranoid>::processTRM()
   }
 
   /** loop over TRM payload **/
+  int nsteps = 0;
   while (true) {
+    nsteps++;
+    if (nsteps > 19 && !(nsteps % 20)) {
+      LOG(debug) << "processTRM: nsteps in while loop = " << nsteps << ", infity loop?";
+    }
 
     /** TRM Chain-A Header detected **/
     if (IS_TRM_CHAINA_HEADER(*mDecoderPointer) && GET_TRMCHAINHEADER_SLOTID(*mDecoderPointer) == slotId) {
@@ -638,7 +719,10 @@ bool Compressor<RDH, verbose, paranoid>::processTRM()
 
       /** encoder Spider **/
       if (mDecoderSummary.hasHits[itrm][0] || mDecoderSummary.hasHits[itrm][1]) {
-        encoderSpider(itrm);
+        if (encoderSpider(itrm)) {
+          encoderRewind();
+          return true;
+        }
       }
 
       /** success **/
@@ -685,7 +769,12 @@ bool Compressor<RDH, verbose, paranoid>::processTRMchain(int itrm, int ichain)
   }
 
   /** loop over TRM Chain payload **/
+  int nsteps = 0;
   while (true) {
+    nsteps++;
+    if (nsteps > 99 && !(nsteps % 100)) {
+      LOG(debug) << "processTRMchain: nsteps in while loop = " << nsteps << ", infity loop?";
+    }
     /** TDC hit detected **/
     if (IS_TDC_HIT(*mDecoderPointer)) {
       mDecoderSummary.hasHits[itrm][ichain] = true;
@@ -764,7 +853,9 @@ bool Compressor<RDH, verbose, paranoid>::decoderParanoid()
   /** decoder paranoid **/
 
   if (mDecoderPointer >= mDecoderPointerMax) {
-    printf("%s %08x [ERROR] fatal error: beyond memory size %s \n", colorRed, *mDecoderPointer, colorReset);
+    if (verbose) {
+      printf("%s %08x [ERROR] fatal error: beyond memory size %s \n", colorRed, *mDecoderPointer, colorReset);
+    }
     mDecoderFatal = true;
     return true;
   }
@@ -772,7 +863,7 @@ bool Compressor<RDH, verbose, paranoid>::decoderParanoid()
 }
 
 template <typename RDH, bool verbose, bool paranoid>
-void Compressor<RDH, verbose, paranoid>::encoderSpider(int itrm)
+int Compressor<RDH, verbose, paranoid>::encoderSpider(int itrm)
 {
   /** encoder spider **/
 
@@ -863,7 +954,10 @@ void Compressor<RDH, verbose, paranoid>::encoderSpider(int itrm)
       auto TRMID = FrameHeader->trmID;
       printf("%s %08x Frame header          (TRMID=%d, FrameID=%d, NumberOfHits=%d) %s \n", colorGreen, *mEncoderPointer, TRMID, FrameID, NumberOfHits, colorReset);
     }
-    encoderNext();
+    if (encoderNext()) {
+      encoderRewind();
+      return true;
+    }
 
     // packed hits
     for (int ihit = 0; ihit < mSpiderSummary.nFramePackedHits[iframe]; ++ihit) {
@@ -877,11 +971,15 @@ void Compressor<RDH, verbose, paranoid>::encoderSpider(int itrm)
         auto TOT = PackedHit->tot;
         printf("%s %08x Packed hit            (Chain=%d, TDCID=%d, Channel=%d, Time=%d, TOT=%d) %s \n", colorGreen, *mEncoderPointer, Chain, TDCID, Channel, Time, TOT, colorReset);
       }
-      encoderNext();
+      if (encoderNext()) {
+        encoderRewind();
+        return true;
+      }
     }
 
     mSpiderSummary.nFramePackedHits[iframe] = 0;
   }
+  return 0;
 }
 
 template <typename RDH, bool verbose, bool paranoid>
@@ -1011,7 +1109,7 @@ bool Compressor<RDH, verbose, paranoid>::checkerCheck()
 
   /** check DRM event words (careful with pointers because we have 64 bits extra! only for CRU data! **/
   auto drmEventWords = mDecoderSummary.drmDataTrailer - mDecoderSummary.drmDataHeader + 1;
-  if (!mDecoderCONET) {
+  if (mDecoderNextWordStep) {
     drmEventWords -= (drmEventWords / 4) * 2;
   }
   drmEventWords -= 6;
@@ -1172,7 +1270,7 @@ bool Compressor<RDH, verbose, paranoid>::checkerCheck()
 
     /** check TRM event words (careful with pointers because we have 64 bits extra! only for CRU data! **/
     auto trmEventWords = mDecoderSummary.trmDataTrailer[itrm] - mDecoderSummary.trmDataHeader[itrm] + 1;
-    if (!mDecoderCONET) {
+    if (mDecoderNextWordStep) {
       trmEventWords -= (trmEventWords / 4) * 2;
     }
     if (verbose && mCheckerVerbose) {
@@ -1408,10 +1506,10 @@ void Compressor<RDH, verbose, paranoid>::checkSummary()
   printf("\n");
 }
 
-template class Compressor<o2::header::RAWDataHeaderV6, false, false>;
-template class Compressor<o2::header::RAWDataHeaderV6, false, true>;
-template class Compressor<o2::header::RAWDataHeaderV6, true, false>;
-template class Compressor<o2::header::RAWDataHeaderV6, true, true>;
+template class Compressor<o2::header::RAWDataHeader, false, false>;
+template class Compressor<o2::header::RAWDataHeader, false, true>;
+template class Compressor<o2::header::RAWDataHeader, true, false>;
+template class Compressor<o2::header::RAWDataHeader, true, true>;
 
 } // namespace tof
 } // namespace o2

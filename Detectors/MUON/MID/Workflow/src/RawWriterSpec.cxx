@@ -30,7 +30,7 @@
 #include "MIDRaw/Encoder.h"
 #include "MIDRaw/FEEIdConfig.h"
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 namespace of = o2::framework;
 
@@ -47,9 +47,9 @@ class RawWriterDeviceDPL
     auto fileFor = ic.options().get<std::string>("file-for");
     if (!std::filesystem::exists(dirname)) {
       if (!std::filesystem::create_directories(dirname)) {
-        LOG(FATAL) << "could not create output directory " << dirname;
+        LOG(fatal) << "could not create output directory " << dirname;
       } else {
-        LOG(INFO) << "created output directory " << dirname;
+        LOG(info) << "created output directory " << dirname;
       }
     }
 
@@ -62,7 +62,7 @@ class RawWriterDeviceDPL
     auto stop = [this]() {
       mEncoder.finalize();
     };
-    ic.services().get<of::CallbackService>().set(of::CallbackService::Id::Stop, stop);
+    ic.services().get<of::CallbackService>().set<of::CallbackService::Id::Stop>(stop);
 
     // Write basic config files to be used with raw data reader workflow
     mEncoder.getWriter().writeConfFile("MID", "RAWDATA", o2::utils::Str::concat_string(dirname, '/', "MIDraw.cfg"));
@@ -97,7 +97,7 @@ framework::DataProcessorSpec getRawWriterSpec()
     of::AlgorithmSpec{of::adaptFromTask<o2::mid::RawWriterDeviceDPL>()},
     of::Options{
       {"mid-raw-outdir", of::VariantType::String, ".", {"Raw file output directory"}},
-      {"file-for", of::VariantType::String, "all", {"single file per: all,flp,cru,link"}},
+      {"file-for", of::VariantType::String, "all", {"single file per: all,flp,cruendpoint,link"}},
       {"mid-raw-header-offset", of::VariantType::Bool, false, {"Header offset in bytes"}}}};
 }
 } // namespace mid

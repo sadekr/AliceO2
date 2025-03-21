@@ -10,6 +10,7 @@
 // or submit itself to any jurisdiction.
 
 #include "Framework/RootSerializationSupport.h"
+#include "Framework/RootMessageContext.h"
 #include "Framework/WorkflowSpec.h"
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/DataAllocator.h"
@@ -142,7 +143,7 @@ DataProcessorSpec getSourceSpec()
       o2::test::Polymorphic a(*counter);
       pc.outputs().snapshot(OutputRef{"output", 0}, a);
       pc.outputs().snapshot(OutputRef{"output", 1}, a);
-      int& metadata = pc.outputs().make<int>(Output{"TST", "METADATA", 0, Lifetime::Timeframe});
+      int& metadata = pc.outputs().make<int>(Output{"TST", "METADATA", 0});
       metadata = *counter;
       *counter = *counter + 1;
       if (*counter >= sTreeSize) {
@@ -197,7 +198,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const&)
   auto preprocessor = [](ProcessingContext& ctx) {
     for (auto const& ref : InputRecordWalker(ctx.inputs())) {
       auto const* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(ref);
-      LOGP(INFO, "got data: {}/{}/{}", dh->dataOrigin, dh->dataDescription, dh->subSpecification);
+      LOGP(info, "got data: {}/{}/{}", dh->dataOrigin, dh->dataDescription, dh->subSpecification);
     }
   };
 

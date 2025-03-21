@@ -29,8 +29,45 @@ include(FeatureSummary)
 
 include(FindThreads)
 
-find_package(O2arrow MODULE)
-set_package_properties(O2arrow PROPERTIES TYPE REQUIRED)
+find_package(Arrow CONFIG)
+find_package(Gandiva CONFIG)
+set_package_properties(Arrow PROPERTIES TYPE REQUIRED)
+set_package_properties(Gandiva PROPERTIES TYPE REQUIRED)
+
+if (NOT TARGET Arrow::arrow_shared)
+ add_library(Arrow::arrow_shared ALIAS arrow_shared)
+endif()
+
+if(NOT TARGET ArrowDataset::arrow_dataset_shared)
+  # ArrowDataset::arrow_dataset_shared is linked for no reason to parquet
+  # so we cannot use it because we do not want to build parquet itself.
+  # For that reason at the moment we need to do the lookup by hand.
+  get_target_property(ARROW_SHARED_LOCATION Arrow::arrow_shared LOCATION)
+  get_filename_component(ARROW_SHARED_DIR ${ARROW_SHARED_LOCATION} DIRECTORY)
+
+  find_library(ARROW_DATASET_SHARED arrow_dataset
+      PATHS ${ARROW_SHARED_DIR}
+      NO_DEFAULT_PATH
+  )
+
+  if(ARROW_DATASET_SHARED)
+    message(STATUS
+            "Found arrow_dataset_shared library at: ${ARROW_DATASET_SHARED}")
+  else()
+    message(FATAL_ERROR
+            "arrow_dataset_shared library not found in ${ARROW_SHARED_DIR}")
+  endif()
+
+  # Step 3: Create a target for ArrowDataset::arrow_dataset_shared
+  add_library(ArrowDataset::arrow_dataset_shared SHARED IMPORTED)
+  set_target_properties(ArrowDataset::arrow_dataset_shared PROPERTIES
+      IMPORTED_LOCATION ${ARROW_DATASET_SHARED}
+  )
+endif()
+
+if (NOT TARGET Gandiva::gandiva_shared)
+  add_library(Gandiva::gandiva_shared ALIAS gandiva_shared)
+endif()
 
 find_package(Vc)
 set_package_properties(Vc PROPERTIES TYPE REQUIRED)
@@ -38,7 +75,7 @@ set_package_properties(Vc PROPERTIES TYPE REQUIRED)
 find_package(ROOT 6.20.02)
 set_package_properties(ROOT PROPERTIES TYPE REQUIRED)
 
-find_package(VMC)
+find_package(VMC MODULE)
 
 find_package(fmt)
 set_package_properties(fmt PROPERTIES TYPE REQUIRED)
@@ -89,6 +126,9 @@ set_package_properties(Configuration PROPERTIES TYPE REQUIRED)
 find_package(Monitoring CONFIG)
 set_package_properties(Monitoring PROPERTIES TYPE REQUIRED)
 
+find_package(BookkeepingApi CONFIG)
+set_package_properties(BookeepingApi PROPERTIES TYPE REQUIRED)
+
 find_package(Common CONFIG)
 set_package_properties(Common PROPERTIES TYPE REQUIRED)
 
@@ -97,6 +137,15 @@ set_package_properties(RapidJSON PROPERTIES TYPE REQUIRED)
 
 find_package(CURL)
 set_package_properties(CURL PROPERTIES TYPE REQUIRED)
+
+find_package(TBB)
+set_package_properties(TBB PROPERTIES TYPE REQUIRED)
+
+# The Ifdef is to avoid merging at the same time alidist and AliceO2 PRs.
+if (ALICE_GRID_UTILS_INCLUDE_DIR)
+find_package(AliceGridUtils MODULE)
+set_package_properties(AliceGridUtils PROPERTIES TYPE RECOMMENDED)
+endif()
 
 find_package(JAliEnROOT MODULE)
 set_package_properties(JAliEnROOT PROPERTIES TYPE RECOMMENDED)
@@ -114,8 +163,6 @@ message(STATUS "Output BUILD_SIMULATION=${BUILD_SIMULATION}")
 
 # Optional packages
 
-find_package(DDS CONFIG)
-set_package_properties(DDS PROPERTIES TYPE RECOMMENDED)
 find_package(benchmark CONFIG NAMES benchmark googlebenchmark)
 set_package_properties(benchmark PROPERTIES TYPE OPTIONAL)
 find_package(OpenMP)
@@ -138,12 +185,6 @@ set_package_properties(AliRoot
                        TYPE OPTIONAL
                        PURPOSE "For very specific use cases only")
 
-find_package(GLEW)
-set_package_properties(GLEW PROPERTIES TYPE OPTIONAL)
-find_package(X11)
-set_package_properties(X11 PROPERTIES TYPE OPTIONAL)
-find_package(GLUT)
-set_package_properties(GLUT PROPERTIES TYPE OPTIONAL)
 find_package(OpenGL)
 set_package_properties(OpenGL PROPERTIES TYPE OPTIONAL)
 
@@ -154,12 +195,19 @@ find_package(Clang)
 set_package_properties(Clang PROPERTIES TYPE OPTIONAL)
 endif()
 
-
+if(CMAKE_PROJECT_NAME STREQUAL "O2")
 find_package(O2GPU)
+endif()
 
 find_package(FastJet)
 
 find_package(FFTW3f CONFIG)
 set_package_properties(FFTW3f PROPERTIES TYPE REQUIRED)
+
+find_package(absl CONFIG)
+set_package_properties(absl PROPERTIES TYPE REQUIRED)
+
+find_package(Vtune)
+set_package_properties(Vtune PROPERTIES TYPE OPTIONAL)
 
 feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)

@@ -19,27 +19,51 @@
 #include "Framework/ConfigParamSpec.h"
 #include "Algorithm/RangeTokenizer.h"
 #include "CommonUtils/ConfigurableParam.h"
+#include "Framework/Variant.h"
+#include "Framework/ConfigParamSpec.h"
+#include "DataFormatsEMCAL/Cell.h"
+#include "DetectorsRaw/HBFUtilsInitializer.h"
 
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
 
+using namespace o2::framework;
+using namespace o2::emcal;
+
 // add workflow options, note that customization needs to be declared before
 // including Framework/runDataProcessing
-void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
+void customize(std::vector<ConfigParamSpec>& workflowOptions)
 {
-  std::vector<o2::framework::ConfigParamSpec> options{
-    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}}};
+  std::vector<ConfigParamSpec> options{
+    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}},
+    {"calibType", VariantType::String, "time", {"choose which calibration should be performed: time for tiem calibration, badchannel for bad channel calibration"}},
+    {"no-loadCalibParamsFromCCDB", VariantType::Bool, false, {"disabled by default such that calib params are taken from the ccdb. If enabled, calib params are taken from EMCALCalibParams.h directly"}},
+    {"no-rejectCalibTrigger", VariantType::Bool, false, {"disabled by default such that calib triggers are rejected. If enabled, calibration triggers (LED events etc.) also enter the calibration"}},
+    {"no-rejectL0Trigger", VariantType::Bool, false, {"disabled by default such that L0 triggers are rejected. If enabled, L0 triggers (Gamma trigger and jet trigger) also enter the calibration"}},
+    {"no-applyGainCalib", VariantType::Bool, false, {"if appplication of gain calibration should be disabled"}},
+    {"ctpconfig-run-independent", VariantType::Bool, false, {"Use CTP config w/o runNumber tag"}}};
 
   std::swap(workflowOptions, options);
 }
 
 #include "Framework/runDataProcessing.h" // the main driver
 
-o2::framework::WorkflowSpec defineDataProcessing(o2::framework::ConfigContext const& cfgc)
+WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
 {
-  WorkflowSpec specs;
+
   o2::conf::ConfigurableParam::updateFromString(cfgc.options().get<std::string>("configKeyValues"));
-  specs.emplace_back(getEMCALChannelCalibDeviceSpec());
+  std::string calibType = cfgc.options().get<std::string>("calibType");
+  bool loadCalibParamsFromCCDB = !cfgc.options().get<bool>("no-loadCalibParamsFromCCDB");
+  bool rejectCalibTrigger = !cfgc.options().get<bool>("no-rejectCalibTrigger");
+  bool rejectL0Trigger = !cfgc.options().get<bool>("no-rejectL0Trigger");
+  bool ctpcfgperrun = !cfgc.options().get<bool>("ctpconfig-run-independent");
+  bool applyGainCalib = !cfgc.options().get<bool>("no-applyGainCalib");
+
+  WorkflowSpec specs;
+  specs.emplace_back(getEMCALChannelCalibDeviceSpec(calibType, loadCalibParamsFromCCDB, rejectCalibTrigger, rejectL0Trigger, ctpcfgperrun, applyGainCalib));
+
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
+  // o2::raw::HBFUtilsInitializer hbfIni(cfgc, specs);
   return specs;
 }

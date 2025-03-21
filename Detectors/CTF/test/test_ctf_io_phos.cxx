@@ -12,8 +12,14 @@
 #define BOOST_TEST_MODULE Test PHSCTFIO
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
+
+#undef NDEBUG
+#include <cassert>
+
 #include <boost/test/unit_test.hpp>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/dataset.hpp>
+#include "CommonUtils/NameConf.h"
 #include "PHOSReconstruction/CTFCoder.h"
 #include "DataFormatsPHOS/CTF.h"
 #include "Framework/Logger.h"
@@ -24,8 +30,11 @@
 #include <cstring>
 
 using namespace o2::phos;
+namespace boost_data = boost::unit_test::data;
 
-BOOST_AUTO_TEST_CASE(CTFTest)
+inline std::vector<o2::ctf::ANSHeader> ANSVersions{o2::ctf::ANSVersionCompat, o2::ctf::ANSVersion1};
+
+BOOST_DATA_TEST_CASE(CTFTest, boost_data::make(ANSVersions), ansVersion)
 {
   std::vector<TriggerRecord> triggers;
   std::vector<Cell> cells;
@@ -50,11 +59,12 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   std::vector<o2::ctf::BufferType> vec;
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Encoder);
+    coder.setANSVersion(ansVersion);
     coder.encode(vec, triggers, cells); // compress
   }
   sw.Stop();
-  LOG(INFO) << "Compressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Compressed in " << sw.CpuTime() << " s";
 
   // writing
   {
@@ -66,7 +76,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     ctfImage->appendToTree(ctfTree, "PHS");
     ctfTree.Write();
     sw.Stop();
-    LOG(INFO) << "Wrote to tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Wrote to tree in " << sw.CpuTime() << " s";
   }
 
   // reading
@@ -78,7 +88,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     BOOST_CHECK(tree);
     o2::phos::CTF::readFromTree(vec, *(tree.get()), "PHS");
     sw.Stop();
-    LOG(INFO) << "Read back from tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Read back from tree in " << sw.CpuTime() << " s";
   }
 
   std::vector<TriggerRecord> triggersD;
@@ -87,22 +97,22 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   const auto ctfImage = o2::phos::CTF::getImage(vec.data());
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Decoder);
     coder.decode(ctfImage, triggersD, cellsD); // decompress
   }
   sw.Stop();
-  LOG(INFO) << "Decompressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Decompressed in " << sw.CpuTime() << " s";
 
   BOOST_CHECK(triggersD.size() == triggers.size());
   BOOST_CHECK(cellsD.size() == cells.size());
-  LOG(INFO) << " BOOST_CHECK triggersD.size() " << triggersD.size() << " triggers.size() " << triggers.size()
+  LOG(info) << " BOOST_CHECK triggersD.size() " << triggersD.size() << " triggers.size() " << triggers.size()
             << " BOOST_CHECK(cellsD.size() " << cellsD.size() << " cells.size()) " << cells.size();
 
   for (size_t i = 0; i < triggers.size(); i++) {
     const auto& dor = triggers[i];
     const auto& ddc = triggersD[i];
-    LOG(DEBUG) << " Orig.TriggerRecord " << i << " " << dor.getBCData() << " " << dor.getFirstEntry() << " " << dor.getNumberOfObjects();
-    LOG(DEBUG) << " Deco.TriggerRecord " << i << " " << ddc.getBCData() << " " << ddc.getFirstEntry() << " " << ddc.getNumberOfObjects();
+    LOG(debug) << " Orig.TriggerRecord " << i << " " << dor.getBCData() << " " << dor.getFirstEntry() << " " << dor.getNumberOfObjects();
+    LOG(debug) << " Deco.TriggerRecord " << i << " " << ddc.getBCData() << " " << ddc.getFirstEntry() << " " << ddc.getNumberOfObjects();
 
     BOOST_CHECK(dor.getBCData() == ddc.getBCData());
     BOOST_CHECK(dor.getNumberOfObjects() == ddc.getNumberOfObjects());

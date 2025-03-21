@@ -27,6 +27,8 @@
 #pragma link C++ class o2::gpu::Spline1DContainer < double> + ;
 #pragma link C++ class o2::gpu::Spline1D < float> + ;
 #pragma link C++ class o2::gpu::Spline1D < double> + ;
+#pragma link C++ class o2::gpu::Spline1DHelperOld < float> + ;
+#pragma link C++ class o2::gpu::Spline1DHelperOld < double> + ;
 #pragma link C++ class o2::gpu::Spline1DHelper < float> + ;
 #pragma link C++ class o2::gpu::Spline1DHelper < double> + ;
 #pragma link C++ class o2::gpu::Spline1DSpec < float, 0, 2> + ;
@@ -47,17 +49,32 @@
 #pragma link C++ class o2::gpu::SplineHelper < double> + ;
 
 #pragma link C++ class o2::gpu::ChebyshevFit1D + ;
+#pragma link C++ class o2::gpu::SymMatrixSolver + ;
+#pragma link C++ class o2::gpu::BandMatrixSolver < 0> + ;
 
 #pragma link C++ class o2::gpu::RegularSpline1D + ;
 #pragma link C++ class o2::gpu::IrregularSpline1D + ;
 #pragma link C++ class o2::gpu::IrregularSpline2D3D + ;
 #pragma link C++ class o2::gpu::SemiregularSpline2D3D + ;
 #pragma link C++ class o2::gpu::IrregularSpline2D3DCalibrator + ;
+
 #pragma link C++ class o2::gpu::TPCFastTransformGeo + ;
 #pragma link C++ class o2::gpu::TPCFastTransformGeo::SliceInfo + ;
 #pragma link C++ class o2::gpu::TPCFastTransformGeo::RowInfo + ;
+
 #pragma link C++ class o2::gpu::TPCFastTransform + ;
-#pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrection::SliceInfo + ;
+
+#pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrectionMap + ;
+#pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrection::RowInfo + ;
+
 #pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrection + ;
+#pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrection::SliceInfo + ;
+#pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrection::RowActiveArea + ;
+#pragma link C++ class o2::gpu::TPCFastSpaceChargeCorrection::SliceRowInfo + ;
+
+#pragma link C++ class o2::gpu::CorrectionMapsHelper + ;
+#pragma link C++ struct o2::gpu::MultivariatePolynomialContainer + ;
+#pragma link C++ struct o2::gpu::NDPiecewisePolynomialContainer + ;
+#pragma link C++ struct o2::gpu::TPCSlowSpaceChargeCorrection + ;
 
 #endif

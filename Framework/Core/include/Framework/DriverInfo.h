@@ -21,20 +21,24 @@
 #include "Framework/ChannelConfigurationPolicy.h"
 #include "Framework/ConfigParamSpec.h"
 #include "Framework/ProcessingPolicies.h"
+#include "Framework/CallbacksPolicy.h"
 #include "Framework/CompletionPolicy.h"
 #include "Framework/DispatchPolicy.h"
 #include "Framework/DeviceMetricsInfo.h"
 #include "Framework/LogParsingHelpers.h"
+#include "Framework/SendingPolicy.h"
 #include "DataProcessorInfo.h"
 #include "ResourcePolicy.h"
 
 namespace o2::framework
 {
 
-class ConfigContext;
+struct ConfigContext;
 
 /// Possible states for the DPL Driver application
 ///
+/// BIND_GUI_PORT => Binding of the GUI port, to avoid doing it at each level of they
+///                 hierarchy if a pipe is detected and we only need to dump a workflow.
 /// INIT => Initial state where global initialization should happen
 /// MERGE_CONFIGS => Invoked to rework the configuration so that common
 ///                  options are homogeneous between different invokations.
@@ -75,6 +79,7 @@ enum struct DriverState {
   IMPORT_CURRENT_WORKFLOW,
   DO_CHILD,
   MERGE_CONFIGS,
+  BIND_GUI_PORT,
   LAST
 };
 
@@ -102,16 +107,25 @@ struct DriverInfo {
   /// These are the policies which can be applied to decide when there
   /// is enough resources to process data.
   std::vector<ResourcePolicy> resourcePolicies;
+
+  /// These are the policies which can be applied to decide how
+  /// we send data.
+  std::vector<SendingPolicy> sendingPolicies;
+  /// These are the policies which can be applied to decide how
+  /// we forward data.
+  std::vector<ForwardingPolicy> forwardingPolicies;
   /// The argc with which the driver was started.
   int argc;
   /// The argv with which the driver was started.
   char** argv;
-  /// Whether the driver was started in batch mode or not.
-  bool batch;
   /// User specified policies for handling errors, completion and early forwarding
   ProcessingPolicies processingPolicies;
+  /// User specified policies for handling callbacks.
+  std::vector<CallbacksPolicy> callbacksPolicies;
   /// The offset at which the process was started.
   uint64_t startTime;
+  /// The actual time in milliseconds from epoch at which the process was started.
+  uint64_t startTimeMsFromEpoch;
   /// The optional timeout after which the driver will request
   /// all the children to quit.
   double timeout;
@@ -127,13 +141,6 @@ struct DriverInfo {
   std::vector<DataProcessorInfo> processorInfo;
   /// The config context. We use a bare pointer because std::observer_ptr is not a thing, yet.
   ConfigContext const* configContext;
-  /// The names for all the metrics which have been collected by this driver.
-  /// Should always be sorted alphabetically to ease insertion.
-  std::vector<std::string> availableMetrics;
-  /// The amount of time to process inputs coming from all the processes
-  float inputProcessingCost;
-  /// The time between one input processing and the other.
-  float inputProcessingLatency;
   /// The amount of time to draw last frame in the GUI
   float frameCost;
   /// The time between one frame and the other.
@@ -146,8 +153,6 @@ struct DriverInfo {
   unsigned short resourcesMonitoringDumpInterval = 0;
   /// Port used by the websocket control. 0 means not initialised.
   unsigned short port = 0;
-  /// Last port used for tracy
-  short tracyPort = 8086;
   /// The minimum level after which the device will exit with 1
   LogParsingHelpers::LogLevel minFailureLevel = LogParsingHelpers::LogLevel::Fatal;
 
@@ -163,6 +168,8 @@ struct DriverInfo {
 
   /// The last error reported by the driver itself
   std::string lastError;
+  /// Driver mode
+  DriverMode mode = DriverMode::STANDALONE;
 };
 
 struct DriverInfoHelper {

@@ -9,13 +9,13 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "Steer/MCKinematicsReader.h"
 #include "SimulationDataFormat/MCEventHeader.h"
 #include "SimulationDataFormat/TrackReference.h"
 #include <TChain.h>
 #include <vector>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 using namespace o2::steer;
 
@@ -26,7 +26,7 @@ MCKinematicsReader::~MCKinematicsReader()
   }
   mInputChains.clear();
 
-  if (mDigitizationContext) {
+  if (mDigitizationContext && mOwningDigiContext) {
     delete mDigitizationContext;
   }
 }
@@ -102,7 +102,7 @@ void MCKinematicsReader::loadHeadersForSource(int source) const
       delete header;
       header = nullptr;
     } else {
-      LOG(WARN) << "MCHeader branch not found";
+      LOG(warn) << "MCHeader branch not found";
     }
   }
 }
@@ -127,22 +127,18 @@ void MCKinematicsReader::loadTrackRefsForSource(int source) const
         }
       }
     } else {
-      LOG(WARN) << "TrackRefs branch not found";
+      LOG(warn) << "TrackRefs branch not found";
     }
   }
 }
 
-bool MCKinematicsReader::initFromDigitContext(std::string_view name)
+bool MCKinematicsReader::initFromDigitContext(o2::steer::DigitizationContext const* context)
 {
   if (mInitialized) {
-    LOG(INFO) << "MCKinematicsReader already initialized; doing nothing";
+    LOG(info) << "MCKinematicsReader already initialized; doing nothing";
     return false;
   }
 
-  auto context = DigitizationContext::loadFromFile(name);
-  if (!context) {
-    return false;
-  }
   mInitialized = true;
   mDigitizationContext = context;
 
@@ -160,10 +156,25 @@ bool MCKinematicsReader::initFromDigitContext(std::string_view name)
   return true;
 }
 
+bool MCKinematicsReader::initFromDigitContext(std::string_view name)
+{
+  if (mInitialized) {
+    LOG(info) << "MCKinematicsReader already initialized; doing nothing";
+    return false;
+  }
+
+  auto context = DigitizationContext::loadFromFile(name);
+  if (!context) {
+    return false;
+  }
+  mOwningDigiContext = true;
+  return initFromDigitContext(context);
+}
+
 bool MCKinematicsReader::initFromKinematics(std::string_view name)
 {
   if (mInitialized) {
-    LOG(INFO) << "MCKinematicsReader already initialized; doing nothing";
+    LOG(info) << "MCKinematicsReader already initialized; doing nothing";
     return false;
   }
   mInputChains.emplace_back(new TChain("o2sim"));

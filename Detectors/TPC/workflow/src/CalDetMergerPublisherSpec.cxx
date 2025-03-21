@@ -12,12 +12,14 @@
 /// @file   CalDetMergerPublisherSpec.cxx
 /// @brief  TPC CalDet merger and CCDB publisher
 /// @author Jens Wiechula, Jens.Wiechula@ikf.uni-frankfurt.de
+/// @author David Silvermyr
 
 #include <bitset>
 #include <unordered_map>
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <sstream>
 
 #include <fmt/format.h>
 
@@ -36,7 +38,11 @@
 #include "CCDB/CcdbObjectInfo.h"
 #include "TPCBase/CDBInterface.h"
 #include "TPCBase/CalDet.h"
+#include "TPCBase/CRUCalibHelpers.h"
+#include "TPCWorkflow/CalibRawPartInfo.h"
 #include "TPCWorkflow/CalDetMergerPublisherSpec.h"
+#include "TPCWorkflow/ProcessingHelpers.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 using namespace o2::tpc;
@@ -48,12 +54,13 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
   using CcdbObjectInfo = o2::ccdb::CcdbObjectInfo;
 
  public:
-  CalDetMergerPublisherSpec(uint32_t lanes, bool skipCCDB, bool dumpAfterComplete = false) : mLanesToExpect(lanes), mSkipCCDB(skipCCDB), mPublishAfterComplete(dumpAfterComplete) {}
+  CalDetMergerPublisherSpec(uint32_t lanes, bool skipCCDB, bool sendToDCS, bool dumpAfterComplete = false) : mLanesToExpect(lanes), mCalibInfos(lanes), mSkipCCDB(skipCCDB), mSendToDCS(sendToDCS), mPublishAfterComplete(dumpAfterComplete) {}
 
   void init(o2::framework::InitContext& ic) final
   {
     mForceQuit = ic.options().get<bool>("force-quit");
     mDirectFileDump = ic.options().get<bool>("direct-file-dump");
+    mCheckCalibInfos = ic.options().get<bool>("check-calib-infos");
   }
 
   void run(o2::framework::ProcessingContext& pc) final
@@ -61,17 +68,38 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
     int nSlots = pc.inputs().getNofParts(0);
     assert(pc.inputs().getNofParts(1) == nSlots);
 
+    mRunNumber = processing_helpers::getRunNumber(pc);
+
     for (int isl = 0; isl < nSlots; isl++) {
-      const auto type = pc.inputs().get<int>("clbInfo", isl);
+      const auto calibInfo = pc.inputs().get<CalibRawPartInfo>("clbInfo", isl);
+      const auto type = calibInfo.calibType;
       const auto pld = pc.inputs().get<gsl::span<char>>("clbPayload", isl); // this is actually an image of TMemFile
       const auto* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(pc.inputs().get("clbInfo", isl));
       const auto subSpec = dh->subSpecification;
       const int lane = subSpec >> 4;
       const int calibType = subSpec & 0xf;
+      mCalibInfos[lane] = calibInfo;
 
-      //const auto& path = wrp->getPath();
+      // const auto& path = wrp->getPath();
       TMemFile f("file", (char*)&pld[0], pld.size(), "READ");
       if (!f.IsZombie()) {
+        auto calDetMap = f.Get<CalDetMap>("data");
+        if (calDetMap) {
+          if (mMergedCalDetsMap.size() == 0) {
+            mCalDetMapType = CDBType(type);
+            for (auto& [key, obj] : *calDetMap) {
+              mMergedCalDetsMap[key] = obj;
+            }
+          } else {
+            if (int(mCalDetMapType) != type) {
+              LOGP(fatal, "received CalDetMap of different type for merging, previous: {}, present{}", CDBTypeMap.at(mCalDetMapType), CDBTypeMap.at(CDBType(type)));
+            }
+            for (auto& [key, obj] : *calDetMap) {
+              mMergedCalDetsMap[key] += obj;
+            }
+          }
+        }
+
         auto calDet = f.Get<o2::tpc::CalDet<float>>("data");
         if (calDet) {
           if (mMergedCalDets.find(type) == mMergedCalDets.end()) {
@@ -83,10 +111,10 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
       }
       f.Close();
 
-      LOGP(info, "getting slot {}, subspec {:#8x}, lane {}, type {}", isl, subSpec, lane, calibType);
-      //if (mReceivedLanes.test(lane)) {
-      //LOGP(warning, "lane {} received multiple times", lane);
-      //}
+      LOGP(info, "getting slot {}, subspec {:#8x}, lane {}, type {} ({}), firstTF {}, cycle {}", isl, subSpec, lane, calibType, type, calibInfo.tfIDInfo.tfCounter, calibInfo.publishCycle);
+      // if (mReceivedLanes.test(lane)) {
+      // LOGP(warning, "lane {} received multiple times", lane);
+      // }
       mReceivedLanes.set(lane);
     }
 
@@ -94,13 +122,13 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
       LOGP(info, "data of all lanes received");
       if (mPublishAfterComplete) {
         LOGP(info, "publishing after all data was received");
-        dumpCalibData();
         sendOutput(pc.outputs());
+
         // reset calibration objects
+        mMergedCalDetsMap.clear();
         for (auto& [type, object] : mMergedCalDets) {
           object = 0;
         }
-        mCalibDumped = false;
       }
       mReceivedLanes.reset();
     }
@@ -111,7 +139,6 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
     LOGP(info, "endOfStream");
 
     if (mReceivedLanes.count() == mLanesToExpect) {
-      dumpCalibData();
       sendOutput(ec.outputs());
     } else {
       LOGP(info, "Received lanes {} does not match expected lanes {}, object already sent", mReceivedLanes.count(), mLanesToExpect);
@@ -121,24 +148,60 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
 
  private:
   using dataType = o2::tpc::CalDet<float>;
+  using CalDetMap = std::unordered_map<std::string, dataType>;
   std::bitset<128> mReceivedLanes;                  ///< counter for received lanes
   std::unordered_map<int, dataType> mMergedCalDets; ///< calibration data to merge
+  std::vector<CalibRawPartInfo> mCalibInfos;        ///< calibration info of all partially sent data sets
+  CalDetMap mMergedCalDetsMap;                      ///< calibration data to merge; Map
+  CDBType mCalDetMapType;                           ///< calibration type of CalDetMap object
+  uint64_t mRunNumber{0};                           ///< processed run number
   uint32_t mLanesToExpect{0};                       ///< number of expected lanes sending data
+  uint32_t mDCSSpecOffset{32768};                   ///< offset for DCS specs
   bool mForceQuit{false};                           ///< for quit after processing finished
   bool mDirectFileDump{false};                      ///< directly dump the calibration data to file
   bool mPublishAfterComplete{false};                ///< dump calibration directly after data from all lanes received
-  bool mCalibDumped{false};                         ///< if calibration object already dumped
   bool mSkipCCDB{false};                            ///< skip sending of calibration data
+  bool mSendToDCS{false};                           ///< skip sending of calibration data
+  bool mCheckCalibInfos{false};                     ///< check calib infos
 
   //____________________________________________________________________________
   void sendOutput(DataAllocator& output)
   {
-    //CDBStorage::MetaData_t md;
+    if (mCheckCalibInfos) {
+      if (std::adjacent_find(mCalibInfos.begin(), mCalibInfos.end(), std::not_equal_to<>()) != mCalibInfos.end()) {
+        LOGP(warning, "Different calib info found");
+      }
+    }
 
     // perhaps should be changed to time of the run
-    const auto now = std::chrono::system_clock::now();
-    const long timeStart = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    const long timeEnd = 99999999999999;
+    const long timeStart = mCalibInfos[0].tfIDInfo.creation + mCalibInfos[0].publishCycle;
+    const long timeEnd = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP;
+
+    std::map<std::string, std::string> md;
+
+    if (mMergedCalDetsMap.size() > 0) {
+      o2::ccdb::CcdbObjectInfo w;
+      auto image = o2::ccdb::CcdbApi::createObjectImage(&mMergedCalDetsMap, &w);
+
+      w.setPath(CDBTypeMap.at(mCalDetMapType));
+      w.setStartValidityTimestamp(timeStart);
+      w.setEndValidityTimestamp(timeEnd);
+
+      md = w.getMetaData();
+      md[o2::base::NameConf::CCDBRunTag.data()] = std::to_string(mRunNumber);
+      w.setMetaData(md);
+
+      LOGP(info, "Sending object {}/{} of size {} bytes, valid for {} : {}", w.getPath(), w.getFileName(), image->size(), w.getStartValidityTimestamp(), w.getEndValidityTimestamp());
+
+      o2::header::DataHeader::SubSpecificationType subSpec{(o2::header::DataHeader::SubSpecificationType)mCalDetMapType};
+      output.snapshot(Output{clbUtils::gDataOriginCDBPayload, "TPC_CALIB", subSpec}, *image.get());
+      output.snapshot(Output{clbUtils::gDataOriginCDBWrapper, "TPC_CALIB", subSpec}, w);
+
+      // for pedestal calibration send to DCS if requested
+      if (mSendToDCS && (mCalDetMapType == CDBType::CalPedestalNoise)) {
+        sendPedestalNoiseToDCS(output);
+      }
+    }
 
     for (auto& [type, object] : mMergedCalDets) {
       o2::ccdb::CcdbObjectInfo w;
@@ -148,40 +211,112 @@ class CalDetMergerPublisherSpec : public o2::framework::Task
       w.setStartValidityTimestamp(timeStart);
       w.setEndValidityTimestamp(timeEnd);
 
-      LOG(INFO) << "Sending object " << w.getPath() << "/" << w.getFileName() << " of size " << image->size()
+      md = w.getMetaData();
+      md[o2::base::NameConf::CCDBRunTag.data()] = std::to_string(mRunNumber);
+      w.setMetaData(md);
+
+      LOG(info) << "Sending object " << w.getPath() << "/" << w.getFileName() << " of size " << image->size()
                 << " bytes, valid for " << w.getStartValidityTimestamp() << " : " << w.getEndValidityTimestamp();
 
       o2::header::DataHeader::SubSpecificationType subSpec{(o2::header::DataHeader::SubSpecificationType)type};
       output.snapshot(Output{clbUtils::gDataOriginCDBPayload, "TPC_CALIB", subSpec}, *image.get());
       output.snapshot(Output{clbUtils::gDataOriginCDBWrapper, "TPC_CALIB", subSpec}, w);
     }
+
+    dumpCalibData();
   }
 
   //____________________________________________________________________________
   void dumpCalibData()
   {
-    if (mDirectFileDump && !mCalibDumped) {
+    if (mDirectFileDump) {
       LOGP(info, "Dumping output to file");
-      TFile f("merged_CalDet.root", "recreate");
+      std::string fileName = "merged_CalDet.root";
+      if (mMergedCalDetsMap.size()) {
+        const auto& cdbType = CDBTypeMap.at(mCalDetMapType);
+        const auto name = cdbType.substr(cdbType.rfind("/") + 1);
+        fileName = fmt::format("merged_{}_{}_{}.root", name, mCalibInfos[0].tfIDInfo.tfCounter, mCalibInfos[0].publishCycle);
+      }
+      TFile f(fileName.data(), "recreate");
+      for (auto& [key, object] : mMergedCalDetsMap) {
+        f.WriteObject(&object, object.getName().data());
+      }
       for (auto& [type, object] : mMergedCalDets) {
         f.WriteObject(&object, object.getName().data());
       }
-      mCalibDumped = true;
+    }
+  }
+
+  void sendPedestalNoiseToDCS(DataAllocator& output)
+  {
+    auto sendObject = [this, &output](const CalPad& data, const std::string& path, const std::string& fileNameBase = "") {
+      const long timeStart = mCalibInfos[0].tfIDInfo.creation + mCalibInfos[0].publishCycle;
+      const long timeEnd = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP;
+
+      const auto dataMap = cru_calib_helpers::getDataMap(data);
+      std::ostringstream dataStr;
+      cru_calib_helpers::writeValues(dataStr, dataMap);
+
+      std::vector<char> dataVec;
+      const auto& str = dataStr.str();
+      std::copy(str.begin(), str.end(), std::back_inserter(dataVec));
+
+      o2::ccdb::CcdbObjectInfo w;
+
+      w.setPath(path);
+      w.setFileName(fmt::format("{}_{}_{}.txt", fileNameBase, mRunNumber, timeStart));
+      w.setStartValidityTimestamp(timeStart);
+      w.setEndValidityTimestamp(timeEnd);
+
+      auto md = w.getMetaData();
+      md[o2::base::NameConf::CCDBRunTag.data()] = std::to_string(mRunNumber);
+      w.setMetaData(md);
+
+      LOGP(info, "Sending object to DCS DB {}/{} of size {} ({}) bytes, valid for {} : {}", w.getPath(), w.getFileName(), dataVec.size(), dataStr.str().size(), w.getStartValidityTimestamp(), w.getEndValidityTimestamp());
+
+      o2::header::DataHeader::SubSpecificationType subSpec{(o2::header::DataHeader::SubSpecificationType)mCalDetMapType + mDCSSpecOffset};
+      output.snapshot(Output{clbUtils::gDataOriginCDBPayload, "TPC_CALIB_DCS", subSpec}, dataVec);
+      output.snapshot(Output{clbUtils::gDataOriginCDBWrapper, "TPC_CALIB_DCS", subSpec}, w);
+    };
+
+    const auto& pedestals = mMergedCalDetsMap.at("Pedestals");
+    const auto& noise = mMergedCalDetsMap.at("Noise");
+
+    bool first = true;
+    for (auto threshold : {2.5f, 3.f, 3.5f}) {
+      auto pedestalsThreshold = cru_calib_helpers::preparePedestalFiles(pedestals, noise, {threshold});
+
+      // pedestals don't depend on threshold, publish on first iteration only
+      if (first) {
+        const auto& pedestalsPhys = pedestalsThreshold["PedestalsPhys"];
+        sendObject(pedestalsPhys, "TPC/Calib/PedestalsPhys", "Pedestals");
+      }
+
+      const auto& thresholdsPhys = pedestalsThreshold["ThresholdMapPhys"];
+      const auto fileNameBase = fmt::format("ThresholdsPhys-{:.0f}", threshold * 10);
+      sendObject(thresholdsPhys, "TPC/Calib/" + fileNameBase, fileNameBase);
+
+      first = false;
     }
   }
 };
 
-o2::framework::DataProcessorSpec o2::tpc::getCalDetMergerPublisherSpec(uint32_t lanes, bool skipCCDB, bool dumpAfterComplete)
+o2::framework::DataProcessorSpec o2::tpc::getCalDetMergerPublisherSpec(uint32_t lanes, bool skipCCDB, bool sendToDCS, bool dumpAfterComplete)
 {
   std::vector<OutputSpec> outputs;
   if (!skipCCDB) {
-    outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBPayload, "TPC_CALIB"});
-    outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBWrapper, "TPC_CALIB"});
+    outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBPayload, "TPC_CALIB"}, Lifetime::Sporadic);
+    outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBWrapper, "TPC_CALIB"}, Lifetime::Sporadic);
+  }
+
+  if (sendToDCS) {
+    outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBPayload, "TPC_CALIB_DCS"}, Lifetime::Sporadic);
+    outputs.emplace_back(ConcreteDataTypeMatcher{clbUtils::gDataOriginCDBWrapper, "TPC_CALIB_DCS"}, Lifetime::Sporadic);
   }
 
   std::vector<InputSpec> inputs;
-  inputs.emplace_back("clbPayload", ConcreteDataTypeMatcher{gDataOriginTPC, "CLBPART"});
-  inputs.emplace_back("clbInfo", ConcreteDataTypeMatcher{gDataOriginTPC, "CLBPARTINFO"});
+  inputs.emplace_back("clbPayload", ConcreteDataTypeMatcher{gDataOriginTPC, "CLBPART"}, Lifetime::Sporadic);
+  inputs.emplace_back("clbInfo", ConcreteDataTypeMatcher{gDataOriginTPC, "CLBPARTINFO"}, Lifetime::Sporadic);
 
   const std::string id = "calib-tpc-caldet-merger-publisher";
 
@@ -189,10 +324,11 @@ o2::framework::DataProcessorSpec o2::tpc::getCalDetMergerPublisherSpec(uint32_t 
     id.data(),
     inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<CalDetMergerPublisherSpec>(lanes, skipCCDB, dumpAfterComplete)},
+    AlgorithmSpec{adaptFromTask<CalDetMergerPublisherSpec>(lanes, skipCCDB, sendToDCS, dumpAfterComplete)},
     Options{
       {"force-quit", VariantType::Bool, false, {"force quit after max-events have been reached"}},
       {"direct-file-dump", VariantType::Bool, false, {"directly dump calibration to file"}},
+      {"check-calib-infos", VariantType::Bool, false, {"make consistency check of calib infos"}},
     } // end Options
-  };  // end DataProcessorSpec
+  }; // end DataProcessorSpec
 }

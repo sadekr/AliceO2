@@ -15,6 +15,8 @@
 #include "Framework/DataProcessingHeader.h"
 #include "Framework/VariantHelpers.h"
 #include "Framework/RuntimeError.h"
+#include "Headers/DataHeader.h"
+#include "Headers/Stack.h"
 #include <iostream>
 
 namespace o2::framework::data_matcher
@@ -32,10 +34,29 @@ ContextElement::Value const& VariableContext::get(size_t pos) const
   return mElements.at(pos).value;
 }
 
+void VariableContext::publish(void (*callback)(VariableContext const&, TimesliceSlot slot, void*), void* context, TimesliceSlot slot)
+{
+  bool anyPublish = false;
+  for (size_t i = 0; i < MAX_MATCHING_VARIABLE; i++) {
+    auto& element = mElements[i];
+
+    if (element.commitVersion == element.publishVersion) {
+      continue;
+    }
+    element.publishVersion = element.commitVersion;
+    anyPublish = true;
+  }
+  if (anyPublish) {
+    callback(*this, slot, context);
+  }
+}
+
 void VariableContext::commit()
 {
   for (size_t i = 0; i < mPerformedUpdates; ++i) {
-    mElements[mUpdates[i].position].value = mUpdates[i].newValue;
+    auto& element = mElements[mUpdates[i].position];
+    element.value = mUpdates[i].newValue;
+    element.commitVersion++;
   }
   mPerformedUpdates = 0;
 }
@@ -53,13 +74,13 @@ bool OriginValueMatcher::match(header::DataHeader const& header, VariableContext
   if (auto ref = std::get_if<ContextRef>(&mValue)) {
     auto& variable = context.get(ref->index);
     if (auto value = std::get_if<std::string>(&variable)) {
-      return strncmp(header.dataOrigin.str, value->c_str(), 4) == 0;
+      return strncmp(header.dataOrigin.str, value->c_str(), header::DataOrigin::size) == 0;
     }
-    auto maxSize = strnlen(header.dataOrigin.str, 4);
+    auto maxSize = strnlen(header.dataOrigin.str, header::DataOrigin::size);
     context.put({ref->index, std::string(header.dataOrigin.str, maxSize)});
     return true;
   } else if (auto s = std::get_if<std::string>(&mValue)) {
-    return strncmp(header.dataOrigin.str, s->c_str(), 4) == 0;
+    return strncmp(header.dataOrigin.str, s->c_str(), header::DataOrigin::size) == 0;
   }
   throw runtime_error("Mismatching type for variable");
 }
@@ -69,13 +90,13 @@ bool DescriptionValueMatcher::match(header::DataHeader const& header, VariableCo
   if (auto ref = std::get_if<ContextRef>(&mValue)) {
     auto& variable = context.get(ref->index);
     if (auto value = std::get_if<std::string>(&variable)) {
-      return strncmp(header.dataDescription.str, value->c_str(), 16) == 0;
+      return strncmp(header.dataDescription.str, value->c_str(), header::DataDescription::size) == 0;
     }
-    auto maxSize = strnlen(header.dataDescription.str, 16);
+    auto maxSize = strnlen(header.dataDescription.str, header::DataDescription::size);
     context.put({ref->index, std::string(header.dataDescription.str, maxSize)});
     return true;
   } else if (auto s = std::get_if<std::string>(&this->mValue)) {
-    return strncmp(header.dataDescription.str, s->c_str(), 16) == 0;
+    return strncmp(header.dataDescription.str, s->c_str(), header::DataDescription::size) == 0;
   }
   throw runtime_error("Mismatching type for variable");
 }
@@ -106,6 +127,8 @@ bool StartTimeValueMatcher::match(header::DataHeader const& dh, DataProcessingHe
       return (dph.startTime / mScale) == *value;
     }
     context.put({ref->index, dph.startTime / mScale});
+    // We always put in 12 the creation time
+    context.put({CREATIONTIME_POS, dph.creation});
     // We always put in 13 the runNumber
     context.put({RUNNUMBER_POS, dh.runNumber});
     // We always put in 14 the tfCounter
@@ -240,6 +263,8 @@ bool DataDescriptorMatcher::match(char const* d, VariableContext& context) const
   //     return std::visit(eval, mLeft) ^ std::visit(eval, mRight);
   //   case Op::Just:
   //     return std::visit(eval, mLeft);
+  //   case Op::Not:
+  //     return !std::visit(eval, mLeft);
   // }
   //  When we drop support for macOS 10.13
   if (auto pval0 = std::get_if<OriginValueMatcher>(&mLeft)) {
@@ -284,6 +309,9 @@ bool DataDescriptorMatcher::match(char const* d, VariableContext& context) const
   if (mOp == Op::Just) {
     return leftValue;
   }
+  if (mOp == Op::Not) {
+    return !leftValue;
+  }
 
   if (auto pval0 = std::get_if<OriginValueMatcher>(&mRight)) {
     auto dh = o2::header::get<header::DataHeader*>(d);
@@ -314,6 +342,8 @@ bool DataDescriptorMatcher::match(char const* d, VariableContext& context) const
       return leftValue ^ rightValue;
     case Op::Just:
       return leftValue;
+    case Op::Not:
+      return !leftValue;
   }
   throw runtime_error("Bad parsing tree");
 };
@@ -380,7 +410,11 @@ bool DataDescriptorMatcher::operator==(DataDescriptorMatcher const& other) const
   }
 
   if (mOp == Op::Just) {
-    return true;
+    return leftValue;
+  }
+
+  if (mOp == Op::Not) {
+    return leftValue;
   }
 
   {
@@ -439,7 +473,8 @@ std::ostream& operator<<(std::ostream& os, DataDescriptorMatcher const& matcher)
   auto edgeWalker = overloaded{
     [&os](EdgeActions::EnterNode action) {
       os << "(" << action.node->mOp;
-      if (action.node->mOp == DataDescriptorMatcher::Op::Just) {
+      if (action.node->mOp == DataDescriptorMatcher::Op::Just ||
+          action.node->mOp == DataDescriptorMatcher::Op::Not) {
         return ChildAction::VisitLeft;
       }
       return ChildAction::VisitBoth;
@@ -475,6 +510,9 @@ std::ostream& operator<<(std::ostream& os, DataDescriptorMatcher::Op const& op)
       break;
     case DataDescriptorMatcher::Op::Just:
       os << "just";
+      break;
+    case DataDescriptorMatcher::Op::Not:
+      os << "not";
       break;
     case DataDescriptorMatcher::Op::Xor:
       os << "xor";

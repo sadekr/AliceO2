@@ -42,7 +42,14 @@ class RobustAverage
  public:
   /// constructor
   /// \param maxValues maximum number of values which will be averaged. Copy of values will be done.
-  RobustAverage(const unsigned int maxValues) { mValues.reserve(maxValues); }
+  /// \param withWeights also storing weights for weighted mean
+  RobustAverage(const unsigned int maxValues, bool withWeights = true) : mUseWeights{withWeights}
+  {
+    mValues.reserve(maxValues);
+    if (mUseWeights) {
+      mWeights.reserve(maxValues);
+    }
+  }
 
   /// default constructor
   RobustAverage() = default;
@@ -53,38 +60,84 @@ class RobustAverage
 
   /// reserve memory for member
   /// \param maxValues maximum number of values which will be averaged. Copy of values will be done.
-  void reserve(const unsigned int maxValues) { mValues.reserve(maxValues); }
+  void reserve(const unsigned int maxValues);
 
   /// clear the stored values
-  void clear() { mValues.clear(); }
+  void clear();
 
   /// \param value value which will be added to the list of stored values for averaging
-  void addValue(const float value) { mValues.emplace_back(value); }
+  /// \param weight weight of the value (weight will only be stored if flag to weights is true)
+  void addValue(const float value, const float weight = 1);
 
   /// returns the filtered average value
   /// \param sigma maximum accepted standard deviation: sigma*stdev
-  float getFilteredAverage(const float sigma = 3);
+  ///\param interQuartileRange number of points in inner quartile to consider
+  std::pair<float, float> getFilteredAverage(const float sigma = 3, const float interQuartileRange = 0.9);
+
+  /// remove all the point which are abs(val - val_median)>maxAbsMedian
+  std::tuple<float, float, float, unsigned int> filterPointsMedian(const float maxAbsMedian, const float sigma = 5);
 
   /// \return returns mean of stored values
-  float getMean() const { return getMean(mValues.begin(), mValues.end()); }
+  float getMean() const { return mValues.empty() ? 0 : getMean(mValues.begin(), mValues.end()); }
+
+  /// returns truncated mean for range min and max
+  /// \param low lower fraction rejection e.g. 0.05 -> lower 5% are rejected
+  /// \param high upper fraction rejection e.g. 0.95 -> upper 5% are rejected
+  float getTrunctedMean(float low, float high);
+
+  /// \return returns the median
+  float getMedian();
+
+  /// \return returns weighted mean of stored values
+  float getWeightedMean() const { return mUseWeights ? getWeightedMean(mValues.begin(), mValues.end(), mWeights.begin(), mWeights.end()) : 0; }
+
+  /// \return returns standard deviation of stored values
+  float getStdDev() { return getStdDev(getMean(), mValues.begin(), mValues.end()); }
+
+  /// \return returns stored values
+  const auto& getValues() const { return mValues; }
+
+  void setValues(const std::vector<float>& values) { mValues = values; }
+
+  /// \return returns stored values
+  const auto& getWeigths() const { return mWeights; }
 
   /// values which will be averaged and filtered
   void print() const;
 
+  // sorting values and weights
+  void sort();
+
+  /// returns if weights are stored
+  bool getUseWeights() const { return mUseWeights; }
+
+  /// returns if weights are stored
+  void setUseWeights(bool useweights) { mUseWeights = useweights; }
+
+  /// \return returns the quantile value - linear interpolation or median unbiased used -
+  /// \param quantile quantile to get
+  /// \param type interpolation type: type=0 use linear interpolation, type=1 use unbiased median (in case of low statistics)
+  float getQuantile(float quantile, int type);
+
  private:
   std::vector<float> mValues{};    ///< values which will be averaged and filtered
+  std::vector<float> mWeights{};   ///< weights of each value
   std::vector<float> mTmpValues{}; ///< tmp vector used for calculation of std dev
+  bool mUseWeights{};              ///< also storing weights
 
   float getMean(std::vector<float>::const_iterator begin, std::vector<float>::const_iterator end) const;
 
-  /// performing outlier filtering of the stored values
-  float getStdDev(const float mean);
+  float getWeightedMean(std::vector<float>::const_iterator beginValues, std::vector<float>::const_iterator endValues, std::vector<float>::const_iterator beginWeight, std::vector<float>::const_iterator endWeight) const;
+
+  /// \return returns standard deviation of stored values
+  /// \param mean mean of stored values
+  float getStdDev(const float mean, std::vector<float>::const_iterator begin, std::vector<float>::const_iterator end);
 
   /// performing outlier filtering of the stored values by defining range of included values in terms of standard deviation
   /// \param mean mean of the stored values
   /// \param stdev standard deviation of the values
   /// \param sigma maximum accepted standard deviation: sigma*stdev
-  float getFilteredMean(const float mean, const float stdev, const float sigma);
+  float getFilteredMean(const float mean, const float stdev, const float sigma) const;
 };
 
 } // namespace o2::tpc

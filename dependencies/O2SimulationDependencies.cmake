@@ -43,11 +43,6 @@ set_package_properties(pythia
                        PROPERTIES
                        TYPE ${mcPackageRequirement} DESCRIPTION
                             "the Pythia8 generator")
-find_package(pythia6 MODULE)
-set_package_properties(pythia6
-                       PROPERTIES
-                       TYPE ${mcPackageRequirement} DESCRIPTION
-                            "the Pythia6 legacy generator")
 find_package(Geant3 MODULE)
 set_package_properties(Geant3
                        PROPERTIES
@@ -76,10 +71,12 @@ set_package_properties(HepMC3
 		       TYPE OPTIONAL DESCRIPTION
 		       "the HepMC3 event record package")
 
+find_package(MCStepLogger MODULE)
+set_package_properties(MCStepLogger PROPERTIES TYPE ${mcPackageRequirement})
+
 set(doBuildSimulation OFF)
 
 if(pythia_FOUND
-   AND pythia6_FOUND
    AND Geant3_FOUND
    AND Geant4_FOUND
    AND Geant4VMC_FOUND

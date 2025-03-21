@@ -18,15 +18,15 @@
 #include "GPUTPCGMMergerTypes.h"
 #include "GPUTPCGMTrackParam.h"
 
-namespace GPUCA_NAMESPACE::gpu
+namespace o2::gpu
 {
 class GPUITSTrack : public GPUTPCGMTrackParam
 {
  public:
   gputpcgmmergertypes::GPUTPCOuterParam mOuterParam;
   float mAlpha;
-  int mClusters[7];
+  int32_t mClusters[7];
 };
-} // namespace GPUCA_NAMESPACE::gpu
+} // namespace o2::gpu
 
 #endif

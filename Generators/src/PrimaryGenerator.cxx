@@ -12,11 +12,14 @@
 /// \author R+Preghenella - June 2017
 
 #include "Generators/PrimaryGenerator.h"
+#include <Generators/PrimaryGeneratorParam.h>
 #include "Generators/Generator.h"
-#include "Generators/InteractionDiamondParam.h"
+#include "SimConfig/InteractionDiamondParam.h"
 #include "SimulationDataFormat/MCEventHeader.h"
-#include "SimulationDataFormat/Stack.h"
-#include "FairLogger.h"
+#include "SimulationDataFormat/MCGenProperties.h"
+#include "DataFormatsCalibration/MeanVertexObject.h"
+#include "DetectorsBase/Stack.h"
+#include <fairlogger/Logger.h>
 
 #include "FairGenericStack.h"
 #include "TFile.h"
@@ -37,7 +40,7 @@ namespace eventgen
 PrimaryGenerator::~PrimaryGenerator()
 {
   /** destructor **/
-
+  LOG(info) << "Destructing PrimaryGenerator";
   if (mEmbedFile && mEmbedFile->IsOpen()) {
     mEmbedFile->Close();
     delete mEmbedFile;
@@ -53,20 +56,19 @@ Bool_t PrimaryGenerator::Init()
 {
   /** init **/
 
-  LOG(INFO) << "Initialising primary generator";
+  LOG(info) << "Initialising primary generator";
+
+  // set generator ID and description
+  auto& params = PrimaryGeneratorParam::Instance();
+  setGeneratorId(params.id);
+  setGeneratorDescription(params.description);
 
   /** embedding **/
   if (mEmbedTree) {
-    LOG(INFO) << "Embedding into: " << mEmbedFile->GetName()
+    LOG(info) << "Embedding into: " << mEmbedFile->GetName()
               << " (" << mEmbedEntries << " events)";
     return FairPrimaryGenerator::Init();
   }
-
-  /** normal generation **/
-
-  /** retrieve and set interaction diamond **/
-  auto& diamond = InteractionDiamondParam::Instance();
-  setInteractionDiamond(diamond.position, diamond.width);
 
   /** base class init **/
   return FairPrimaryGenerator::Init();
@@ -80,7 +82,12 @@ Bool_t PrimaryGenerator::GenerateEvent(FairGenericStack* pStack)
 
   /** normal generation if no embedding **/
   if (!mEmbedTree) {
-    return FairPrimaryGenerator::GenerateEvent(pStack);
+    fixInteractionVertex(); // <-- always fixes vertex outside of FairROOT
+    auto ret = FairPrimaryGenerator::GenerateEvent(pStack);
+    if (ret) {
+      setGeneratorInformation();
+    }
+    return ret;
   }
 
   /** this is for embedding **/
@@ -109,6 +116,7 @@ Bool_t PrimaryGenerator::GenerateEvent(FairGenericStack* pStack)
     o2event->setEmbeddingFileName(mEmbedFile->GetName());
     o2event->setEmbeddingEventIndex(mEmbedIndex);
   }
+  setGeneratorInformation();
 
   /** increment embedding counter **/
   mEmbedIndex++;
@@ -126,9 +134,14 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
                                 Int_t daughter1, Int_t daughter2,
                                 Bool_t wanttracking,
                                 Double_t e, Double_t tof,
-                                Double_t weight, TMCProcess proc)
+                                Double_t weight, TMCProcess proc, Int_t generatorStatus)
 {
   /** add track **/
+
+  // check the status encoding
+  if (!mcgenstatus::isEncoded(generatorStatus) && proc == TMCProcess::kPPrimary) {
+    LOG(fatal) << "Generator status " << generatorStatus << " of particle is not encoded properly.";
+  }
 
   /** add event vertex to track vertex **/
   vx += fVertex.X();
@@ -138,7 +151,7 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
   /** check if particle to be tracked exists in PDG database **/
   auto particlePDG = TDatabasePDG::Instance()->GetParticle(pdgid);
   if (wanttracking && !particlePDG) {
-    LOG(WARN) << "Particle to be tracked is not defined in PDG: pdg = " << pdgid;
+    LOG(warn) << "Particle to be tracked is not defined in PDG: pdg = " << pdgid << " (disabling tracking)";
     wanttracking = false;
   }
 
@@ -151,8 +164,8 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
   Double_t polx = 0.;     // Polarisation
   Double_t poly = 0.;
   Double_t polz = 0.;
-  Int_t ntr = 0;    // Track number; to be filled by the stack
-  Int_t status = 0; // Generation status
+  Int_t ntr = 0;                  // Track number; to be filled by the stack
+  Int_t status = generatorStatus; // Generation status
 
   // correct for tracks which are in list before generator is called
   if (mother1 != -1) {
@@ -169,7 +182,7 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
   }
 
   /** if it is a K0/antiK0 to be tracked, convert it into K0s/K0L.
-      
+
       NOTE: we could think of pushing the K0/antiK0 without tracking first
       and then push she K0s/K0L for tracking.
       In this way we would properly keep track of this conversion,
@@ -177,7 +190,7 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
       is not done for the time being.
   **/
   if (abs(pdgid) == 311 && doTracking) {
-    LOG(WARN) << "K0/antiK0 requested for tracking: converting into K0s/K0L";
+    LOG(warn) << "K0/antiK0 requested for tracking: converting into K0s/K0L";
     pdgid = gRandom->Uniform() < 0.5 ? 310 : 130;
   }
 
@@ -190,7 +203,7 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
   /** add track to stack **/
   auto stack = dynamic_cast<o2::data::Stack*>(fStack);
   if (!stack) {
-    LOG(FATAL) << "Stack must be an o2::data:Stack";
+    LOG(fatal) << "Stack must be an o2::data:Stack";
     return; // must be the o2 stack
   }
   stack->PushTrack(doTracking, mother1, pdgid, px, py, pz,
@@ -202,37 +215,25 @@ void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py, Double_t 
 
 /*****************************************************************/
 
-void PrimaryGenerator::setInteractionDiamond(const Double_t* xyz, const Double_t* sigmaxyz)
+void PrimaryGenerator::AddTrack(Int_t pdgid, Double_t px, Double_t py,
+                                Double_t pz, Double_t vx, Double_t vy,
+                                Double_t vz, Int_t parent, Bool_t wanttracking,
+                                Double_t e, Double_t tof, Double_t weight, TMCProcess proc)
 {
-  /** set interaction diamond **/
-
-  LOG(INFO) << "Setting interaction diamond: position = {"
-            << xyz[0] << "," << xyz[1] << "," << xyz[2] << "} cm";
-  LOG(INFO) << "Setting interaction diamond: width = {"
-            << sigmaxyz[0] << "," << sigmaxyz[1] << "," << sigmaxyz[2] << "} cm";
-  SetBeam(xyz[0], xyz[1], sigmaxyz[0], sigmaxyz[1]);
-  SetTarget(xyz[2], sigmaxyz[2]);
-
-  auto const& param = InteractionDiamondParam::Instance();
-  SmearVertexXY(false);
-  SmearVertexZ(false);
-  SmearGausVertexXY(false);
-  SmearGausVertexZ(false);
-  if (param.distribution == o2::eventgen::EVertexDistribution::kFlat) {
-    SmearVertexXY(true);
-    SmearVertexZ(true);
-  } else if (param.distribution == o2::eventgen::EVertexDistribution::kGaus) {
-    SmearGausVertexXY(true);
-    SmearGausVertexZ(true);
-  } else {
-    LOG(ERROR) << "PrimaryGenerator: Unsupported vertex distribution";
-  }
+  // Do this to encode status code correctly. In FairRoot's PrimaryGenerator, this is simply one number that is set to 0.
+  // So we basically do the same.
+  // Assuming that this is treated as the HepMC status code down the line (as it used to be).
+  AddTrack(pdgid, px, py, pz, vx, vy, vz, parent, -1, -1, -1, wanttracking,
+           e, tof, weight, proc, mcgenstatus::MCGenStatusEncoding(0, 0).fullEncoding);
 }
 
 /*****************************************************************/
 
 void PrimaryGenerator::setInteractionVertex(const MCEventHeader* event)
 {
+  if (!mApplyVertex) {
+    return;
+  }
   /** set interaction vertex **/
 
   Double_t xyz[3] = {event->GetX(), event->GetY(), event->GetZ()};
@@ -245,6 +246,90 @@ void PrimaryGenerator::setInteractionVertex(const MCEventHeader* event)
 }
 
 /*****************************************************************/
+void PrimaryGenerator::setExternalVertexForNextEvent(double x, double y, double z)
+{
+  if (!mApplyVertex) {
+    return;
+  }
+  mExternalVertexX = x;
+  mExternalVertexY = y;
+  mExternalVertexZ = z;
+  mHaveExternalVertex = true;
+}
+
+/*****************************************************************/
+
+void PrimaryGenerator::setVertexMode(o2::conf::VertexMode const& mode, o2::dataformats::MeanVertexObject const* v)
+{
+  mVertexMode = mode;
+  if (mode == o2::conf::VertexMode::kCCDB) {
+    if (!v) {
+      LOG(fatal) << "A valid MeanVertexObject needs to be passed with option o2::conf::VertexMode::kCCDB";
+    }
+    mMeanVertex = std::move(std::unique_ptr<o2::dataformats::MeanVertexObject>(new o2::dataformats::MeanVertexObject(*v)));
+    LOG(info) << "The mean vertex is set to :";
+    mMeanVertex->print();
+  }
+  if (mVertexMode == o2::conf::VertexMode::kNoVertex) {
+    setApplyVertex(false);
+    LOG(info) << "Disabling vertexing";
+    mMeanVertex = std::move(std::unique_ptr<o2::dataformats::MeanVertexObject>(new o2::dataformats::MeanVertexObject(0, 0, 0, 0, 0, 0, 0, 0)));
+    LOG(info) << "The mean vertex is set to :";
+    mMeanVertex->print();
+  }
+}
+
+/*****************************************************************/
+
+void PrimaryGenerator::fixInteractionVertex()
+{
+  if (!mApplyVertex) {
+    SetBeam(0., 0., 0., 0.);
+    SetTarget(0., 0.);
+    return;
+  }
+
+  // if someone gave vertex from outside; we will take it
+  if (mHaveExternalVertex) {
+    SetBeam(mExternalVertexX, mExternalVertexY, 0., 0.);
+    SetTarget(mExternalVertexZ, 0.);
+    mHaveExternalVertex = false; // the vertex is now consumed
+    return;
+  }
+
+  // sampling a vertex and fixing for next event; no smearing will be done
+  // inside FairPrimaryGenerator;
+  SmearVertexXY(false);
+  SmearVertexZ(false);
+  SmearGausVertexXY(false);
+  SmearGausVertexZ(false);
+
+  // we use the mMeanVertexObject if initialized (initialize first)
+  if (mMeanVertex.get() == nullptr) {
+    if (mVertexMode == o2::conf::VertexMode::kDiamondParam) {
+      auto const& param = InteractionDiamondParam::Instance();
+      const auto& xyz = param.position;
+      const auto& sigma = param.width;
+      mMeanVertex = std::move(std::unique_ptr<o2::dataformats::MeanVertexObject>(new o2::dataformats::MeanVertexObject(xyz[0], xyz[1], xyz[2], sigma[0], sigma[1], sigma[2], param.slopeX, param.slopeY)));
+    }
+    if (mVertexMode == o2::conf::VertexMode::kNoVertex) {
+      mMeanVertex = std::move(std::unique_ptr<o2::dataformats::MeanVertexObject>(new o2::dataformats::MeanVertexObject(0, 0, 0, 0, 0, 0, 0, 0)));
+    }
+    if (mVertexMode == o2::conf::VertexMode::kCCDB) {
+      // fatal.. then the object should have been passed with setting
+      LOG(fatal) << "MeanVertexObject is null ... but mode is kCCDB. Please inject the valid CCDB object via setVertexMode";
+    }
+  }
+  auto sampledvertex = mMeanVertex->sample();
+
+  if (PrimaryGeneratorParam::Instance().verbose) {
+    LOG(info) << "Sampled interacting vertex " << sampledvertex;
+  }
+  SetBeam(sampledvertex.X(), sampledvertex.Y(), 0., 0.);
+  SetTarget(sampledvertex.Z(), 0.);
+}
+
+/*****************************************************************/
 
 Bool_t PrimaryGenerator::embedInto(TString fname)
 {
@@ -252,28 +337,28 @@ Bool_t PrimaryGenerator::embedInto(TString fname)
 
   /** check if a file is already open **/
   if (mEmbedFile && mEmbedFile->IsOpen()) {
-    LOG(ERROR) << "Another embedding file is currently open";
+    LOG(error) << "Another embedding file is currently open";
     return kFALSE;
   }
 
   /** open file **/
   mEmbedFile = TFile::Open(fname);
   if (!mEmbedFile || !mEmbedFile->IsOpen()) {
-    LOG(ERROR) << "Cannot open file for embedding: " << fname;
+    LOG(error) << "Cannot open file for embedding: " << fname;
     return kFALSE;
   }
 
   /** get tree **/
   mEmbedTree = (TTree*)mEmbedFile->Get("o2sim");
   if (!mEmbedTree) {
-    LOG(ERROR) << R"(Cannot find "o2sim" tree for embedding in )" << fname;
+    LOG(error) << R"(Cannot find "o2sim" tree for embedding in )" << fname;
     return kFALSE;
   }
 
   /** get entries **/
   mEmbedEntries = mEmbedTree->GetEntries();
   if (mEmbedEntries <= 0) {
-    LOG(ERROR) << "Invalid number of entries found in tree for embedding: " << mEmbedEntries;
+    LOG(error) << "Invalid number of entries found in tree for embedding: " << mEmbedEntries;
     return kFALSE;
   }
 
@@ -283,6 +368,17 @@ Bool_t PrimaryGenerator::embedInto(TString fname)
 
   /** success **/
   return kTRUE;
+}
+
+/*****************************************************************/
+
+void PrimaryGenerator::setGeneratorInformation()
+{
+  auto o2event = dynamic_cast<MCEventHeader*>(fEvent);
+  if (o2event) {
+    o2event->putInfo<int>(o2::mcgenid::GeneratorProperty::GENERATORID, mGeneratorId);
+    o2event->putInfo<std::string>(o2::mcgenid::GeneratorProperty::GENERATORDESCRIPTION, mGeneratorDescription);
+  }
 }
 
 /*****************************************************************/

@@ -22,7 +22,7 @@
 #include "GlobalTrackingWorkflowReaders/TrackTPCITSReaderSpec.h"
 #include "DataFormatsParameters/GRPObject.h"
 #include "Framework/SerializationMethods.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DataFormatsITSMFT/TrkClusRef.h"
 
 using namespace o2::framework;
@@ -66,14 +66,14 @@ void TrackTPCITSReader::run(ProcessingContext& pc)
   auto ent = mTree->GetReadEntry() + 1;
   assert(ent < mTree->GetEntries()); // this should not happen
   mTree->GetEntry(ent);
-  LOG(INFO) << "Pushing " << mTracks.size() << " TPC-ITS matches at entry " << ent;
+  LOG(info) << "Pushing " << mTracks.size() << " TPC-ITS matches at entry " << ent;
 
-  pc.outputs().snapshot(Output{"GLO", "TPCITS", 0, Lifetime::Timeframe}, mTracks);
-  pc.outputs().snapshot(Output{"GLO", "TPCITSAB_REFS", 0, Lifetime::Timeframe}, mABTrkClusRefs);
-  pc.outputs().snapshot(Output{"GLO", "TPCITSAB_CLID", 0, Lifetime::Timeframe}, mABTrkClIDs);
+  pc.outputs().snapshot(Output{"GLO", "TPCITS", 0}, mTracks);
+  pc.outputs().snapshot(Output{"GLO", "TPCITSAB_REFS", 0}, mABTrkClusRefs);
+  pc.outputs().snapshot(Output{"GLO", "TPCITSAB_CLID", 0}, mABTrkClIDs);
   if (mUseMC) {
-    pc.outputs().snapshot(Output{"GLO", "TPCITS_MC", 0, Lifetime::Timeframe}, mLabels);
-    pc.outputs().snapshot(Output{"GLO", "TPCITSAB_MC", 0, Lifetime::Timeframe}, mLabelsAB);
+    pc.outputs().snapshot(Output{"GLO", "TPCITS_MC", 0}, mLabels);
+    pc.outputs().snapshot(Output{"GLO", "TPCITSAB_MC", 0}, mLabelsAB);
   }
 
   if (mTree->GetReadEntry() + 1 >= mTree->GetEntries()) {
@@ -96,7 +96,7 @@ void TrackTPCITSReader::connectTree(const std::string& filename)
     mTree->SetBranchAddress("MatchMCTruth", &mLabelsPtr);
     mTree->SetBranchAddress("MatchABMCTruth", &mLabelsABPtr);
   }
-  LOG(INFO) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
+  LOG(info) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
 }
 
 DataProcessorSpec getTrackTPCITSReaderSpec(bool useMC)

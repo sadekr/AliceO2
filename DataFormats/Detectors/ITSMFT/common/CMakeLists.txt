@@ -28,13 +28,15 @@ o2_target_root_dictionary(DataFormatsITSMFT
                                  include/DataFormatsITSMFT/Digit.h
                                  include/DataFormatsITSMFT/GBTCalibData.h
                                  include/DataFormatsITSMFT/NoiseMap.h
+                                 include/DataFormatsITSMFT/TimeDeadMap.h
                                   include/DataFormatsITSMFT/Cluster.h
                                   include/DataFormatsITSMFT/CompCluster.h
                                   include/DataFormatsITSMFT/ClusterPattern.h
                                   include/DataFormatsITSMFT/ClusterTopology.h
                                   include/DataFormatsITSMFT/TopologyDictionary.h
                                   include/DataFormatsITSMFT/CTF.h
-      include/DataFormatsITSMFT/TrkClusRef.h
+                                  include/DataFormatsITSMFT/TrkClusRef.h
+                                  include/DataFormatsITSMFT/PhysTrigger.h
                           LINKDEF src/ITSMFTDataFormatsLinkDef.h)
 
 o2_add_test(Cluster

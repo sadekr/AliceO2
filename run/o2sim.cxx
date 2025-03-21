@@ -12,13 +12,16 @@
 #include "../macro/o2sim.C"
 #include <SimConfig/SimConfig.h>
 #include <TStopwatch.h>
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 
 int main(int argc, char* argv[])
 {
   TStopwatch timer;
   timer.Start();
   auto& conf = o2::conf::SimConfig::Instance();
+#ifdef SIM_RUN5
+  conf.setRun5();
+#endif
   if (!conf.resetFromArguments(argc, argv)) {
     return 1;
   }
@@ -33,7 +36,7 @@ int main(int argc, char* argv[])
   o2::utils::ShmManager::Instance().release();
 
   // print total time
-  LOG(INFO) << "Simulation process took " << timer.RealTime() << " s";
+  LOG(info) << "Simulation process took " << timer.RealTime() << " s";
 
   // We do this instead of return 0
   // for the reason that we see lots of problems

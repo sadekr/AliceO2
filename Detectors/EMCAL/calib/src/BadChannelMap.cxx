@@ -11,8 +11,9 @@
 
 #include "EMCALBase/Geometry.h"
 #include "EMCALCalib/BadChannelMap.h"
+#include "EMCALCalib/CalibContainerErrors.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include <TH2.h>
 
@@ -22,6 +23,9 @@ using namespace o2::emcal;
 
 void BadChannelMap::addBadChannel(unsigned short channelID, MaskType_t mask)
 {
+  if (channelID >= 17664) {
+    throw CalibContainerIndexException(channelID);
+  }
   switch (mask) {
     case MaskType_t::GOOD_CELL:
       mBadCells.reset(channelID);
@@ -48,6 +52,9 @@ void BadChannelMap::addBadChannel(unsigned short channelID, MaskType_t mask)
 
 BadChannelMap::MaskType_t BadChannelMap::getChannelStatus(unsigned short channelID) const
 {
+  if (channelID >= 17664) {
+    throw CalibContainerIndexException(channelID);
+  }
   auto status = MaskType_t::GOOD_CELL;
   if (mDeadCells.test(channelID)) {
     status = MaskType_t::DEAD_CELL;
@@ -65,25 +72,24 @@ TH2* BadChannelMap::getHistogramRepresentation() const
             MAXCOLS = 96;
   auto hist = new TH2S("badchannelmap", "Bad Channel Map", MAXCOLS, -0.5, double(MAXCOLS) - 0.5, MAXROWS, -0.5, double(MAXROWS) - 0.5);
   hist->SetDirectory(nullptr);
-  auto geo = Geometry::GetInstance();
-  if (!geo) {
-    LOG(ERROR) << "Geometry needs to be initialized";
-    return hist;
-  }
-
-  for (size_t cellID = 0; cellID < mBadCells.size(); cellID++) {
-    int value(0);
-    if (mBadCells.test(cellID)) {
-      value = 1;
-    } else if (mDeadCells.test(cellID)) {
-      value = 2;
-    } else if (mWarmCells.test(cellID)) {
-      value = 3;
+  try {
+    auto geo = Geometry::GetInstance();
+    for (size_t cellID = 0; cellID < mBadCells.size(); cellID++) {
+      int value(0);
+      if (mBadCells.test(cellID)) {
+        value = 1;
+      } else if (mDeadCells.test(cellID)) {
+        value = 2;
+      } else if (mWarmCells.test(cellID)) {
+        value = 3;
+      }
+      if (value) {
+        auto position = geo->GlobalRowColFromIndex(cellID);
+        hist->Fill(std::get<1>(position), std::get<0>(position), value);
+      }
     }
-    if (value) {
-      auto position = geo->GlobalRowColFromIndex(cellID);
-      hist->Fill(std::get<1>(position), std::get<0>(position), value);
-    }
+  } catch (o2::emcal::GeometryNotInitializedException& e) {
+    LOG(error) << "Geometry needs to be initialized";
   }
   return hist;
 }

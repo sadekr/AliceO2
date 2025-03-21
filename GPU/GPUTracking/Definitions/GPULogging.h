@@ -17,14 +17,17 @@
 
 #include "GPUCommonDef.h"
 // clang-format off
-#if !defined(GPUCA_NOCOMPAT)
-  // Cannot do anything for ROOT5CINT / OpenCL1, so just disable
+#if defined(GPUCA_GPUCODE_DEVICE) && !defined(GPUCA_GPU_DEBUG_PRINT)
+  // Compile-time disable for performance-reasons
   #define GPUInfo(...)
   #define GPUImportant(...)
   #define GPUWarning(...)
+  #define GPUAlarm(...)
   #define GPUError(...)
+  #define GPUCritical(...)
   #define GPUFatal(...)
-#elif defined(GPUCA_STANDALONE) && !defined(GPUCA_GPUCODE_DEVICE) && !defined(GPUCA_NO_FMT) && !defined(__HIPCC__)
+#elif defined(GPUCA_STANDALONE) && !defined(GPUCA_GPUCODE_DEVICE) && !defined(GPUCA_NO_FMT)
+  #include <cstdio>
   #include <fmt/printf.h>
   #define GPUInfo(string, ...)                 \
     {                                          \
@@ -36,21 +39,24 @@
       fmt::fprintf(stderr, string "\n", ##__VA_ARGS__); \
     }
   #define GPUError(...) GPUWarning(__VA_ARGS__)
+  #define GPUCritical(...) GPUWarning(__VA_ARGS__)
+  #define GPUAlarm(...) GPUWarning(__VA_ARGS__)
   #define GPUFatal(string, ...)                         \
     {                                                   \
       fmt::fprintf(stderr, string "\n", ##__VA_ARGS__); \
       throw std::exception();                           \
     }
-#elif defined(GPUCA_STANDALONE) || defined(GPUCA_GPUCODE_DEVICE) || (defined(GPUCA_ALIROOT_LIB) && defined(GPUCA_GPUCODE) && defined(__cplusplus) && __cplusplus < 201703L) || defined(__HIPCC__)
+#elif defined(GPUCA_STANDALONE) || defined(GPUCA_GPUCODE_DEVICE)
   // For standalone / CUDA / HIP, we just use printf, which should be available
-  // Temporarily, we also have to handle CUDA on AliRoot with O2 defaults due to ROOT / CUDA incompatibilities
+  #include <cstdio>
   #define GPUInfo(string, ...)            \
     {                                     \
       printf(string "\n", ##__VA_ARGS__); \
     }
   #define GPUImportant(...) GPUInfo(__VA_ARGS__)
-  #if defined(GPUCA_GPUCODE_DEVICE) || defined(__HIPCC__)
+  #ifdef GPUCA_GPUCODE_DEVICE
     #define GPUWarning(...) GPUInfo(__VA_ARGS__)
+    #define GPUAlarm(...) GPUInfo(__VA_ARGS__)
     #define GPUError(...) GPUInfo(__VA_ARGS__)
     #define GPUFatal(...) GPUInfo(__VA_ARGS__)
   #else
@@ -58,59 +64,24 @@
       {                                              \
         fprintf(stderr, string "\n", ##__VA_ARGS__); \
       }
+    #define GPUAlarm(...) GPUWarning(__VA_ARGS__)
     #define GPUError(...) GPUWarning(__VA_ARGS__)
-    #ifdef GPUCA_NOCOMPAT
-      #define GPUFatal(string, ...)                    \
-        {                                              \
-          fprintf(stderr, string "\n", ##__VA_ARGS__); \
-          throw std::exception();                      \
-        }
-    #else
-      #define GPUFatal(string, ...)                  \
-        {                                            \
-          fprintf(stderr, string "\n", __VA_ARGS__); \
-          exit(1);                                   \
-        }
-    #endif
+    #define GPUCritical(...) GPUWarning(__VA_ARGS__)
+    #define GPUFatal(string, ...)                  \
+      {                                            \
+        fprintf(stderr, string "\n", __VA_ARGS__); \
+        exit(1);                                   \
+      }
   #endif
-#elif defined(GPUCA_ALIROOT_LIB)
-  // Forward to HLT Logging functions for AliRoot
-  #include "AliHLTLogging.h"
-  #define GPUInfo(...) HLTInfo(__VA_ARGS__)
-  #define GPUImportant(...) HLTImportant(__VA_ARGS__)
-  #define GPUWarning(...) HLTWarning(__VA_ARGS__)
-  #define GPUError(...) HLTError(__VA_ARGS__)
-  #define GPUFatal(...) HLTFatal(__VA_ARGS__)
-  // Workaround for static functions / classes not deriving from AliHLTLogging
-  namespace AliGPU
-  {
-  namespace gpu
-  {
-  // We pollute the AliGPU::gpu namespace with some anonymous functions that catch the HLT...() magic
-  namespace
-  {
-  AliHLTLogging gAliGPULog; // This creates a couple of bogus instances, but there are plenty anyway
-  template <typename... Args>
-  void LoggingVarargs(Args... args)
-  {
-    gAliGPULog.LoggingVarargs(args...);
-  }
-  template <typename... Args>
-  bool CheckFilter(Args... args)
-  {
-    return gAliGPULog.CheckFilter(args...);
-  }
-  const char* Class_Name() { return "GPU"; };
-  } // namespace
-  } // namespace gpu
-  } // namespace AliGPU
 #elif defined(GPUCA_O2_LIB) || defined(GPUCA_O2_INTERFACE)
   // Forward to O2 LOGF logginf for O2
   #include "GPUCommonLogger.h"
   #define GPUInfo(...) LOGF(info, __VA_ARGS__)
   #define GPUImportant(...) LOGF(info, __VA_ARGS__)
   #define GPUWarning(...) LOGF(warning, __VA_ARGS__)
+  #define GPUAlarm(...) LOGF(alarm, __VA_ARGS__)
   #define GPUError(...) LOGF(error, __VA_ARGS__)
+  #define GPUCritical(...) LOGF(critical, __VA_ARGS__)
   #define GPUFatal(...) LOGF(fatal, __VA_ARGS__)
 #endif
 

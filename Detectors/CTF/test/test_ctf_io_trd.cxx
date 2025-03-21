@@ -12,8 +12,14 @@
 #define BOOST_TEST_MODULE Test TRDCTFIO
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
+
+#undef NDEBUG
+#include <cassert>
+
 #include <boost/test/unit_test.hpp>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/dataset.hpp>
+#include "CommonUtils/NameConf.h"
 #include "TRDReconstruction/CTFCoder.h"
 #include "DataFormatsTRD/CTF.h"
 #include "Framework/Logger.h"
@@ -24,8 +30,11 @@
 #include <cstring>
 
 using namespace o2::trd;
+namespace boost_data = boost::unit_test::data;
 
-BOOST_AUTO_TEST_CASE(CTFTest)
+inline std::vector<o2::ctf::ANSHeader> ANSVersions{o2::ctf::ANSVersionCompat, o2::ctf::ANSVersion1};
+
+BOOST_DATA_TEST_CASE(CTFTest, boost_data::make(ANSVersions), ansVersion)
 {
   std::vector<TriggerRecord> triggers;
   std::vector<Tracklet64> tracklets;
@@ -69,11 +78,12 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   std::vector<o2::ctf::BufferType> vec;
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Encoder);
+    coder.setANSVersion(ansVersion);
     coder.encode(vec, triggers, tracklets, digits); // compress
   }
   sw.Stop();
-  LOG(INFO) << "Compressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Compressed in " << sw.CpuTime() << " s";
 
   // writing
   {
@@ -85,12 +95,12 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     ctfImage->appendToTree(ctfTree, "TRD");
     ctfTree.Write();
     sw.Stop();
-    LOG(INFO) << "Wrote to tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Wrote to tree in " << sw.CpuTime() << " s";
   }
 
   // reading
   vec.clear();
-  LOG(INFO) << "Start reading from tree ";
+  LOG(info) << "Start reading from tree ";
   {
     sw.Start();
     TFile flIn("test_ctf_trd.root");
@@ -98,7 +108,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     BOOST_CHECK(tree);
     o2::trd::CTF::readFromTree(vec, *(tree.get()), "TRD");
     sw.Stop();
-    LOG(INFO) << "Read back from tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Read back from tree in " << sw.CpuTime() << " s";
   }
 
   std::vector<TriggerRecord> triggersD;
@@ -108,11 +118,11 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   const auto ctfImage = o2::trd::CTF::getImage(vec.data());
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Decoder);
     coder.decode(ctfImage, triggersD, trackletsD, digitsD); // decompress
   }
   sw.Stop();
-  LOG(INFO) << "Decompressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Decompressed in " << sw.CpuTime() << " s";
 
   BOOST_CHECK(triggersD.size() == triggers.size());
   BOOST_CHECK(trackletsD.size() == tracklets.size());

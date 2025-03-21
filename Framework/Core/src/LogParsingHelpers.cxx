@@ -11,16 +11,17 @@
 #include "Framework/LogParsingHelpers.h"
 #include <regex>
 
-namespace o2
-{
-namespace framework
+namespace o2::framework
 {
 
 char const* const LogParsingHelpers::LOG_LEVELS[(int)LogParsingHelpers::LogLevel::Size] = {
   "DEBUG",
   "INFO",
+  "IMPORTANT",
   "WARNING",
+  "ALARM",
   "ERROR",
+  "CRITICAL",
   "FATAL",
   "UNKNOWN"};
 using LogLevel = o2::framework::LogParsingHelpers::LogLevel;
@@ -31,7 +32,7 @@ LogLevel LogParsingHelpers::parseTokenLevel(std::string_view const s)
   // Example format: [99:99:99][ERROR] (string begins with that, longest is 17 chars)
   constexpr size_t MAXPREFLEN = 17;
   constexpr size_t LABELPOS = 10;
-  if (s.size() < MAXPREFLEN) {
+  if (s.size() < MAXPREFLEN && s.find("*** Break ***") == std::string::npos && !s.starts_with("[INFO]")) {
     return LogLevel::Unknown;
   }
 
@@ -42,7 +43,17 @@ LogLevel LogParsingHelpers::parseTokenLevel(std::string_view const s)
       (unsigned char)s[1] - '0' > 9 || (unsigned char)s[2] - '0' > 9 ||
       (unsigned char)s[4] - '0' > 9 || (unsigned char)s[5] - '0' > 9 ||
       (unsigned char)s[7] - '0' > 9 || (unsigned char)s[8] - '0' > 9) {
-    return LogLevel::Unknown;
+    if (s.starts_with("Info in <") || s.starts_with("Print in <") || s.starts_with("[INFO]")) {
+      return LogLevel::Info;
+    } else if (s.starts_with("Warning in <")) {
+      return LogLevel::Warning;
+    } else if (s.find("Error in <") != std::string::npos) {
+      return LogLevel::Error;
+    } else if (s.starts_with("Fatal in <") || s.find("*** Break ***") != std::string::npos) {
+      return LogLevel::Fatal;
+    } else {
+      return LogLevel::Unknown;
+    }
   }
 
   if (s.compare(LABELPOS, 8, "[DEBUG] ") == 0) {
@@ -50,14 +61,19 @@ LogLevel LogParsingHelpers::parseTokenLevel(std::string_view const s)
   } else if (s.compare(LABELPOS, 7, "[INFO] ") == 0 ||
              s.compare(LABELPOS, 8, "[STATE] ") == 0) {
     return LogLevel::Info;
+  } else if (s.compare(LABELPOS, 12, "[IMPORTANT] ") == 0) {
+    return LogLevel::Important;
   } else if (s.compare(LABELPOS, 7, "[WARN] ") == 0) {
     return LogLevel::Warning;
+  } else if (s.compare(LABELPOS, 8, "[ALARM] ") == 0) {
+    return LogLevel::Alarm;
   } else if (s.compare(LABELPOS, 8, "[ERROR] ") == 0) {
     return LogLevel::Error;
+  } else if (s.compare(LABELPOS, 11, "[CRITICAL] ") == 0) {
+    return LogLevel::Critical;
   } else if (s.compare(LABELPOS, 8, "[FATAL] ") == 0) {
     return LogLevel::Fatal;
   }
   return LogLevel::Unknown;
 }
-} // namespace framework
 } // namespace o2

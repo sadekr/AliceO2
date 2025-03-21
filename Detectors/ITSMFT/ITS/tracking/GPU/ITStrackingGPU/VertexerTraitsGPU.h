@@ -13,6 +13,7 @@
 /// \brief
 /// \author matteo.concas@cern.ch
 
+// #define VTX_DEBUG
 #ifndef ITSTRACKINGGPU_VERTEXERTRAITSGPU_H_
 #define ITSTRACKINGGPU_VERTEXERTRAITSGPU_H_
 
@@ -20,17 +21,13 @@
 #include <array>
 
 #include "ITStracking/VertexerTraits.h"
+#include "ITStracking/Configuration.h"
 #include "ITStracking/Cluster.h"
 #include "ITStracking/Constants.h"
 #include "ITStracking/Definitions.h"
 #include "ITStracking/Tracklet.h"
 
-#include "DeviceStoreVertexerGPU.h"
-#include "UniquePointer.h"
-
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-#include "ITStracking/StandaloneDebugger.h"
-#endif
+#include "ITStrackingGPU/TimeFrameGPU.h"
 
 namespace o2
 {
@@ -43,44 +40,35 @@ using constants::its2::InversePhiBinSize;
 class VertexerTraitsGPU : public VertexerTraits
 {
  public:
-#ifdef _ALLOW_DEBUG_TREES_ITS_
   VertexerTraitsGPU();
-  ~VertexerTraitsGPU() override;
-#else
-  VertexerTraitsGPU();
-#endif
-  void initialise(ROframe*) override;
-  void computeTracklets() override;
-  void computeTrackletMatching() override;
-  void computeVertices() override;
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-  void computeMCFiltering() override;
-#endif
+  ~VertexerTraitsGPU() = default;
+  void initialise(const TrackingParameters&, const int iteration = 0) override;
+  void adoptTimeFrame(TimeFrame*) override;
+  void computeTracklets(const int iteration = 0) override;
+  void computeTrackletMatching(const int iteration = 0) override;
+  void computeVertices(const int iteration = 0) override;
+  void updateVertexingParameters(const std::vector<VertexingParameters>&, const TimeFrameGPUParameters&) override;
 
-  // GPU-specific getters
-  GPUd() static const int2 getBinsPhiRectWindow(const Cluster&, float maxdeltaphi);
-  GPUhd() gpu::DeviceStoreVertexerGPU& getDeviceContext();
+  // Hybrid
+  void initialiseHybrid(const TrackingParameters& pars, const int iteration = 0) override { VertexerTraits::initialise(pars, iteration); }
+  void computeTrackletsHybrid(const int iteration = 0) override { VertexerTraits::computeTracklets(iteration); }
+  void computeTrackletMatchingHybrid(const int iteration = 0) override { VertexerTraits::computeTrackletMatching(iteration); }
+  void computeVerticesHybrid(const int iteration = 0) override { VertexerTraits::computeVertices(iteration); }
+  void adoptTimeFrameHybrid(TimeFrame* tf) override { VertexerTraits::adoptTimeFrame(tf); }
+
+  void computeVerticesHist();
 
  protected:
-  gpu::DeviceStoreVertexerGPU mStoreVertexerGPU;
-  gpu::UniquePointer<gpu::DeviceStoreVertexerGPU> mStoreVertexerGPUPtr;
+  IndexTableUtils* mDeviceIndexTableUtils;
+  gpu::TimeFrameGPU<7>* mTimeFrameGPU;
+  TimeFrameGPUParameters mTfGPUParams;
 };
 
-inline GPUd() const int2 VertexerTraitsGPU::getBinsPhiRectWindow(const Cluster& currentCluster, float phiCut)
+inline void VertexerTraitsGPU::adoptTimeFrame(TimeFrame* tf)
 {
-  // This function returns the lowest PhiBin and the number of phi bins to be spanned, In the form int2{phiBinLow, PhiBinSpan}
-  const int phiBinMin{constants::its2::getPhiBinIndex(
-    math_utils::getNormalizedPhi(currentCluster.phi - phiCut))};
-  const int phiBinSpan{static_cast<int>(MATH_CEIL(phiCut * InversePhiBinSize))};
-  return int2{phiBinMin, phiBinSpan};
+  mTimeFrameGPU = static_cast<gpu::TimeFrameGPU<7>*>(tf);
+  mTimeFrame = static_cast<TimeFrame*>(tf);
 }
-
-GPUhd() gpu::DeviceStoreVertexerGPU& VertexerTraitsGPU::getDeviceContext()
-{
-  return *mStoreVertexerGPUPtr;
-}
-
-extern "C" VertexerTraits* createVertexerTraitsGPU();
 
 } // namespace its
 } // namespace o2

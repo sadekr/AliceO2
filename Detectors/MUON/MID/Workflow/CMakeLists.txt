@@ -1,31 +1,36 @@
-# Copyright 2019-2020 CERN and copyright holders of ALICE O2. See
-# https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+# Copyright 2019-2022 CERN and copyright holders of ALICE O2.
+# See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
 # All rights not expressly granted are reserved.
 #
-# This software is distributed under the terms of the GNU General Public License
-# v3 (GPL Version 3), copied verbatim in the file "COPYING".
+# This software is distributed under the terms of the GNU General Public
+# License v3 (GPL Version 3), copied verbatim in the file "COPYING".
 #
 # In applying this license CERN does not waive the privileges and immunities
-# granted to it by virtue of its status as an Intergovernmental Organization or
-# submit itself to any jurisdiction.
+# granted to it by virtue of its status as an Intergovernmental Organization
+# or submit itself to any jurisdiction.
 
 o2_add_library(
   MIDWorkflow
   TARGETVARNAME targetName
-  SOURCES src/ClusterizerMCSpec.cxx
+  SOURCES src/CalibDataProcessorSpec.cxx
           src/ClusterizerSpec.cxx
+          src/ColumnDataSpecsUtils.cxx
           src/DecodedDataAggregatorSpec.cxx
           src/DigitReaderSpec.cxx
           src/EntropyDecoderSpec.cxx
           src/EntropyEncoderSpec.cxx
+          src/FilteringSpec.cxx
+          src/FilteringBCSpec.cxx
           src/MaskHandlerSpec.cxx
           src/MaskMakerSpec.cxx
+          src/ChannelCalibratorSpec.cxx
           src/RawCheckerSpec.cxx
           src/RawDecoderSpec.cxx
+          src/RawDumpSpec.cxx
           src/RawGBTDecoderSpec.cxx
           src/RawInputSpecHandler.cxx
           src/RawWriterSpec.cxx
-          src/TrackerMCSpec.cxx
+          src/TimingSpec.cxx
           src/TrackerSpec.cxx
           src/TrackReaderSpec.cxx
           src/ZeroSuppressionSpec.cxx
@@ -39,6 +44,7 @@ o2_add_library(
     O2::DPLUtils
     O2::SimulationDataFormat
     O2::DataFormatsMID
+    O2::MIDCalibration
     O2::MIDClustering
     O2::MIDCTF
     O2::MIDFiltering
@@ -99,4 +105,16 @@ o2_add_executable(
   decoded-digits-writer-workflow
   COMPONENT_NAME mid
   SOURCES src/decoded-digits-writer-workflow.cxx
+  PUBLIC_LINK_LIBRARIES O2::MIDWorkflow)
+
+o2_add_executable(
+  calibration-workflow
+  COMPONENT_NAME mid
+  SOURCES src/calibration-workflow.cxx
+  PUBLIC_LINK_LIBRARIES O2::MIDWorkflow)
+
+o2_add_executable(
+  raw-dump-workflow
+  COMPONENT_NAME mid
+  SOURCES src/raw-dump-workflow.cxx
   PUBLIC_LINK_LIBRARIES O2::MIDWorkflow)

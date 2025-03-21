@@ -18,9 +18,11 @@
 #include "Framework/Task.h"
 #include "Framework/WorkflowSpec.h"
 #include "Framework/ProcessingContext.h"
+#include "DetectorsCommonDataFormats/FileMetaData.h"
 #include "DataFormatsPHOS/Cluster.h"
 #include "DataFormatsPHOS/BadChannelsMap.h"
 #include "PHOSCalibWorkflow/PHOSRunbyrunCalibrator.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 
 using namespace o2::framework;
 
@@ -32,7 +34,7 @@ namespace phos
 class PHOSRunbyrunCalibDevice
 {
  public:
-  PHOSRunbyrunCalibDevice() = default;
+  PHOSRunbyrunCalibDevice(std::shared_ptr<o2::base::GRPGeomRequest> req, const std::string& outputDir, const std::string& metaFileDir, bool writeRootOutput) : mWriteRootOutput(writeRootOutput), mOutputDir(outputDir), mMetaFileDir(metaFileDir), mCCDBRequest(req) {}
 
   void init(o2::framework::InitContext& ic);
 
@@ -40,18 +42,27 @@ class PHOSRunbyrunCalibDevice
 
   void endOfStream(o2::framework::EndOfStreamContext& ec);
 
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj)
+  {
+    o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj);
+  }
+
  protected:
   bool checkFitResult();
 
  private:
   bool mUseCCDB = false;
-  long mRunStartTime = 0;                                 /// start time of the run (sec)
-  std::string mCCDBPath{"http://ccdb-test.cern.ch:8080"}; /// CCDB path to retrieve current CCDB objects for comparison
-  std::array<float, 8> mRunByRun;                         /// Final calibration object
-  std::unique_ptr<PHOSRunbyrunCalibrator> mCalibrator;    /// Agregator of calibration TimeFrameSlots
+  bool mWriteRootOutput = true;                        /// Write local root files
+  std::string mOutputDir;                              /// where to write calibration digits
+  std::string mMetaFileDir;                            /// where to store meta files
+  unsigned long mRunStartTime = 0;                     /// start time of the run (ms)
+  std::array<float, 8> mRunByRun;                      /// Final calibration object
+  std::unique_ptr<PHOSRunbyrunCalibrator> mCalibrator; /// Agregator of calibration TimeFrameSlots
+  std::shared_ptr<o2::base::GRPGeomRequest> mCCDBRequest;
+  std::unique_ptr<o2::dataformats::FileMetaData> mHistoFileMetaData; /// Metadata for collected histograms
 };
 
-o2::framework::DataProcessorSpec getPHOSRunbyrunCalibDeviceSpec(bool useCCDB, std::string path);
+o2::framework::DataProcessorSpec getPHOSRunbyrunCalibDeviceSpec(bool useCCDB, const std::string& outputDir, const std::string& metaFileDir, bool writeRootOutput);
 } // namespace phos
 } // namespace o2
 

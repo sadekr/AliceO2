@@ -46,13 +46,17 @@ struct VertexingInput {
 struct VertexSeed : public PVertex {
   double wghSum = 0.;                                                                              // sum of tracks weights
   double wghChi2 = 0.;                                                                             // sum of tracks weighted chi2's
-  double tMeanAcc = 0.;                                                                            // sum of track times * inv.err^2
-  double tMeanAccErr = 0.;                                                                         // some of tracks times inv.err^2
+  double tMeanAcc = 0.;                                                                            // sum of track times * inv.err^2 wotj real time error
+  double tMeanAccErr = 0.;                                                                         // some of tracks times inv.err^2 with real time error
+  double tMeanAccTB = 0.;                                                                          // sum of track times * inv.err^2 with time error from time bracket, i.e. ITS
+  double tMeanAccErrTB = 0.;                                                                       // sum of tracks times inv.err^2 with time error from time bracket, i.e. ITS
+  double wghSumTB = 0.;                                                                            // sum of weights for tracks with time error from time bracket, i.e. ITS
   double cxx = 0., cyy = 0., czz = 0., cxy = 0., cxz = 0., cyz = 0., cx0 = 0., cy0 = 0., cz0 = 0.; // elements of lin.equation matrix
   float scaleSigma2 = 1.;                                                                          // scaling parameter on top of Tukey param
   float scaleSigma2Prev = 1.;
   float maxScaleSigma2Tested = 0.;
   float scaleSig2ITuk2I = 0; // inverse squared Tukey parameter scaled by scaleSigma2
+  int nContributorsTB = 0;   // number of contributors with time error coming from Time Bracker
   int nScaleSlowConvergence = 0;
   int nScaleIncrease = 0;
   int nIterations = 0;
@@ -67,11 +71,15 @@ struct VertexSeed : public PVertex {
   void resetForNewIteration()
   {
     setNContributors(0);
+    nContributorsTB = 0;
     //setTimeStamp({0., 0.});
-    wghSum = 0;
-    wghChi2 = 0;
-    tMeanAcc = 0;
-    tMeanAccErr = 0;
+    wghSum = 0.;
+    wghChi2 = 0.;
+    wghSumTB = 0.;
+    tMeanAcc = 0.;
+    tMeanAccErr = 0.;
+    tMeanAccTB = 0.;
+    tMeanAccErrTB = 0.;
     cxx = cyy = czz = cxy = cxz = cyz = cx0 = cy0 = cz0 = 0.;
   }
 
@@ -97,12 +105,14 @@ struct TrackVF {
   enum { kUsed,
          kNoVtx = -1,
          kDiscarded = kNoVtx - 1 };
+  enum { kITSTPCAdjust = 0x1,
+         kDummyHBin = 0xffff };
   float x;      ///< reference X
   float y;      ///< Y at X
   float z;      ///< Z at X
-  float sig2YI; ///< YY component of inverse cov.matrix
-  float sig2ZI; ///< ZZ component of inverse cov.matrix
-  float sigYZI; ///< YZ component of inverse cov.matrix
+  float sig2YI = 0.f; ///< YY component of inverse cov.matrix
+  float sig2ZI = 0.f; ///< ZZ component of inverse cov.matrix
+  float sigYZI = 0.f; ///< YZ component of inverse cov.matrix
   float tgP;    ///< tangent(phi) in tracking frame
   float tgL;    ///< tangent(lambda)
   float cosAlp; ///< cos of alpha frame
@@ -111,11 +121,14 @@ struct TrackVF {
   TimeEst timeEst;
   float wgh = 0.; ///< track weight wrt current vertex seed
   float wghHisto = 0.; // weight based on track errors, used for histogramming
-  int entry;      ///< track entry in the input vector
-  int32_t bin = -1; // seeds histo bin
-  GTrackID gid{};
+  int entry;           ///< track entry in the input vector
   int vtxID = kNoVtx; ///< assigned vertex
+  GTrackID gid{};
+  uint16_t bin = kDummyHBin; // seeds histo bin
+  uint16_t flags = 0;
   //
+  void setITSTPCAdjusted() { flags &= kITSTPCAdjust; }
+  bool isITSTPCAdjusted() const { return flags & kITSTPCAdjust; }
   bool canAssign() const { return wgh > 0. && vtxID == kNoVtx; }
   bool canUse() const { return vtxID == kNoVtx; }
   bool canUse(float zmin, float zmax) const
@@ -185,19 +198,29 @@ struct TrackVF {
     : x(src.getX()), y(src.getY()), z(src.getZ()), tgL(src.getTgl()), tgP(src.getSnp() / std::sqrt(1. - src.getSnp()) * (1. + src.getSnp())), timeEst(t_est), entry(_entry), gid(_gid)
   {
     o2::math_utils::sincos(src.getAlpha(), sinAlp, cosAlp);
-    auto det = src.getSigmaY2() * src.getSigmaZ2() - src.getSigmaZY() * src.getSigmaZY();
+    double syy = src.getSigmaY2(), szz = src.getSigmaZ2(), syz = src.getSigmaZY();
+    auto det = syy * szz - syz * syz;
+    if (det <= 1e-20) {
+      wghHisto = -1;
+      reportBadTrack(src, t_est, gid);
+      return;
+    }
     auto detI = 1. / det;
-    sig2YI = src.getSigmaZ2() * detI;
-    sig2ZI = src.getSigmaY2() * detI;
-    sigYZI = -src.getSigmaZY() * detI;
-    wghHisto = 1. / ((src.getSigmaZ2() + addHZErr2) * (t_est.getTimeStampError() * t_est.getTimeStampError() + addHTErr2));
+    sig2YI = szz * detI;
+    sig2ZI = syy * detI;
+    sigYZI = -syz * detI;
+    wghHisto = 1. / ((szz + addHZErr2) * (t_est.getTimeStampError() * t_est.getTimeStampError() + addHTErr2));
   }
+
+  void reportBadTrack(const o2::track::TrackParCov& src, const TimeEst& t_est, GTrackID _gid);
+
+  ClassDefNV(TrackVF, 1);
 };
 
 struct SeedHistoTZ : public o2::dataformats::FlatHisto2D_f {
   using o2::dataformats::FlatHisto2D<float>::FlatHisto2D;
 
-  int fillAndFlagBin(float x, float y, float w)
+  uint16_t fillAndFlagBin(float x, float y, float w)
   {
     uint32_t bin = getBin(x, y);
     if (isValidBin(bin)) {
@@ -206,9 +229,9 @@ struct SeedHistoTZ : public o2::dataformats::FlatHisto2D_f {
       }
       fillBin(bin, w);
       nEntries++;
-      return bin;
+      return uint16_t(bin);
     }
-    return -1;
+    return 0xffff;
   }
 
   void clear()
@@ -234,8 +257,9 @@ struct PVtxCompDump {
   PVertex vtx1{};
   float chi2z{0};
   float chi2t{0};
+  float chi2zE{0};
+  float chi2tE{0};
   bool rej = false;
-  PVtxCompDump() = default;
   ClassDefNV(PVtxCompDump, 1);
 };
 
@@ -246,8 +270,13 @@ struct TrackVFDump {
   float t = 0;
   float te = 0;
   float wh = 0.;
-  TrackVFDump() = default;
   ClassDefNV(TrackVFDump, 1);
+};
+
+struct InteractionCandidate : public o2::InteractionRecord {
+  float time = 0;
+  float amplitude = 0;
+  uint32_t flag = 0; // origin, etc.
 };
 
 } // namespace vertexing

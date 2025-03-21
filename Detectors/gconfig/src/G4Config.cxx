@@ -10,15 +10,15 @@
 // or submit itself to any jurisdiction.
 
 #include "FairRunSim.h"
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 #include "SimulationDataFormat/StackParam.h"
 #include <iostream>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "TGeant4.h"
 #include "TG4RunConfiguration.h"
-#include "TPythia6Decayer.h"
 #include "FairModule.h"
 #include "SimConfig/G4Params.h"
+#include "SimConfig/SimParams.h"
 #include "Generators/DecayerPythia8.h"
 
 //using declarations here since SetCuts.C and g4Config.C are included within namespace
@@ -28,16 +28,23 @@ using std::endl;
 // these are used in commonConfig.C
 using o2::eventgen::DecayerPythia8;
 
+#include "../g4Config.C"
+
 namespace o2
 {
 namespace g4config
 {
-#include "../g4Config.C"
 
 void G4Config()
 {
-  LOG(INFO) << "Setting up G4 sim from library code";
+  LOG(info) << "Setting up G4 sim from library code";
   Config();
 }
+
+void G4Terminate()
+{
+  Terminate();
+}
+
 } // namespace g4config
 } // namespace o2

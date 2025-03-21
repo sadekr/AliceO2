@@ -12,11 +12,12 @@
 #include "FairRunSim.h"
 #include "TGeant3.h"
 #include "TGeant3TGeo.h"
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 #include "SimulationDataFormat/StackParam.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "FairModule.h"
 #include "Generators/DecayerPythia8.h"
+#include "SimConfig/SimParams.h"
 
 // these are used in commonConfig.C
 using o2::eventgen::DecayerPythia8;
@@ -29,7 +30,7 @@ namespace g3config
 
 void G3Config()
 {
-  LOG(INFO) << "Setting up G3 sim from library code";
+  LOG(info) << "Setting up G3 sim from library code";
   Config();
 }
 } // namespace g3config

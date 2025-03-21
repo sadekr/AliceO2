@@ -23,10 +23,12 @@
 using namespace o2::base;
 using flatObject = o2::gpu::FlatObject;
 
+#ifndef GPUCA_GPUCODE
 //________________________________________________________________________________
 MatLayerCyl::MatLayerCyl() : mNZBins(0), mNPhiBins(0), mNPhiSlices(0), mZHalf(0.f), mRMin2(0.f), mRMax2(0.f), mDZ(0.f), mDZInv(0.f), mDPhi(0.f), mDPhiInv(0.f), mPhiBin2Slice(nullptr), mSliceCos(nullptr), mSliceSin(nullptr), mCells(nullptr)
 {
 }
+#endif
 
 #ifndef GPUCA_ALIGPUCODE // this part is unvisible on GPU version
 //________________________________________________________________________________
@@ -97,8 +99,8 @@ void MatLayerCyl::initSegmentation(float rMin, float rMax, float zHalfSpan, int 
   offs = alignSize(offs + nphi * sizeof(float), getBufferAlignmentBytes());                  // account for alignment
 
   for (int i = nphi; i--;) {
-    mSliceCos[i] = std::cos(getPhiBinMin(i));
-    mSliceSin[i] = std::sin(getPhiBinMin(i));
+    mSliceCos[i] = o2::math_utils::cos(getPhiBinMin(i));
+    mSliceSin[i] = o2::math_utils::sin(getPhiBinMin(i));
   }
 
   o2::gpu::resizeArray(mCells, 0, getNCells(), reinterpret_cast<MatCell*>(mFlatBufferPtr + offs));
@@ -153,7 +155,7 @@ void MatLayerCyl::populateFromTGeo(int ip, int iz, int ntrPerCell)
 bool MatLayerCyl::canMergePhiSlices(int i, int j, float maxRelDiff, int maxDifferent) const
 {
   if (std::abs(i - j) > 1 || i == j || std::max(i, j) >= getNPhiSlices()) {
-    LOG(ERROR) << "Only existing " << getNPhiSlices() << " slices with diff. of 1 can be merged, input is " << i << " and " << j;
+    LOG(error) << "Only existing " << getNPhiSlices() << " slices with diff. of 1 can be merged, input is " << i << " and " << j;
     return false;
   }
   int ndiff = 0; // number of different cells
@@ -189,24 +191,29 @@ void MatLayerCyl::optimizePhiSlices(float maxRelDiff)
 {
   // merge compatible phi slices
   if (getNPhiSlices() < getNPhiBins()) {
-    LOG(ERROR) << getNPhiBins() << " phi bins were already merged to " << getNPhiSlices() << " slices";
+    LOG(error) << getNPhiBins() << " phi bins were already merged to " << getNPhiSlices() << " slices";
     return;
   }
   int newSl = 0;
+  std::vector<int> phi2SlNew(getNPhiBins());
+  for (int i = 0; i < getNPhiBins(); i++) {
+    phi2SlNew[i] = mPhiBin2Slice[i];
+  }
   for (int is = 1; is < getNPhiSlices(); is++) {
     if (!canMergePhiSlices(is - 1, is, maxRelDiff)) {
       newSl++;
+    } else {
+      mPhiBin2Slice[is] = mPhiBin2Slice[is - 1];
     }
-    mPhiBin2Slice[is] = newSl;
+    phi2SlNew[is] = newSl; // new numbering
   }
-  LOG(INFO) << newSl + 1 << " slices out of " << getNPhiBins();
   if (newSl + 1 == getNPhiSlices()) {
     return;
   }
   newSl = 0;
   int slMin = 0, slMax = 0, is = 0;
   while (is++ < getNPhiSlices()) {
-    while (is < getNPhiSlices() && mPhiBin2Slice[is] == newSl) { // select similar slices
+    while (is < getNPhiSlices() && phi2SlNew[is] == newSl) { // select similar slices
       slMax++;
       is++;
     }
@@ -224,10 +231,13 @@ void MatLayerCyl::optimizePhiSlices(float maxRelDiff)
         }
         mCells[iDest].scale(norm);
       }
-      LOG(INFO) << "mapping " << slMin << ":" << slMax << " to new slice " << newSl;
+      LOG(info) << "mapping " << slMin << ":" << slMax << " to new slice " << newSl;
     }
     newSl++;
     slMin = slMax = is;
+  }
+  for (int i = 0; i < getNPhiBins(); i++) {
+    mPhiBin2Slice[i] = phi2SlNew[i];
   }
   mNPhiSlices = newSl;
 
@@ -240,7 +250,7 @@ void MatLayerCyl::optimizePhiSlices(float maxRelDiff)
   dst = ((char*)mSliceSin) + offs; // account for alignment
   o2::gpu::resizeArray(mCells, getNPhiBins() * getNZBins(), newSl * getNZBins(), reinterpret_cast<MatCell*>(dst));
   mFlatBufferSize = estimateFlatBufferSize();
-  LOG(INFO) << "Updated Nslices = " << getNPhiSlices();
+  LOG(info) << "Updated Nslices = " << getNPhiSlices();
 }
 
 //________________________________________________________________________________
@@ -265,8 +275,8 @@ void MatLayerCyl::getMeanRMS(MatCell& mean, MatCell& rms) const
   rms.meanX2X0 /= nc;
   rms.meanRho -= mean.meanRho * mean.meanRho;
   rms.meanX2X0 -= mean.meanX2X0 * mean.meanX2X0;
-  rms.meanRho = rms.meanRho > 0.f ? std::sqrt(rms.meanRho) : 0.f;
-  rms.meanX2X0 = rms.meanX2X0 > 0.f ? std::sqrt(rms.meanX2X0) : 0.f;
+  rms.meanRho = rms.meanRho > 0.f ? o2::math_utils::sqrt(rms.meanRho) : 0.f;
+  rms.meanX2X0 = rms.meanX2X0 > 0.f ? o2::math_utils::sqrt(rms.meanX2X0) : 0.f;
 }
 
 //________________________________________________________________________________

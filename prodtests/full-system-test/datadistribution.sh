@@ -1,7 +1,7 @@
 #!/bin/bash
 
-MYDIR="$(dirname $(readlink -f $0))"
-source $MYDIR/setenv.sh
+[[ -z $GEN_TOPO_MYDIR ]] && GEN_TOPO_MYDIR="$(dirname $(realpath $0))"
+source $GEN_TOPO_MYDIR/setenv.sh || { echo "setenv.sh failed" 1>&2 && exit 1; }
 
 if [[ `which StfBuilder 2> /dev/null | wc -l` == "0" ]]; then
   eval "`alienv shell-helper`"
@@ -9,14 +9,14 @@ if [[ `which StfBuilder 2> /dev/null | wc -l` == "0" ]]; then
 fi
 
 # For benchmark only, do NOT copy&paste!
-[[ $NUMAGPUIDS == 1 ]] && export DATADIST_SHM_DELAY=30
+[[ $NUMAGPUIDS == 1 ]] && [[ -z $SHM_MANAGER_SHMID ]] && export DATADIST_SHM_DELAY=10
 
 if [[ ! -z $DD_STARTUP_DELAY ]]; then
   sleep $DD_STARTUP_DELAY
 fi
 
 if [[ -z $INPUT_FILE_LIST ]]; then
-  DD_INPUT_CMD="--data-source-dir ./raw/timeframe"
+  DD_INPUT_CMD="--data-source-dir $RAWINPUTDIR/raw/timeframe"
 else
   DD_INPUT_CMD="--data-source-file-list $INPUT_FILE_LIST"
   if [[ -z $INPUT_FILE_COPY_CMD ]]; then
@@ -34,15 +34,17 @@ export TFRATE=$(awk "BEGIN {printf \"%.6f\",1/$TFDELAY}")
 
 ARGS_ALL="--session ${OVERRIDE_SESSION:-default} --severity $SEVERITY --shm-segment-id 2 --shm-segment-size 1000000 --no-cleanup"
 
-eval StfBuilder --id stfb --transport shmem \
-  --dpl-channel-name dpl-chan --channel-config "name=dpl-chan,type=push,method=bind,address=ipc://@$INRAWCHANNAME,transport=shmem,rateLogging=1" \
+[[ ! -z $SHM_MANAGER_SHMID ]] && SHM_TOOL_OPTIONS=" --shmid $SHM_MANAGER_SHMID --data-source-region-shmid 100 --data-source-header-shmid 101"
+
+eval StfBuilder --id stfb --discovery-partition FST --transport shmem \
+  --dpl-channel-name dpl-chan --channel-config "name=dpl-chan,type=push,method=bind,address=ipc://${UDS_PREFIX}${INRAWCHANNAME},transport=shmem,rateLogging=1" \
   $DD_INPUT_CMD \
   --data-source-rate=${TFRATE} \
   --data-source-regionsize=${DDSHMSIZE} \
-  --data-source-headersize=2048 \
+  --data-source-headersize=${DDHDRSIZE} \
   --data-source-enable \
   --data-source-preread 5 \
   --shm-no-cleanup on \
   --shm-monitor false \
   --control=static \
-  ${ARGS_ALL}
+  ${ARGS_ALL} ${SHM_TOOL_OPTIONS}

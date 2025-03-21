@@ -15,71 +15,97 @@
 #include "DetectorsCalibration/Utils.h"
 #include "Framework/ControlService.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include <fstream> // std::ifstream
 
 using namespace o2::phos;
 
 PHOSEnergySlot::PHOSEnergySlot()
 {
-  mHistos.reset();
-  mBuffer.reset(new RingBuffer());
+  mHistos = std::make_unique<ETCalibHistos>();
+  mBuffer = std::make_unique<RingBuffer>();
   mGeom = Geometry::GetInstance();
 }
 PHOSEnergySlot::PHOSEnergySlot(const PHOSEnergySlot& other)
 {
   mRunStartTime = other.mRunStartTime;
-  mBuffer.reset(new RingBuffer());
-  mCalibParams.reset(new CalibParams(*(other.mCalibParams)));
-  mBadMap.reset(new BadChannelsMap(*(other.mBadMap)));
+  mBuffer = std::make_unique<RingBuffer>();
   mEvBC = other.mEvBC;
   mEvOrbit = other.mEvOrbit;
   mEvent = 0;
   mPtMin = other.mPtMin;
   mEminHGTime = other.mEminHGTime;
   mEminLGTime = other.mEminLGTime;
+  mFillDigitsTree = other.mFillDigitsTree;
   mDigits.clear();
-  mHistos.reset();
+  mHistos = std::make_unique<ETCalibHistos>();
 }
 
 void PHOSEnergySlot::print() const
 {
-  LOG(INFO) << "Collected " << mDigits.size() << " CalibDigits";
+  LOG(info) << "Collected " << mDigits.size() << " CalibDigits";
 }
 
 void PHOSEnergySlot::fill(const gsl::span<const Cluster>& clusters, const gsl::span<const CluElement>& cluelements, const gsl::span<const TriggerRecord>& cluTR)
 {
-  //Scan current list of clusters
-  //Fill time, non-linearity and mgg histograms
-  //Fill list of re-calibraiable digits
+  // Scan current list of clusters
+  // Fill time, non-linearity and mgg histograms
+  // Fill list of re-calibraiable digits
+  if (mFillDigitsTree) {
+    mDigits.clear();
+  }
   for (auto& tr : cluTR) {
 
-    //Mark new event
-    //First goes new event marker + BC (16 bit), next word orbit (32 bit)
-    EventHeader h = {0};
-    h.mMarker = 16383;
-    h.mBC = tr.getBCData().bc;
-    mDigits.push_back(h.mDataWord);
-    mDigits.push_back(tr.getBCData().orbit);
+    if (mFillDigitsTree) {
+      // Mark new event
+      // First goes new event marker + BC (16 bit), next word orbit (32 bit)
+      EventHeader h = {0};
+      h.mMarker = 16383;
+      h.mBC = tr.getBCData().bc;
+      mDigits.push_back(h.mDataWord);
+      mDigits.push_back(tr.getBCData().orbit);
+    }
+    mEvBC = tr.getBCData().bc;
 
-    int iclu = 0;
     int firstCluInEvent = tr.getFirstEntry();
     int lastCluInEvent = firstCluInEvent + tr.getNumberOfObjects();
+
+    // event is good if a) 2 and more clusters; b) at least one cluster with E>1.5 GeV
+    const float minCluE = 1.5;
+    bool good = false;
+    for (int i = firstCluInEvent; i < lastCluInEvent; i++) {
+      const Cluster& clu = clusters[i];
+      if (checkCluster(clu) && clu.getEnergy() > minCluE) {
+        good = true;
+        break;
+      }
+    }
+    good &= (lastCluInEvent - firstCluInEvent > 1);
+    if (!good) {
+      continue;
+    }
 
     mBuffer->startNewEvent(); // mark stored clusters to be used for Mixing
     for (int i = firstCluInEvent; i < lastCluInEvent; i++) {
       const Cluster& clu = clusters[i];
-      if (clu.getEnergy() < 1.e-4) { //There was problem in unfolding and cluster parameters not calculated
+      if (clu.getEnergy() < mClusterEmin) { // There was problem in unfolding and cluster parameters not calculated
         continue;
       }
       fillTimeMassHisto(clu, cluelements);
 
+      if (!mFillDigitsTree) {
+        continue;
+      }
+
       uint32_t firstCE = clu.getFirstCluEl();
       uint32_t lastCE = clu.getLastCluEl();
-      for (int idig = firstCE; idig < lastCE; idig++) {
+      for (uint32_t idig = firstCE; idig < lastCE; idig++) {
         const CluElement& ce = cluelements[idig];
+        // if (ce.energy < mDigitEmin) {
+        //   continue;
+        // }
         short absId = ce.absId;
-        //Fill cells from cluster for next iterations
+        // Fill cells from cluster for next iterations
         short adcCounts = ce.energy / mCalibParams->getGain(absId);
         // Need to chale LG gain too to fit dynamic range
         if (!ce.isHG) {
@@ -92,8 +118,8 @@ void PHOSEnergySlot::fill(const gsl::span<const Cluster>& clusters, const gsl::s
         d.mCluster = (i - firstCluInEvent) % kMaxCluInEvent;
         mDigits.push_back(d.mDataWord);
         if (i - firstCluInEvent > kMaxCluInEvent) {
-          //Normally this is not critical as indexes are used "locally", i.e. are compared to previous/next
-          LOG(INFO) << "Too many clusters per event:" << i - firstCluInEvent << ", apply more strict selection; clusters with same indexes will appear";
+          // Normally this is not critical as indexes are used "locally", i.e. are compared to previous/next
+          LOG(important) << "Too many clusters per event:" << i - firstCluInEvent << ", apply more strict selection; clusters with same indexes will appear";
         }
       }
     }
@@ -101,7 +127,7 @@ void PHOSEnergySlot::fill(const gsl::span<const Cluster>& clusters, const gsl::s
 }
 void PHOSEnergySlot::clear()
 {
-  mHistos.reset();
+  mHistos->reset();
   mDigits.clear();
 }
 
@@ -111,66 +137,86 @@ void PHOSEnergySlot::fillTimeMassHisto(const Cluster& clu, const gsl::span<const
   uint32_t firstCE = clu.getFirstCluEl();
   uint32_t lastCE = clu.getLastCluEl();
 
-  for (int idig = firstCE; idig < lastCE; idig++) {
+  short absIdMax = 0;
+  float maxE = 0.;
+  for (uint32_t idig = firstCE; idig < lastCE; idig++) {
     const CluElement& ce = cluelements[idig];
     short absId = ce.absId;
+    if (ce.energy > maxE) {
+      maxE = ce.energy;
+      absIdMax = absId;
+    }
     if (ce.isHG) {
       if (ce.energy > mEminHGTime) {
-        mHistos.fill(ETCalibHistos::kTimeHGPerCell, absId, ce.time);
+        mHistos->fill(ETCalibHistos::kTimeHGPerCell, absId, ce.time);
+        char relid[3];
+        Geometry::absToRelNumbering(absId, relid);
+        int ddl = (relid[0] - 1) * 4 + (relid[1] - 1) / 16 - 2;
+        mHistos->fill(ETCalibHistos::kTimeDDL, int(ddl * 4 + mEvBC % 4), ce.time);
       }
-      mHistos.fill(ETCalibHistos::kTimeHGSlewing, ce.time, ce.energy);
+      if (mBadMap->isChannelGood(absId)) {
+        mHistos->fill(ETCalibHistos::kTimeHGSlewing, ce.time, ce.energy);
+      }
     } else {
       if (ce.energy > mEminLGTime) {
-        mHistos.fill(ETCalibHistos::kTimeLGPerCell, absId, ce.time);
+        mHistos->fill(ETCalibHistos::kTimeLGPerCell, absId, ce.time);
       }
-      mHistos.fill(ETCalibHistos::kTimeLGSlewing, ce.time, ce.energy);
+      if (!mBadMap->isChannelGood(absId)) {
+        mHistos->fill(ETCalibHistos::kTimeLGSlewing, ce.time, ce.energy);
+      }
     }
   }
 
-  //Real and Mixed inv mass distributions
-  // prepare TLorentsVector
+  // Real and Mixed inv mass distributions
+  //  prepare TLorentsVector
   float posX, posZ;
   clu.getLocalPosition(posX, posZ);
+
+  // Correction for the depth of the shower starting point (TDR p 127)
+  const float para = 0.925;
+  const float parb = 6.52;
+  float depth = para * TMath::Log(clu.getEnergy()) + parb;
+  posX -= posX * depth / 460.;
+  posZ -= posZ * depth / 460.;
+
   TVector3 vec3;
   mGeom->local2Global(clu.module(), posX, posZ, vec3);
-  vec3 -= mVertex;
-  float e = clu.getEnergy();
-  short absId;
-  mGeom->relPosToAbsId(clu.module(), posX, posZ, absId);
-
-  vec3 *= 1. / vec3.Mag();
-  TLorentzVector v(vec3.X() * e, vec3.Y() * e, vec3.Z() * e, e);
+  // float e = clu.getEnergy();
+  float e = Nonlinearity(clu.getCoreEnergy());
+  // Non-perp inc., nonlin
+  vec3 *= e / vec3.Mag();
+  TLorentzVector v(vec3.X(), vec3.Y(), vec3.Z(), e);
   // Fill calibration histograms for all cells, even bad, but partners in inv, mass should be good
   bool isGood = checkCluster(clu);
   for (short ip = mBuffer->size(); ip--;) {
     const TLorentzVector& vp = mBuffer->getEntry(ip);
     TLorentzVector sum = v + vp;
-    if (mBuffer->isCurrentEvent(ip)) { //same (real) event
+    if (mBuffer->isCurrentEvent(ip)) { // same (real) event
       if (isGood) {
-        mHistos.fill(ETCalibHistos::kReInvMassNonlin, e, sum.M());
+        mHistos->fill(ETCalibHistos::kReInvMassNonlin, e, sum.M());
       }
       if (sum.Pt() > mPtMin) {
-        mHistos.fill(ETCalibHistos::kReInvMassPerCell, absId, sum.M());
+        mHistos->fill(ETCalibHistos::kReInvMassPerCell, absIdMax, sum.M());
       }
-    } else { //Mixed
+    } else { // Mixed
       if (isGood) {
-        mHistos.fill(ETCalibHistos::kMiInvMassNonlin, e, sum.M());
+        mHistos->fill(ETCalibHistos::kMiInvMassNonlin, e, sum.M());
       }
       if (sum.Pt() > mPtMin) {
-        mHistos.fill(ETCalibHistos::kMiInvMassPerCell, absId, sum.M());
+        mHistos->fill(ETCalibHistos::kMiInvMassPerCell, absIdMax, sum.M());
       }
     }
   }
 
-  //Add to list ot partners only if cluster is good
-  if (isGood) {
+  // Add to list ot partners only if cluster is good
+  if (isGood && e > 0.2) {
     mBuffer->addEntry(v);
   }
 }
 
 bool PHOSEnergySlot::checkCluster(const Cluster& clu)
 {
-  //First check BadMap
+  // First check BadMap
   float posX, posZ;
   clu.getLocalPosition(posX, posZ);
   short absId;
@@ -181,6 +227,22 @@ bool PHOSEnergySlot::checkCluster(const Cluster& clu)
 
   return (clu.getEnergy() > 0.3 && clu.getMultiplicity() > 1);
 }
+float PHOSEnergySlot::Nonlinearity(float en)
+{
+  // Correct for non-linearity
+  const double a = 9.34913e-01;
+  const double b = 2.33e-03;
+  const double c = -8.10e-05;
+  const double d = 3.2e-02;
+  const double f = -8.0e-03;
+  const double g = 1.e-01;
+  const double h = 2.e-01;
+  const double k = -1.48e-04;
+  const double l = 0.194;
+  const double m = 0.0025;
+
+  return en * (a + b * en + c * en * en + d / en + f / ((en - g) * (en - g) + h) + k / ((en - l) * (en - l) + m));
+}
 
 //==================================================
 
@@ -189,50 +251,45 @@ using Slot = o2::calibration::TimeSlot<o2::phos::PHOSEnergySlot>;
 PHOSEnergyCalibrator::PHOSEnergyCalibrator()
 {
   // create final histos
-  mHistos.reset(new ETCalibHistos());
+  mHistos = std::make_unique<ETCalibHistos>();
 }
 
 void PHOSEnergyCalibrator::finalizeSlot(Slot& slot)
 {
-
   // Extract results for the single slot
   es* c = slot.getContainer();
-  LOG(INFO) << "Finalize slot " << slot.getTFStart() << " <= TF <= " << slot.getTFEnd();
-  //Add histos
+  LOG(debug) << "Finalize slot " << slot.getTFStart() << " <= TF <= " << slot.getTFEnd();
+  // Add histos
   mHistos->merge(c->getCollectedHistos());
-  //Add collected Digits
-  auto tmpD = c->getCollectedDigits();
-  //Add to list or write to file directly?
-  if (!mFout) { //not open yet?
-    LOG(INFO) << "Writing CalibDigits to file " << mdigitsfilename.data();
-    mFout.reset(TFile::Open(mdigitsfilename.data(), "recreate"));
-  }
-  int nbites = mFout->WriteObjectAny(&tmpD, "std::vector<uint32_t>", Form("Digits%d", mChank++));
-  LOG(INFO) << "Writing " << tmpD.size() << " CalibDigits, wrote " << nbites << "bytes";
-  c->clear();
 }
 
-Slot& PHOSEnergyCalibrator::emplaceNewSlot(bool front, uint64_t tstart, uint64_t tend)
+Slot& PHOSEnergyCalibrator::emplaceNewSlot(bool front, TFType tstart, TFType tend)
 {
   auto& cont = getSlots();
   auto& slot = front ? cont.emplace_front(tstart, tend) : cont.emplace_back(tstart, tend);
   slot.setContainer(std::make_unique<es>());
-  slot.getContainer()->setBadMap(*mBadMap);
-  slot.getContainer()->setCalibration(*mCalibParams);
-  slot.getContainer()->setCuts(mPtMin, mEminHGTime, mEminLGTime);
+  slot.getContainer()->setFillDigitsTree(mFillDigitsTree);
+  slot.getContainer()->setBadMap(mBadMap);
+  slot.getContainer()->setCalibration(mCalibParams);
+  slot.getContainer()->setCuts(mPtMin, mEminHGTime, mEminLGTime, mDigitEmin, mClusterEmin);
   return slot;
 }
 
 bool PHOSEnergyCalibrator::process(uint64_t tf, const gsl::span<const Cluster>& clusters,
                                    const gsl::span<const CluElement>& cluelements,
-                                   const gsl::span<const TriggerRecord>& cluTR)
+                                   const gsl::span<const TriggerRecord>& cluTR,
+                                   std::vector<uint32_t>& outputDigits)
 {
   // process current TF
-  //First receive bad map and calibration if not received yet
-
+  // First receive bad map and calibration if not received yet
   auto& slotTF = getSlotForTF(tf);
   slotTF.getContainer()->setRunStartTime(tf);
   slotTF.getContainer()->fill(clusters, cluelements, cluTR);
+  // Add collected Digits
+  if (mFillDigitsTree) {
+    auto tmpD = slotTF.getContainer()->getCollectedDigits();
+    outputDigits.insert(outputDigits.end(), tmpD.begin(), tmpD.end());
+  }
   return true;
 }
 

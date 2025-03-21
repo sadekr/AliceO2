@@ -18,21 +18,19 @@
 #include "GPUDef.h"
 #include "GPUProcessor.h"
 
-namespace o2
-{
-namespace tpc
+namespace o2::tpc
 {
 struct ClusterNative;
 struct ClusterNativeAccess;
-} // namespace tpc
-} // namespace o2
+} // namespace o2::tpc
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 
 struct GPUTrackingInOutZS;
+struct GPUTPCClusterOccupancyMapBin;
+class GPUTRDTrackletWord;
+class GPUTRDSpacePoint;
 
 class GPUTrackingInputProvider : public GPUProcessor
 {
@@ -42,36 +40,51 @@ class GPUTrackingInputProvider : public GPUProcessor
   void RegisterMemoryAllocation();
   void SetMaxData(const GPUTrackingInOutPointers& io);
 
+  void* SetPointersTPCOccupancyMap(void* mem);
   void* SetPointersInputZS(void* mem);
   void* SetPointersInputClusterNativeAccess(void* mem);
   void* SetPointersInputClusterNativeBuffer(void* mem);
   void* SetPointersInputClusterNativeOutput(void* mem);
+  void* SetPointersInputTRD(void* mem);
   void* SetPointersErrorCodes(void* mem);
 #endif
 
-  unsigned short mResourceZS = -1;
-  unsigned short mResourceClusterNativeAccess = -1;
-  unsigned short mResourceClusterNativeBuffer = -1;
-  unsigned short mResourceClusterNativeOutput = -1;
-  unsigned short mResourceErrorCodes = -1;
+  uint16_t mResourceZS = -1;
+  uint16_t mResourceClusterNativeAccess = -1;
+  uint16_t mResourceClusterNativeBuffer = -1;
+  uint16_t mResourceClusterNativeOutput = -1;
+  uint16_t mResourceErrorCodes = -1;
+  uint16_t mResourceTRD = -1;
+  uint16_t mResourceOccupancyMap = -1;
 
   bool mHoldTPCZS = false;
   bool mHoldTPCClusterNative = false;
   bool mHoldTPCClusterNativeOutput = false;
-  unsigned int mNClusterNative = 0;
+  bool mHoldTPCOccupancyMap = false;
+  uint32_t mNClusterNative = 0;
 
   GPUTrackingInOutZS* mPzsMeta = nullptr;
-  unsigned int* mPzsSizes = nullptr;
+  uint32_t* mPzsSizes = nullptr;
   void** mPzsPtrs = nullptr;
+
+  uint32_t mNTRDTracklets = 0;
+  bool mDoSpacepoints = false;
+  uint32_t mNTRDTriggerRecords = 0;
+  GPUTRDTrackletWord* mTRDTracklets = nullptr;
+  GPUTRDSpacePoint* mTRDSpacePoints = nullptr;
+  float* mTRDTriggerTimes = nullptr;
+  int32_t* mTRDTrackletIdxFirst = nullptr;
+  uint8_t* mTRDTrigRecMask = nullptr;
 
   o2::tpc::ClusterNativeAccess* mPclusterNativeAccess = nullptr;
   o2::tpc::ClusterNative* mPclusterNativeBuffer = nullptr;
   o2::tpc::ClusterNative* mPclusterNativeOutput = nullptr;
 
-  unsigned int* mErrorCodes = nullptr;
+  uint32_t* mTPCClusterOccupancyMap = nullptr;
+
+  uint32_t* mErrorCodes = nullptr;
 };
 
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

@@ -30,11 +30,11 @@
 
 #include "DataFormatsHMP/Digit.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "HMPIDReconstruction/HmpidEquipment.h"
 
-#define MAXDESCRIPTIONLENGHT 50
+#define MAXDESCRIPTIONLENGHT 70
 
 // ---- RDH 6  standard dimension -------
 #define RAWBLOCKDIMENSION_W 2048
@@ -162,7 +162,8 @@ class HmpidDecoder2
 
  public:
   bool decodeHmpidError(int ErrorField, char* outbuf);
-  void dumpHmpidError(int ErrorField);
+  void dumpHmpidError(HmpidEquipment* eq, int ErrorField, int mHeBCDI, int mHeORBIT);
+  void dumpMemory(const void* MemoryStartPtr, std::size_t Dimension);
   bool isPadWord(uint32_t wp, int* Err, int* Col, int* Dilogic, int* Channel, int* Charge);
   int decodeHeader(uint32_t* streamPtrAdr, int* EquipIndex);
   HmpidEquipment* evaluateHeaderContents(int EquipmentIndex);
@@ -171,7 +172,7 @@ class HmpidDecoder2
  protected:
   bool getBlockFromStream(uint32_t** streamPtr, uint32_t Size);
   bool getHeaderFromStream(uint32_t** streamPtr);
-  bool getWordFromStream(uint32_t* word);
+  uint32_t readWordFromStream();
   uint32_t* getActualStreamPtr()
   {
     return (mActualStreamPtr);

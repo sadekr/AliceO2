@@ -19,13 +19,14 @@
 
 #include <vector>
 #include <string_view>
+#include <string>
+#include <unordered_map>
+#include <memory>
 
-//root includes
+// root includes
+#include "TH1.h"
 #include "TH1F.h"
 #include "TH2F.h"
-
-//o2 includes
-#include "DataFormatsTPC/Defs.h"
 
 namespace o2
 {
@@ -66,19 +67,42 @@ class Tracks
   /// Dump results to a file
   void dumpToFile(std::string_view filename);
 
-  /// get 1D histograms
-  std::vector<TH1F>& getHistograms1D() { return mHist1D; }
-  const std::vector<TH1F>& getHistograms1D() const { return mHist1D; }
+  // To set the elementary track cuts
+  void setTrackCuts(float AbsEta = 1.,
+                    int nClusterCut = 60, float dEdxTot = 20, float cutPtForDCAr = 1.5, float samplingFractionDCAr = 0.1, bool turnOffHistosForAsync = false, float cutMaxAbsDCAr = 0.1, bool useCutMaxAbsDCArOnHistos = false)
+  {
+    mCutAbsEta = AbsEta;
+    mCutMinnCls = nClusterCut;
+    mCutMindEdxTot = dEdxTot;
+    mCutMinPtDCAr = cutPtForDCAr;
+    mSamplingFractionDCAr = samplingFractionDCAr;
+    mTurnOffHistosForAsync = turnOffHistosForAsync;
+    mCutMaxAbsDCAr = cutMaxAbsDCAr;
+    mUseCutMaxAbsDCArOnHistos = useCutMaxAbsDCArOnHistos;
+  }
 
-  /// get 2D histograms
-  std::vector<TH2F>& getHistograms2D() { return mHist2D; }
-  const std::vector<TH2F>& getHistograms2D() const { return mHist2D; }
+  // Set PV position
+  void setPVposition(const o2::math_utils::Point3D<float> meanVtxPoint3D)
+  {
+    mPositionOfPV = meanVtxPoint3D;
+  }
 
   /// get ratios of 1D histograms
-  std::vector<TH1F>& getHistogramRatios1D() { return mHistRatio1D; }
-  const std::vector<TH1F>& getHistogramRatios1D() const { return mHistRatio1D; }
+  std::unordered_map<std::string, std::unique_ptr<TH1>>& getMapHist() { return mMapHist; }
+  const std::unordered_map<std::string, std::unique_ptr<TH1>>& getMapHist() const { return mMapHist; }
 
  private:
+  float mCutAbsEta = 1.f;                         // Eta cut
+  int mCutMinnCls = 60;                           // minimum N clusters
+  float mCutMindEdxTot = 20.f;                    // dEdxTot min value
+  float mCutMinPtDCAr = 1.5f;                     // minimum pT for DCAr plots DCAr vs. phi, eta, nCluster
+  float mSamplingFractionDCAr = 0.1f;             // sampling rate for calculation of DCAr
+  bool mTurnOffHistosForAsync = false;            // Decide whether to turn off some histograms for async to reduce memory
+  float mCutMaxAbsDCAr = 1.f;                     // maximum DCAr
+  bool mUseCutMaxAbsDCArOnHistos = false;         // Decide whether to use the cut on maximum DCAr for the histograms
+  o2::math_utils::Point3D<float> mPositionOfPV{}; // Position of the PV
+
+  std::unordered_map<std::string, std::unique_ptr<TH1>> mMapHist;
   std::vector<TH1F> mHist1D{};      ///< Initialize vector of 1D histograms
   std::vector<TH2F> mHist2D{};      ///< Initialize vector of 2D histograms
   std::vector<TH1F> mHistRatio1D{}; ///< Initialize vector of ratios of 1D histograms

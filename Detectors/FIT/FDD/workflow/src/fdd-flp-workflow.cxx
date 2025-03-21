@@ -16,10 +16,16 @@
 #include "DataFormatsFDD/MCLabel.h"
 #include "FDDRaw/RawReaderFDDBase.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
+#include "Framework/CompletionPolicyHelpers.h"
 
 using namespace o2::framework;
 
 // ------------------------------------------------------------------
+void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+{
+  // ordered policies for the writers
+  policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*(?:FDD|fdd).*[W,w]riter.*"));
+}
 
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
@@ -52,6 +58,16 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
                     o2::framework::VariantType::Bool,
                     false,
                     {"do not subscribe to FLP/DISTSUBTIMEFRAME/0 message (no lost TF recovery)"}});
+  workflowOptions.push_back(
+    ConfigParamSpec{"input-sub-sampled",
+                    o2::framework::VariantType::Bool,
+                    false,
+                    {"SUB_RAWDATA DPL channel will be used as input, in case of dispatcher usage"}});
+  workflowOptions.push_back(
+    ConfigParamSpec{"disable-dpl-ccdb-fetcher",
+                    o2::framework::VariantType::Bool,
+                    false,
+                    {"Disable DPL CCDB fetcher, channel map will be uploaded during initialization by taking last entry in CCDB"}});
 }
 
 // ------------------------------------------------------------------
@@ -60,28 +76,31 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 
 WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
 {
-  LOG(INFO) << "WorkflowSpec defineDataProcessing";
+  LOG(info) << "WorkflowSpec defineDataProcessing";
   auto dumpReader = configcontext.options().get<bool>("dump-blocks-reader");
   auto isExtendedMode = configcontext.options().get<bool>("tcm-extended-mode");
   auto disableRootOut = configcontext.options().get<bool>("disable-root-output");
   auto askSTFDist = !configcontext.options().get<bool>("ignore-dist-stf");
-  LOG(INFO) << "WorkflowSpec FLPWorkflow";
-  //Type aliases
-  //using RawReaderFDDtrgInput = o2::fit::RawReaderFIT<o2::fdd::RawReaderFV0BaseNorm,true>;
+  const auto isSubSampled = configcontext.options().get<bool>("input-sub-sampled");
+  const auto disableDplCcdbFetcher = configcontext.options().get<bool>("disable-dpl-ccdb-fetcher");
+  o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
+  LOG(info) << "WorkflowSpec FLPWorkflow";
+  // Type aliases
+  // using RawReaderFDDtrgInput = o2::fit::RawReaderFIT<o2::fdd::RawReaderFV0BaseNorm,true>;
   using RawReaderFDD = o2::fit::RawReaderFIT<o2::fdd::RawReaderFDDBaseNorm, false>;
-  //using RawReaderFDDtrgInputExt = o2::fit::RawReaderFIT<o2::fdd::RawReaderFDDBaseExt,true>;
+  // using RawReaderFDDtrgInputExt = o2::fit::RawReaderFIT<o2::fdd::RawReaderFDDBaseExt,true>;
   using RawReaderFDDext = o2::fit::RawReaderFIT<o2::fdd::RawReaderFDDBaseExt, false>;
   using MCLabelCont = o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>;
   o2::header::DataOrigin dataOrigin = o2::header::gDataOriginFDD;
   //
   WorkflowSpec specs;
   if (isExtendedMode) {
-    specs.emplace_back(o2::fit::getFITDataReaderDPLSpec(RawReaderFDDext{dataOrigin, dumpReader}, askSTFDist));
+    specs.emplace_back(o2::fit::getFITDataReaderDPLSpec(RawReaderFDDext{dataOrigin, dumpReader}, askSTFDist, isSubSampled, disableDplCcdbFetcher));
     if (!disableRootOut) {
       specs.emplace_back(o2::fit::FITDigitWriterSpecHelper<RawReaderFDDext, MCLabelCont>::getFITDigitWriterSpec(false, false, dataOrigin));
     }
   } else {
-    specs.emplace_back(o2::fit::getFITDataReaderDPLSpec(RawReaderFDD{dataOrigin, dumpReader}, askSTFDist));
+    specs.emplace_back(o2::fit::getFITDataReaderDPLSpec(RawReaderFDD{dataOrigin, dumpReader}, askSTFDist, isSubSampled, disableDplCcdbFetcher));
     if (!disableRootOut) {
       specs.emplace_back(o2::fit::FITDigitWriterSpecHelper<RawReaderFDD, MCLabelCont>::getFITDigitWriterSpec(false, false, dataOrigin));
     }

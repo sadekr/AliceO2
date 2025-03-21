@@ -35,36 +35,36 @@ class ROFRecord;
 namespace its
 {
 
-class NoiseSlotCalibrator : public o2::calibration::TimeSlotCalibration<o2::itsmft::CompClusterExt, o2::itsmft::NoiseMap>
+class NoiseSlotCalibrator : public o2::calibration::TimeSlotCalibration<o2::itsmft::NoiseMap>
 {
   using Slot = calibration::TimeSlot<o2::itsmft::NoiseMap>;
 
  public:
   NoiseSlotCalibrator() { setUpdateAtTheEndOfRunOnly(); }
-  NoiseSlotCalibrator(bool one, float prob)
+  NoiseSlotCalibrator(bool one, float prob, float relErr) : m1pix(one), mProbabilityThreshold(prob), mProbRelErr(relErr)
   {
-    m1pix = one;
-    mProbabilityThreshold = prob;
+    mMinROFs = 1.1 * o2::itsmft::NoiseMap::getMinROFs(prob, relErr);
+    LOGP(info, "Expect at least {} ROFs needed to apply threshold {} with relative error {}", mMinROFs, mProbabilityThreshold, mProbRelErr);
     setUpdateAtTheEndOfRunOnly();
   }
   ~NoiseSlotCalibrator() final = default;
-
-  void setThreshold(unsigned int t) { mThreshold = t; }
 
   bool processTimeFrame(gsl::span<const o2::itsmft::CompClusterExt> const& clusters,
                         gsl::span<const unsigned char> const& patterns,
                         gsl::span<const o2::itsmft::ROFRecord> const& rofs);
 
+  void setMinROFs(long n) { mMinROFs = n; }
+
   void finalize()
   {
-    LOG(INFO) << "Number of processed strobes is " << mNumberOfStrobes;
+    LOG(info) << "Number of processed strobes is " << mNumberOfStrobes;
     auto& slot = getSlots().back();
     slot.getContainer()->applyProbThreshold(mProbabilityThreshold, mNumberOfStrobes);
   }
 
   void loadDictionary(std::string fname)
   {
-    mDict.readBinaryFile(fname);
+    mDict.readFromFile(fname);
   }
   const o2::itsmft::NoiseMap& getNoiseMap(long& start, long& end)
   {
@@ -75,7 +75,7 @@ class NoiseSlotCalibrator : public o2::calibration::TimeSlotCalibration<o2::itsm
   }
 
   // Functions overloaded from the calibration framework
-  bool process(calibration::TFType tf, const gsl::span<const o2::itsmft::CompClusterExt> data) final;
+  bool process(const gsl::span<const o2::itsmft::CompClusterExt> data);
 
   // Functions required by the calibration framework
   void initOutput() final {}
@@ -86,7 +86,8 @@ class NoiseSlotCalibrator : public o2::calibration::TimeSlotCalibration<o2::itsm
  private:
   o2::itsmft::TopologyDictionary mDict;
   float mProbabilityThreshold = 3e-6f;
-  unsigned int mThreshold = 100;
+  float mProbRelErr = 0.2; // relative error on channel noise to apply the threshold
+  long mMinROFs = 0;
   unsigned int mNumberOfStrobes = 0;
   bool m1pix = true;
 };

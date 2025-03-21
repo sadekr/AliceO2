@@ -33,11 +33,17 @@
 #pragma link C++ class o2::math_utils::Rotation2Dd_t + ;
 #pragma link C++ class o2::math_utils::CachingTF1 + ;
 
+#pragma link C++ class o2::math_utils::SymMatrixSolver + ;
+
 #pragma link C++ class o2::math_utils::CircleXYf_t + ;
 #pragma link C++ class o2::math_utils::CircleXYd_t + ;
 #pragma link C++ class o2::math_utils::IntervalXYf_t + ;
 #pragma link C++ class o2::math_utils::IntervalXYd_t + ;
 #pragma link C++ class o2::math_utils::Bracketf_t + ;
 #pragma link C++ class o2::math_utils::Bracketd_t + ;
+#pragma link C++ class o2::math_utils::Tsallis + ;
+
+#pragma link C++ class o2::math_utils::Legendre1DPolynominal + ;
+#pragma link C++ class o2::math_utils::Legendre2DPolynominal + ;
 
 #endif

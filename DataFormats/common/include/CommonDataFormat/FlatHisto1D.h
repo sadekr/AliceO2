@@ -30,13 +30,13 @@ namespace o2
 namespace dataformats
 {
 
-/* 
+/*
   Fast 1D histo class which can be messages as
   FlatHisto1D<float> histo(nbins, xmin, xmax);
   histo.fill(...);
-  pc.outputs().snapshot(Output{"Origin", "Desc", 0, Lifetime::Timeframe}, histo.getBase());
-  
-  and received (read only!) as 
+  pc.outputs().snapshot(Output{"Origin", "Desc", 0}, histo.getBase());
+
+  and received (read only!) as
   const auto hdata = pc.inputs().get<gsl::span<float>>("histodata");
   FlatHisto1D<float> histoView;
   histoView.adoptExternal(hdata);
@@ -57,8 +57,10 @@ class FlatHisto1D
          NServiceSlots };
 
   FlatHisto1D() = default;
-  FlatHisto1D(int nb, T xmin, T xmax);
+  FlatHisto1D(uint32_t nb, T xmin, T xmax);
+  FlatHisto1D(const FlatHisto1D& src);
   FlatHisto1D(const gsl::span<const T> ext) { adoptExternal(ext); }
+  FlatHisto1D& operator=(const FlatHisto1D& rhs);
   void adoptExternal(const gsl::span<const T> ext);
   void init()
   {
@@ -66,8 +68,8 @@ class FlatHisto1D
     assert(mContainer.size() > NServiceSlots);
     init(gsl::span<const T>(mContainer.data(), mContainer.size()));
   }
-
-  int getNBins() const { return mNBins; }
+  void init(uint32_t nbx, T xmin, T xmax);
+  uint32_t getNBins() const { return mNBins; }
   T getXMin() const { return mXMin; }
   T getXMax() const { return mXMax; }
   T getBinSize() const { return mBinSize; }
@@ -79,6 +81,11 @@ class FlatHisto1D
     return mDataPtr[ib];
   }
 
+  const T* getData() const
+  {
+    return mDataPtr;
+  }
+
   T getBinContentForX(T x) const
   {
     auto bin = getBin(x);
@@ -88,19 +95,19 @@ class FlatHisto1D
   bool isValidBin(uint32_t bin) const { return bin < getNBins(); }
   bool isBinEmpty(uint32_t bin) const { return getBinContent(bin) == 0; }
 
-  T getBinStart(int i) const
+  T getBinStart(uint32_t i) const
   {
     assert(i < getNBins());
     return getXMin() + i * getBinSize();
   }
 
-  T getBinCenter(int i) const
+  T getBinCenter(uint32_t i) const
   {
     assert(i < getNBins());
     return getXMin() + (i + 0.5) * getBinSize();
   }
 
-  T getBinEnd(int i) const
+  T getBinEnd(uint32_t i) const
   {
     assert(i < getNBins());
     return getXMin() + (i + 1) * getBinSize();
@@ -129,7 +136,7 @@ class FlatHisto1D
     uint32_t bin = getBin(x);
     if (isValidBin(bin)) {
       mDataPtr[bin]++;
-      return bin;
+      return (int)bin;
     }
     return -1;
   }
@@ -139,7 +146,7 @@ class FlatHisto1D
     uint32_t bin = getBin(x);
     if (isValidBin(bin)) {
       mDataPtr[bin] += w;
-      return bin;
+      return (int)bin;
     }
     return -1;
   }
@@ -163,7 +170,7 @@ class FlatHisto1D
     return mContainer.size() > NServiceSlots;
   }
 
-  std::unique_ptr<TH1F> createTH1F(const std::string& name = "histo1d");
+  std::unique_ptr<TH1F> createTH1F(const std::string& name = "histo1d") const;
 
   const std::vector<T>& getBase() const { return mContainer; }
   gsl::span<const T> getView() const { return mContainerView; }
@@ -178,9 +185,9 @@ class FlatHisto1D
   T mXMax{};                           //!
   T mBinSize{};                        //!
   T mBinSizeInv{};                     //!
-  int mNBins{};                        //!
+  uint32_t mNBins{};                   //!
 
-  ClassDefNV(FlatHisto1D, 1);
+  ClassDefNV(FlatHisto1D, 2);
 };
 
 using FlatHisto1D_f = FlatHisto1D<float>;

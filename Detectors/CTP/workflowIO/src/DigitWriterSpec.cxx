@@ -13,6 +13,10 @@
 /// \author Roman Lietava
 
 #include "CTPWorkflowIO/DigitWriterSpec.h"
+#include "DPLUtils/MakeRootTreeWriterSpec.h"
+#include "Framework/InputSpec.h"
+#include "DataFormatsCTP/Digits.h"
+#include "DataFormatsCTP/LumiInfo.h"
 
 namespace o2
 {
@@ -27,10 +31,16 @@ framework::DataProcessorSpec getDigitWriterSpec(bool raw)
   using MakeRootTreeWriterSpec = framework::MakeRootTreeWriterSpec;
   // Spectators for logging
   auto logger = [](std::vector<o2::ctp::CTPDigit> const& vecDigits) {
-    LOG(INFO) << "CTPDigitWriter pulled " << vecDigits.size() << " digits";
+    LOG(info) << "CTPDigitWriter pulled " << vecDigits.size() << " digits";
   };
-  return MakeRootTreeWriterSpec(raw ? "ctp-digit-writer-dec" : "ctp-digit-writer",
-                                raw ? "o2_ctpdigits.root" : "ctpdigits.root",
+  if (raw) {
+    return MakeRootTreeWriterSpec("ctp-digit-writer-dec", "ctpdigits.root",
+                                  MakeRootTreeWriterSpec::TreeAttributes{"o2sim", "Tree with CTP digits/Lumi"},
+                                  BranchDefinition<std::vector<o2::ctp::CTPDigit>>{InputSpec{"digit", "CTP", "DIGITS", 0}, "CTPDigits", logger},
+                                  BranchDefinition<o2::ctp::LumiInfo>{InputSpec{"CTPLumi", "CTP", "LUMI", 0}, "CTPLumi"})();
+  }
+  // MC digits case, no lumi available
+  return MakeRootTreeWriterSpec("ctp-digit-writer", "ctpdigits.root",
                                 MakeRootTreeWriterSpec::TreeAttributes{"o2sim", "Tree with CTP digits"},
                                 BranchDefinition<std::vector<o2::ctp::CTPDigit>>{InputSpec{"digit", "CTP", "DIGITS", 0}, "CTPDigits", logger})();
 }

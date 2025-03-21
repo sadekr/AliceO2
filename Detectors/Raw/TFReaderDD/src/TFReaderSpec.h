@@ -16,6 +16,7 @@
 
 #include "Framework/WorkflowSpec.h"
 #include "DetectorsCommonDataFormats/DetID.h"
+#include "Headers/DataHeader.h"
 
 namespace o2
 {
@@ -30,15 +31,23 @@ struct TFReaderInp {
   std::string copyCmd{};
   std::string tffileRegex{};
   std::string remoteRegex{};
+  std::string metricChannel{};
   o2::detectors::DetID::mask_t detMask{};
   o2::detectors::DetID::mask_t detMaskRawOnly{};
   o2::detectors::DetID::mask_t detMaskNonRawOnly{};
+  size_t minSHM = 0;
+  int tfRateLimit = -999;
   int maxTFCache = 1;
   int maxFileCache = 1;
   int verbosity = 0;
   int64_t delay_us = 0;
   int maxLoops = 0;
   int maxTFs = -1;
+  int maxTFsPerFile = -1;
+  bool sendDummyForMissing = true;
+  bool sup0xccdb = false;
+  std::vector<o2::header::DataHeader> hdVec;
+  std::vector<int> tfIDs{};
 };
 
 o2::framework::DataProcessorSpec getTFReaderSpec(o2::rawdd::TFReaderInp& rinp);

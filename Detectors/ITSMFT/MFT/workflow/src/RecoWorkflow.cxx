@@ -18,6 +18,9 @@
 #include "MFTWorkflow/TrackerSpec.h"
 #include "MFTWorkflow/TrackWriterSpec.h"
 #include "ITSMFTWorkflow/DigitReaderSpec.h"
+#include "MFTWorkflow/MFTAssessmentSpec.h"
+#include "MFTWorkflow/TracksToRecordsSpec.h"
+#include "GlobalTrackingWorkflowReaders/IRFrameReaderSpec.h"
 
 namespace o2
 {
@@ -27,12 +30,26 @@ namespace mft
 namespace reco_workflow
 {
 
-framework::WorkflowSpec getWorkflow(bool useMC, bool upstreamDigits, bool upstreamClusters, bool disableRootOutput)
+framework::WorkflowSpec getWorkflow(
+  bool useMC,
+  bool useGeom,
+  bool upstreamDigits,
+  bool upstreamClusters,
+  bool disableRootOutput,
+  bool runAssessment,
+  bool processGen,
+  bool runTracking,
+  int nThreads,
+  bool runTracks2Records)
 {
   framework::WorkflowSpec specs;
 
   if (!(upstreamDigits || upstreamClusters)) {
-    specs.emplace_back(o2::itsmft::getMFTDigitReaderSpec(useMC, false, "mftdigits.root"));
+    specs.emplace_back(o2::itsmft::getMFTDigitReaderSpec(useMC, false, true, "mftdigits.root"));
+    auto& trackingParam = MFTTrackingParam::Instance();
+    if (trackingParam.irFramesOnly) {
+      specs.emplace_back(o2::globaltracking::getIRFrameReaderSpec("ITS", 0, "its-irframe-reader", "o2_its_irframe.root"));
+    }
   }
   if (!upstreamClusters) {
     specs.emplace_back(o2::mft::getClustererSpec(useMC));
@@ -40,11 +57,19 @@ framework::WorkflowSpec getWorkflow(bool useMC, bool upstreamDigits, bool upstre
   if (!disableRootOutput) {
     specs.emplace_back(o2::mft::getClusterWriterSpec(useMC));
   }
-  specs.emplace_back(o2::mft::getTrackerSpec(useMC));
-  if (!disableRootOutput) {
-    specs.emplace_back(o2::mft::getTrackWriterSpec(useMC));
-  }
 
+  if (runTracking) {
+    specs.emplace_back(o2::mft::getTrackerSpec(useMC, useGeom, nThreads));
+    if (!disableRootOutput) {
+      specs.emplace_back(o2::mft::getTrackWriterSpec(useMC));
+    }
+    if (runAssessment) {
+      specs.emplace_back(o2::mft::getMFTAssessmentSpec(useMC, useGeom, processGen));
+    }
+    if (runTracks2Records) {
+      specs.emplace_back(o2::mft::getTracksToRecordsSpec());
+    }
+  }
   return specs;
 }
 

@@ -18,8 +18,8 @@
 #include "Framework/InputSpec.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
 #include "DataFormatsMID/ROFRecord.h"
-#include "MIDSimulation/ColumnDataMC.h"
-#include "MIDSimulation/MCLabel.h"
+#include "DataFormatsMID/ColumnData.h"
+#include "DataFormatsMID/MCLabel.h"
 
 namespace o2
 {
@@ -37,7 +37,7 @@ o2::framework::DataProcessorSpec getMIDDigitWriterSpec(bool mctruth)
                                 "middigits.root",
                                 "o2sim",
                                 1,
-                                BranchDefinition<std::vector<ColumnDataMC>>{InputSpec{"middigits", "MID", "DIGITS"}, "MIDDigit"},
+                                BranchDefinition<std::vector<ColumnData>>{InputSpec{"middigits", "MID", "DIGITS"}, "MIDDigit"},
                                 BranchDefinition<std::vector<ROFRecord>>{InputSpec{"midrofrecords", "MID", "DIGITSROF"}, "MIDROFRecords"},
                                 BranchDefinition<o2::dataformats::MCTruthContainer<MCLabel>>{InputSpec{"middigitlabels", "MID", "DIGITLABELS"}, "MIDDigitMCLabels", mctruth ? 1 : 0})();
 }

@@ -12,18 +12,18 @@
 #define O2_FRAMEWORK_ERROR_CONTEXT_H_
 
 #include "Framework/InputRecord.h"
-#include "Framework/ServiceRegistry.h"
+#include "Framework/ServiceRegistryRef.h"
 #include "Framework/RuntimeError.h"
 
 namespace o2::framework
 {
 
-// This is a utility class to reduce the amount of boilerplate when defining
-// an error callback.
+/// This is a utility class to reduce the amount of boilerplate when defining
+/// an error callback for an error which happens during the processing of a timeslice.
 class ErrorContext
 {
  public:
-  ErrorContext(InputRecord& inputs, ServiceRegistry& services, RuntimeErrorRef e)
+  ErrorContext(InputRecord& inputs, ServiceRegistryRef services, RuntimeErrorRef e)
     : mInputs{inputs},
       mServices{services},
       mExceptionRef{e}
@@ -31,12 +31,32 @@ class ErrorContext
   }
 
   InputRecord const& inputs() { return mInputs; }
-  ServiceRegistry const& services() { return mServices; }
+  ServiceRegistryRef services() { return mServices; }
   RuntimeErrorRef exception() { return mExceptionRef; }
 
  private:
   InputRecord& mInputs;
-  ServiceRegistry& mServices;
+  ServiceRegistryRef mServices;
+  RuntimeErrorRef mExceptionRef;
+};
+
+/// This is a utility class to reduce the amount of boilerplate when defining
+/// an error callback for an error which happens during the initialization of
+/// a DataProcessor.
+class InitErrorContext
+{
+ public:
+  InitErrorContext(ServiceRegistryRef services, RuntimeErrorRef e)
+    : mServices{services},
+      mExceptionRef{e}
+  {
+  }
+
+  ServiceRegistryRef services() { return mServices; }
+  RuntimeErrorRef exception() { return mExceptionRef; }
+
+ private:
+  ServiceRegistryRef mServices;
   RuntimeErrorRef mExceptionRef;
 };
 

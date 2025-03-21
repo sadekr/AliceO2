@@ -35,7 +35,7 @@
 #include <cstdint>
 #include <memory>
 #include <cassert>
-#include <cstring>   //needed for memcmp
+#include <cstring> //needed for memcmp
 #include <string>
 #include <stdexcept>
 #include <climits>
@@ -90,7 +90,7 @@ struct DataHeader;
 struct DataIdentifier;
 
 //__________________________________________________________________________________________________
-///helper function to print a hex/ASCII dump of some memory
+/// helper function to print a hex/ASCII dump of some memory
 void hexDump(const char* desc, const void* voidaddr, size_t len, size_t max = 0);
 
 //__________________________________________________________________________________________________
@@ -185,13 +185,13 @@ constexpr T String2(const char (&str)[N])
                 "String parameter is longer than the size of the data type");
   // clang-format off
   return ((T)str[0 + pos] |
-         (str[0 + pos] && sizeof(T) >= 2 ? ((T)str[1 + pos] << (sizeof(T) >= 2 ? 8 : 0) |
-         (str[1 + pos] && sizeof(T) >= 4 ? ((T)str[2 + pos] << (sizeof(T) >= 4 ? 16 : 0) |
-         (str[2 + pos] && sizeof(T) >= 4 ? ((T)str[3 + pos] << (sizeof(T) >= 4 ? 24 : 0) |
-         (str[3 + pos] && sizeof(T) >= 8 ? ((T)str[4 + pos] << (sizeof(T) >= 8 ? 32 : 0) |
-         (str[4 + pos] && sizeof(T) >= 8 ? ((T)str[5 + pos] << (sizeof(T) >= 8 ? 40 : 0) |
-         (str[5 + pos] && sizeof(T) >= 8 ? ((T)str[6 + pos] << (sizeof(T) >= 8 ? 48 : 0) |
-         (str[6 + pos] && sizeof(T) >= 8 ? ((T)str[7 + pos] << (sizeof(T) >= 8 ? 56 : 0))
+         (sizeof(T) >= 2 && str[0 + pos] ? ((T)str[1 + pos] << (sizeof(T) >= 2 ? 8  : 0) |
+         (sizeof(T) >= 4 && str[1 + pos] ? ((T)str[2 + pos] << (sizeof(T) >= 4 ? 16 : 0) |
+         (sizeof(T) >= 4 && str[2 + pos] ? ((T)str[3 + pos] << (sizeof(T) >= 4 ? 24 : 0) |
+         (sizeof(T) >= 8 && str[3 + pos] ? ((T)str[4 + pos] << (sizeof(T) >= 8 ? 32 : 0) |
+         (sizeof(T) >= 8 && str[4 + pos] ? ((T)str[5 + pos] << (sizeof(T) >= 8 ? 40 : 0) |
+         (sizeof(T) >= 8 && str[5 + pos] ? ((T)str[6 + pos] << (sizeof(T) >= 8 ? 48 : 0) |
+         (sizeof(T) >= 8 && str[6 + pos] ? ((T)str[7 + pos] << (sizeof(T) >= 8 ? 56 : 0))
          : 0)) : 0)) : 0)) : 0)) : 0)) : 0)) : 0));
   // clang-format on
 }
@@ -208,8 +208,8 @@ struct Descriptor {
   static_assert(internal::NumberOfActiveBits<N>::value == 1,
                 "Descriptor size is required to be a power of 2");
   using self_type = Descriptor<N>;
-  static int const size = N;
-  static int const bitcount = size * 8;
+  static int constexpr size = N;
+  static int constexpr bitcount = size * 8;
   static constexpr int arraySize = internal::ArraySize<uint64_t, size>();
   using ItgType = typename internal::TraitsIntType<N>::Type;
 
@@ -224,14 +224,21 @@ struct Descriptor {
 
   // Note: don't need to define operator=(ItgType v) because the compiler
   // can use Descriptor(ItgType initializer) for conversion
+  using ImplicitConversion = std::conditional_t<(size <= 8), ItgType, std::string_view>;
 
   // type cast operator for simplified usage of the descriptor's integer member
-  // TODO: this is sort of a hack, takes the first element.
-  //       we should rethink these implicit conversions
-  operator ItgType() const
+  // in case it does not fit into the descriptor, the string representation is returned
+  operator ImplicitConversion() const
   {
-    static_assert(arraySize == 1, "casting Descriptor to ItgType only allowed for N<=8");
-    return itg[0];
+    if constexpr (std::is_same_v<ImplicitConversion, ItgType>) {
+      return itg[0];
+    } else {
+      size_t len = size;
+      while (len > 1 && str[len - 1] == 0) {
+        --len;
+      }
+      return std::string_view(str, len);
+    }
   }
 
   /// constructor from a compile-time string
@@ -240,7 +247,7 @@ struct Descriptor {
   {
     static_assert(L <= N + 1, "initializer string must not exceed descriptor size");
     unsigned i = 0;
-    for (; in[i] && i < (N < L ? N : L); ++i) {
+    for (; i < (N < L ? N : L) && in[i]; ++i) {
       str[i] = in[i];
     }
   }
@@ -279,6 +286,8 @@ struct Descriptor {
   bool operator<(const Descriptor& other) const { return std::memcmp(this->str, other.str, N) < 0; }
   bool operator!=(const Descriptor& other) const { return not this->operator==(other); }
 
+  // Convesion operators for comparison with their implicitly convertible types
+  friend bool operator==(const Descriptor& lhs, ImplicitConversion rhs) { return static_cast<ImplicitConversion>(lhs) == rhs; }
   // explicitly forbid comparison with e.g. const char* strings
   // use: value == Descriptor<N>("DESC") for the appropriate
   // template instantiation instead
@@ -299,7 +308,7 @@ struct Descriptor {
       --len;
     }
     std::string ret(str, len);
-    return std::move(ret);
+    return ret;
   }
 };
 
@@ -312,7 +321,7 @@ const uint64_t gInvalidToken64 = 0xFFFFFFFFFFFFFFFF;
 using HeaderType = Descriptor<gSizeHeaderDescriptionString>;
 using SerializationMethod = Descriptor<gSizeSerializationMethodString>;
 
-//possible serialization types
+// possible serialization types
 constexpr o2::header::SerializationMethod gSerializationMethodAny{"*******"};
 constexpr o2::header::SerializationMethod gSerializationMethodInvalid{"INVALID"};
 constexpr o2::header::SerializationMethod gSerializationMethodNone{"NONE"};
@@ -363,8 +372,9 @@ struct BaseHeader {
   union {
     uint32_t flags;
     struct {
-      uint32_t flagsNextHeader : 1, //do we have a next header after this one?
-        flagsUnused : 31;           //currently unused
+      uint32_t flagsNextHeader : 1, // do we have a next header after this one?
+        flagsReserved : 15,         // reserved for future use
+        flagsDerivedHeader : 16;    // reserved for usage by the derived header
     };
   };
 
@@ -546,11 +556,10 @@ using DataDescription = Descriptor<gSizeDataDescriptionString>;
 /// @{
 
 //__________________________________________________________________________________________________
-//possible data origins
+// possible data origins
 constexpr o2::header::DataOrigin gDataOriginAny{"***"};
 constexpr o2::header::DataOrigin gDataOriginInvalid{"NIL"};
 constexpr o2::header::DataOrigin gDataOriginFLP{"FLP"};
-constexpr o2::header::DataOrigin gDataOriginACO{"ACO"};
 constexpr o2::header::DataOrigin gDataOriginCPV{"CPV"};
 constexpr o2::header::DataOrigin gDataOriginCTP{"CTP"};
 constexpr o2::header::DataOrigin gDataOriginEMC{"EMC"};
@@ -567,12 +576,22 @@ constexpr o2::header::DataOrigin gDataOriginTOF{"TOF"};
 constexpr o2::header::DataOrigin gDataOriginTPC{"TPC"};
 constexpr o2::header::DataOrigin gDataOriginTRD{"TRD"};
 constexpr o2::header::DataOrigin gDataOriginZDC{"ZDC"};
+constexpr o2::header::DataOrigin gDataOriginTST{"TST"};
+constexpr o2::header::DataOrigin gDataOriginACO{"ACO"}; // for bwd compatibility with DD
 
 constexpr o2::header::DataOrigin gDataOriginIT3{"IT3"};
+constexpr o2::header::DataOrigin gDataOriginFOC{"FOC"};
 constexpr o2::header::DataOrigin gDataOriginTRK{"TRK"};
 constexpr o2::header::DataOrigin gDataOriginFT3{"FT3"};
+constexpr o2::header::DataOrigin gDataOriginFCT{"FCT"};
+constexpr o2::header::DataOrigin gDataOriginTF3{"TF3"};
+constexpr o2::header::DataOrigin gDataOriginRCH{"RCH"};
+constexpr o2::header::DataOrigin gDataOriginMI3{"MI3"};
+constexpr o2::header::DataOrigin gDataOriginECL{"ECL"}; // upgrades
 
-//possible data types
+constexpr o2::header::DataOrigin gDataOriginGPU{"GPU"};
+
+// possible data types
 constexpr o2::header::DataDescription gDataDescriptionAny{"***************"};
 constexpr o2::header::DataDescription gDataDescriptionInvalid{"INVALID_DESC"};
 constexpr o2::header::DataDescription gDataDescriptionRawData{"RAWDATA"};
@@ -581,6 +600,7 @@ constexpr o2::header::DataDescription gDataDescriptionTracks{"TRACKS"};
 constexpr o2::header::DataDescription gDataDescriptionConfig{"CONFIGURATION"};
 constexpr o2::header::DataDescription gDataDescriptionInfo{"INFORMATION"};
 constexpr o2::header::DataDescription gDataDescriptionROOTStreamers{"ROOT STREAMERS"};
+constexpr o2::header::DataDescription gDataDescriptionDISTSTF{"DISTSUBTIMEFRAME"};
 /// @} // end of doxygen group
 
 //__________________________________________________________________________________________________
@@ -605,7 +625,7 @@ struct DataHeader : public BaseHeader {
   using TFCounterType = uint32_t;
   using RunNumberType = uint32_t;
 
-  //static data for this header type/version
+  // static data for this header type/version
   static constexpr uint32_t sVersion{3};
   static constexpr o2::header::HeaderType sHeaderType{String2<uint64_t>("DataHead")};
   static constexpr o2::header::SerializationMethod sSerializationMethod{gSerializationMethodNone};
@@ -713,12 +733,12 @@ struct DataHeader : public BaseHeader {
   }
 
   DataHeader(const DataHeader&) = default;
-  DataHeader& operator=(const DataHeader&) = default; //assignment
+  DataHeader& operator=(const DataHeader&) = default; // assignment
 
-  bool operator==(const DataHeader&) const;          //comparison
-  bool operator==(const DataOrigin&) const;          //comparison
-  bool operator==(const DataDescription&) const;     //comparison
-  bool operator==(const SerializationMethod&) const; //comparison
+  bool operator==(const DataHeader&) const;          // comparison
+  bool operator==(const DataOrigin&) const;          // comparison
+  bool operator==(const DataDescription&) const;     // comparison
+  bool operator==(const SerializationMethod&) const; // comparison
 
   static const DataHeader* Get(const BaseHeader* baseHeader)
   {
@@ -735,7 +755,7 @@ struct DataHeader : public BaseHeader {
 ///
 /// @ingroup aliceo2_dataformats_dataheader
 struct DataIdentifier {
-  //a full data identifier combining origin and description
+  // a full data identifier combining origin and description
   DataDescription dataDescription;
   DataOrigin dataOrigin;
   DataIdentifier();
@@ -750,8 +770,8 @@ struct DataIdentifier {
 };
 
 //__________________________________________________________________________________________________
-///compile time checks for the basic structures
-/// use hardcoded numbers as these are fundamental assumption
+/// compile time checks for the basic structures
+///  use hardcoded numbers as these are fundamental assumption
 static_assert(sizeof(HeaderType) == 8,
               "HeaderType struct must be of size 8");
 static_assert(sizeof(SerializationMethod) == 8,
@@ -775,6 +795,6 @@ template <std::size_t S>
 struct is_descriptor<o2::header::Descriptor<S>> : std::true_type {
 };
 
-} //namespace o2::header
+} // namespace o2::header
 
 #endif

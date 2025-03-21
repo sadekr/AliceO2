@@ -27,6 +27,7 @@
 #include "ITSMFTSimulation/Hit.h"
 #include "ITSMFTBase/GeometryTGeo.h"
 #include "DataFormatsITSMFT/Digit.h"
+#include "DataFormatsITSMFT/NoiseMap.h"
 #include "DataFormatsITSMFT/ROFRecord.h"
 #include "CommonDataFormat/InteractionRecord.h"
 #include "SimulationDataFormat/MCCompLabel.h"
@@ -55,11 +56,14 @@ class Digitizer : public TObject
   void setDigits(std::vector<o2::itsmft::Digit>* dig) { mDigits = dig; }
   void setMCLabels(o2::dataformats::MCTruthContainer<o2::MCCompLabel>* mclb) { mMCLabels = mclb; }
   void setROFRecords(std::vector<o2::itsmft::ROFRecord>* rec) { mROFRecords = rec; }
-
   o2::itsmft::DigiParams& getParams() { return (o2::itsmft::DigiParams&)mParams; }
   const o2::itsmft::DigiParams& getParams() const { return mParams; }
+  void setNoiseMap(const o2::itsmft::NoiseMap* mp) { mNoiseMap = mp; }
+  void setDeadChannelsMap(const o2::itsmft::NoiseMap* mp) { mDeadChanMap = mp; }
 
   void init();
+
+  auto getChipResponse(int chipID);
 
   /// Steer conversion of hits to digits
   void process(const std::vector<Hit>* hits, int evID, int srcID);
@@ -107,19 +111,24 @@ class Digitizer : public TObject
 
   static constexpr float sec2ns = 1e9;
 
-  o2::itsmft::DigiParams mParams; ///< digitization parameters
-  o2::InteractionTimeRecord mEventTime; ///< global event time and interaction record
+  o2::itsmft::DigiParams mParams;          ///< digitization parameters
+  o2::InteractionTimeRecord mEventTime;    ///< global event time and interaction record
   o2::InteractionRecord mIRFirstSampledTF; ///< IR of the 1st sampled IR, noise-only ROFs will be inserted till this IR only
   double mCollisionTimeWrtROF;
   uint32_t mROFrameMin = 0; ///< lowest RO frame of current digits
   uint32_t mROFrameMax = 0; ///< highest RO frame of current digits
   uint32_t mNewROFrame = 0; ///< ROFrame corresponding to provided time
+  bool mIsBeforeFirstRO = false;
 
   uint32_t mEventROFrameMin = 0xffffffff; ///< lowest RO frame for processed events (w/o automatic noise ROFs)
   uint32_t mEventROFrameMax = 0;          ///< highest RO frame forfor processed events (w/o automatic noise ROFs)
 
-  std::unique_ptr<o2::itsmft::AlpideSimResponse> mAlpSimResp; // simulated response
-
+  int mNumberOfChips = 0;
+  o2::itsmft::AlpideSimResponse* mAlpSimRespMFT = nullptr;
+  o2::itsmft::AlpideSimResponse* mAlpSimRespIB = nullptr;
+  o2::itsmft::AlpideSimResponse* mAlpSimRespOB = nullptr;
+  o2::itsmft::AlpideSimResponse mAlpSimResp[2]; // simulated response
+  std::string mResponseFile = "$(O2_ROOT)/share/Detectors/ITSMFT/data/AlpideResponseData/AlpideResponseData.root";
   const o2::itsmft::GeometryTGeo* mGeometry = nullptr; ///< ITS OR MFT upgrade geometry
 
   std::vector<o2::itsmft::ChipDigitsContainer> mChips; ///< Array of chips digits containers
@@ -128,6 +137,8 @@ class Digitizer : public TObject
   std::vector<o2::itsmft::Digit>* mDigits = nullptr;                       //! output digits
   std::vector<o2::itsmft::ROFRecord>* mROFRecords = nullptr;               //! output ROF records
   o2::dataformats::MCTruthContainer<o2::MCCompLabel>* mMCLabels = nullptr; //! output labels
+  const o2::itsmft::NoiseMap* mNoiseMap = nullptr;
+  const o2::itsmft::NoiseMap* mDeadChanMap = nullptr;
 
   ClassDefOverride(Digitizer, 2);
 };

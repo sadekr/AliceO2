@@ -24,9 +24,9 @@
 namespace o2::tpc
 {
 
-class LaserTracksCalibrator : public o2::calibration::TimeSlotCalibration<TrackTPC, CalibLaserTracks>
+class LaserTracksCalibrator : public o2::calibration::TimeSlotCalibration<CalibLaserTracks>
 {
-  using TFType = uint64_t;
+  using TFType = o2::calibration::TFType;
   using Slot = o2::calibration::TimeSlot<o2::tpc::CalibLaserTracks>;
 
  public:

@@ -88,8 +88,8 @@ class PixelData
   void sanityCheck() const;
   static constexpr int RowMask = 0x7FFF; ///< 32768 rows are supported
   static constexpr int MaskBit = 0x8000; ///< 16-th bit is used to flag masked pixel
-  uint16_t mRow = 0;                    ///< pixel row
-  uint16_t mCol = 0;                    ///< pixel column
+  uint16_t mRow = 0;                     ///< pixel row
+  uint16_t mCol = 0;                     ///< pixel column
 
   ClassDefNV(PixelData, 1);
 };
@@ -122,10 +122,11 @@ class ChipPixelData
   void setFirstUnmasked(uint32_t n) { mFirstUnmasked = n; }
   void setTrigger(uint32_t t) { mTrigger = t; }
 
-  void setError(ChipStat::DecErrors i) { mErrors |= 0x1 << i; }
+  void setError(ChipStat::DecErrors i) { mErrors |= 0x1UL << i; }
   void addErrorInfo(uint64_t b) { mErrorInfo |= b; }
-  void setErrorFlags(uint32_t f) { mErrors |= f; }
-  bool isErrorSet(ChipStat::DecErrors i) const { return mErrors & (0x1 << i); }
+  void setErrorInfo(uint64_t b) { mErrorInfo = b; }
+  void setErrorFlags(uint64_t f) { mErrors |= f; }
+  bool isErrorSet(ChipStat::DecErrors i) const { return mErrors & (0x1UL << i); }
   bool isErrorSet() const { return mErrors != 0; }
   auto getErrorFlags() const { return mErrors; }
   auto getErrorInfo() const { return mErrorInfo; }
@@ -148,6 +149,8 @@ class ChipPixelData
     mFirstUnmasked = 0;
     mErrors = 0;
     mErrorInfo = 0;
+    mPixIds.clear();
+    mPixelsOrder.clear();
   }
 
   void swap(ChipPixelData& other)
@@ -240,7 +243,36 @@ class ChipPixelData
     }
   }
 
+  template <typename Func>
+  void forEachSetError(Func f) const
+  {
+    auto outer = [&](int errIdx) {
+      if (getErrorFlags() && (getErrorFlags() & (0x1UL << errIdx))) {
+        f(errIdx);
+      }
+    };
+    ChipStat::forEachError(outer);
+  }
+
+  std::string reportErrors() const
+  {
+    std::string res;
+    bool first = true;
+    auto inner = [&](int errIdx) {
+      if (!first) {
+        res += ", ";
+      }
+      res += ChipStat::ErrNames[errIdx];
+      first = false;
+    };
+    forEachSetError(inner);
+    return res;
+  }
+
   void print() const;
+  std::vector<uint32_t>& getPixIds() { return mPixIds; }
+  std::vector<int>& getPixelsOrder() { return mPixelsOrder; }
+  uint32_t getOrderedPixId(int pos) const { return mPixIds[mPixelsOrder[pos]]; }
 
  private:
   uint8_t mROFlags = 0;                            // readout flags from the chip trailer
@@ -249,15 +281,17 @@ class ChipPixelData
   uint32_t mFirstUnmasked = 0;                     // first unmasked entry in the mPixels
   uint32_t mStartID = 0;                           // entry of the 1st pixel data in the whole detector data, for MCtruth access
   uint32_t mTrigger = 0;                           // trigger pattern
-  uint32_t mErrors = 0;                            // errors set during decoding
+  uint64_t mErrors = 0;                            // errors set during decoding
   uint64_t mErrorInfo = 0;                         // optional extra info on the error
   std::array<uint8_t, MAXDATAERRBYTES> mRawBuff{}; // buffer for raw data showing an error
   o2::InteractionRecord mInteractionRecord = {};   // interaction record
-  std::vector<PixelData> mPixels;                  // vector of pixeld
+  std::vector<PixelData> mPixels;                  // vector of pixels
+  std::vector<uint32_t> mPixIds;                   // vector of label indices in case of squashing+Monte Carlo
+  std::vector<int> mPixelsOrder;                   // vector to get ordered access to pixel ids
 
-  ClassDefNV(ChipPixelData, 1);
+  ClassDefNV(ChipPixelData, 2);
 };
 } // namespace itsmft
 } // namespace o2
 
-#endif //ALICEO2_ITSMFT_PIXELDATA_H
+#endif // ALICEO2_ITSMFT_PIXELDATA_H

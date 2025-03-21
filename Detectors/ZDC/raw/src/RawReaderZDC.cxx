@@ -10,6 +10,7 @@
 // or submit itself to any jurisdiction.
 
 #include "ZDCRaw/RawReaderZDC.h"
+#include <cstdlib>
 
 namespace o2
 {
@@ -18,62 +19,102 @@ namespace zdc
 
 void RawReaderZDC::clear()
 {
+#ifndef O2_ZDC_DEBUG
+  LOG(info) << "RawReaderZDC::clear()";
+#endif
+  for (int im = 0; im < NModules; im++) {
+    for (int ic = 0; ic < NChPerModule; ic++) {
+      mEvents[im][ic] = 0;
+      mDupOK[im][ic] = 0;
+      mDupKO[im][ic] = 0;
+    }
+  }
   mDigitsBC.clear();
   mDigitsCh.clear();
   mOrbitData.clear();
 }
 
-void RawReaderZDC::processBinaryData(gsl::span<const uint8_t> payload, int linkID)
+int RawReaderZDC::processBinaryData(gsl::span<const uint8_t> payload, int linkID, uint8_t dataFormat)
 {
   if (0 <= linkID && linkID < 16) {
     size_t payloadSize = payload.size();
-    for (int32_t ip = 0; ip < payloadSize; ip += 16) {
-      //o2::zdc::Digits2Raw::print_gbt_word((const uint32_t*)&payload[ip]);
-      processWord((const uint32_t*)&payload[ip]);
+    if (dataFormat == 2) {
+      for (int32_t ip = 0; (ip + PayloadPerGBTW) <= payloadSize; ip += PayloadPerGBTW) {
+#ifndef O2_ZDC_DEBUG
+        if (mVerbosity >= DbgExtra) {
+          o2::zdc::Digits2Raw::print_gbt_word((const uint32_t*)&payload[ip]);
+        }
+#else
+        o2::zdc::Digits2Raw::print_gbt_word((const uint32_t*)&payload[ip]);
+#endif
+        const uint32_t* gbtw = (const uint32_t*)&payload[ip];
+        if (gbtw[0] != 0xffffffff || gbtw[1] != 0xffffffff || (*((const uint16_t*)&gbtw[2])) != 0xffff) {
+          if (processWord(gbtw)) {
+            return 1;
+          }
+        }
+      }
+    } else if (dataFormat == 0) {
+      for (int32_t ip = 0; ip < payloadSize; ip += NBPerGBTW) {
+#ifndef O2_ZDC_DEBUG
+        if (mVerbosity >= DbgExtra) {
+          o2::zdc::Digits2Raw::print_gbt_word((const uint32_t*)&payload[ip]);
+        }
+#else
+        o2::zdc::Digits2Raw::print_gbt_word((const uint32_t*)&payload[ip]);
+#endif
+        if (processWord((const uint32_t*)&payload[ip])) {
+          return 1;
+        }
+      }
+    } else {
+      LOG(fatal) << "RawReaderZDC::processBinaryData - Unsupported DataFormat " << dataFormat;
     }
   } else {
-    //put here code in case of bad rdh.linkID value
-    LOG(INFO) << "WARNING! WRONG LINK ID! " << linkID;
-    return;
+    // put here code in case of bad rdh.linkID value
+    LOG(info) << "WARNING! WRONG LINK ID! " << linkID;
+    return 1;
   }
+  return 0;
 }
 
 int RawReaderZDC::processWord(const uint32_t* word)
 {
   if (word == nullptr) {
-    LOG(ERROR) << "NULL pointer";
+    LOG(error) << "NULL pointer";
     return 1;
   }
+  // LOGF(info, "GBT word %04x %08x %08x id=%u", *((uint16_t*)&word[2]), word[1], word[0], word[0] & 0x3);
   if ((word[0] & 0x3) == Id_w0) {
-    for (int32_t iw = 0; iw < NWPerGBTW; iw++) {
-      mCh.w[0][iw] = word[iw];
-    }
+    mCh.w[0][NWPerGBTW - 1] = 0;
+    mCh.w[0][NWPerGBTW - 2] = 0;
+    memcpy((void*)&mCh.w[0][0], (const void*)word, PayloadPerGBTW);
   } else if ((word[0] & 0x3) == Id_w1) {
     if (mCh.f.fixed_0 == Id_w0) {
-      for (int32_t iw = 0; iw < NWPerGBTW; iw++) {
-        mCh.w[1][iw] = word[iw];
-      }
+      mCh.w[1][NWPerGBTW - 1] = 0;
+      mCh.w[1][NWPerGBTW - 2] = 0;
+      memcpy((void*)&mCh.w[1][0], (const void*)word, PayloadPerGBTW);
     } else {
-      LOG(ERROR) << "Wrong word sequence";
+      LOGF(error, "Wrong word sequence: %04x %08x %08x id=%u *%u*", *((uint16_t*)&word[2]), word[1], word[0], mCh.f.fixed_0, word[0] & 0x3);
       mCh.f.fixed_0 = Id_wn;
       mCh.f.fixed_1 = Id_wn;
       mCh.f.fixed_2 = Id_wn;
     }
   } else if ((word[0] & 0x3) == Id_w2) {
     if (mCh.f.fixed_0 == Id_w0 && mCh.f.fixed_1 == Id_w1) {
-      for (int32_t iw = 0; iw < NWPerGBTW; iw++) {
-        mCh.w[2][iw] = word[iw];
-      }
+      mCh.w[2][NWPerGBTW - 1] = 0;
+      mCh.w[2][NWPerGBTW - 2] = 0;
+      memcpy((void*)&mCh.w[2][0], (const void*)word, PayloadPerGBTW);
       process(mCh);
     } else {
-      LOG(ERROR) << "Wrong word sequence";
+      LOGF(error, "Wrong word sequence: %04x %08x %08x id=%u %u *%u*", *((uint16_t*)&word[2]), word[1], word[0], mCh.f.fixed_0, mCh.f.fixed_1, word[0] & 0x3);
     }
     mCh.f.fixed_0 = Id_wn;
     mCh.f.fixed_1 = Id_wn;
     mCh.f.fixed_2 = Id_wn;
   } else {
-    // Word not present in payload
-    LOG(FATAL) << "Event format error";
+    // Word id not foreseen in payload
+    LOGF(error, "Event format error on word %04x %08x %08x id=%u", *((uint16_t*)&word[2]), word[1], word[0], word[0] & 0x3);
     return 1;
   }
   return 0;
@@ -85,6 +126,7 @@ void RawReaderZDC::process(const EventChData& ch)
   auto& mydata = mMapData[ir];
   int32_t im = ch.f.board;
   int32_t ic = ch.f.ch;
+  mEvents[im][ic]++;
   for (int32_t iwb = 0; iwb < NWPerBc; iwb++) {
     for (int32_t iwg = 0; iwg < NWPerGBTW; iwg++) {
       mydata.data[im][ic].w[iwb][iwg] = mCh.w[iwb][iwg];
@@ -92,15 +134,37 @@ void RawReaderZDC::process(const EventChData& ch)
   }
 }
 
-//pop digits
+// pop digits
 int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelData>& digitsCh, std::vector<OrbitData>& orbitData)
 {
+  const char* thefcn = "RawReaderZDC::getDigits";
+
   if (mModuleConfig == nullptr) {
-    LOG(FATAL) << "Missing ModuleConfig";
+    LOG(fatal) << "Missing ModuleConfig";
     return 0;
   }
+
+  union {
+    uint16_t uns;
+    int16_t sig;
+  } word16;
+
   int bcCounter = mMapData.size();
-  LOG(INFO) << "Processing #bc " << bcCounter;
+
+  if (mVerbosity > DbgZero) {
+    LOG(info) << "Processing #bc " << bcCounter;
+    for (int ic = 0; ic < NChPerModule; ic++) {
+      for (int im = 0; im < NModules; im++) {
+        if (im == 0) {
+          printf("%6u", mEvents[im][ic]);
+        } else {
+          printf(" %6u", mEvents[im][ic]);
+        }
+      }
+      printf("\n");
+    }
+  }
+
   for (auto& [ir, ev] : mMapData) {
     // TODO: Error check
     // Pedestal data
@@ -110,15 +174,27 @@ int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelDa
       for (int32_t im = 0; im < NModules; im++) {
         for (int32_t ic = 0; ic < NChPerModule; ic++) {
           if (ev.data[im][ic].f.fixed_0 == Id_w0 && ev.data[im][ic].f.fixed_1 == Id_w1 && ev.data[im][ic].f.fixed_2 == Id_w2) {
-            // Identify connected channel
-            auto id = mModuleConfig->modules[im].channelID[ic];
-            int offset = ev.data[im][ic].f.offset - 32768;
-            pdata.data[id] = offset;
-            pdata.scaler[id] = ev.data[im][ic].f.hits;
+            // Protection for channels that are not supposed to readout but may be present in payload
+            // These additional channels are used just for scaler and pedestal readout at end of orbit
+            // for raw data QC only. They are skipped during digitization
+            if (mModuleConfig->modules[im].readChannel[ic]) {
+              // Identify connected channel
+              auto id = mModuleConfig->modules[im].channelID[ic];
+              word16.uns = ev.data[im][ic].f.offset;
+              pdata.data[id] = word16.sig;
+              if (ev.data[im][ic].f.dLoss) {
+                // Produce a scaler overflow to signal a problem
+                // Most significant bit indicates data loss
+                // Default initializer 0x8fff will indicate that orbit data is lost
+                pdata.scaler[id] = ev.data[im][ic].f.hits | 0x8000;
+              } else {
+                pdata.scaler[id] = ev.data[im][ic].f.hits;
+              }
+            }
           } else if (ev.data[im][ic].f.fixed_0 == 0 && ev.data[im][ic].f.fixed_1 == 0 && ev.data[im][ic].f.fixed_2 == 0) {
             // Empty channel
           } else {
-            LOG(ERROR) << "Data format error";
+            LOG(error) << "Data format error";
           }
         }
       }
@@ -128,19 +204,33 @@ int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelDa
     bcdata.ir = ir;
     // An inconsistent event has as at least one inconsistent module
     bool inconsistent_event = false;
+    bool inconsistent_alice_trig = false;
+    bool inconsistent_auto_trig = false;
     bool filled_event = false;
     bcdata.ref.setFirstEntry(digitsCh.size());
     uint32_t ncd = 0;
+    bool alice_0 = false;
+    bool alice_1 = false;
+    bool alice_2 = false;
+    bool alice_3 = false;
     // Channel data
     for (int32_t im = 0; im < NModules; im++) {
       ModuleTriggerMapData mt;
       mt.w = 0;
       bool filled_module = false;
-      bool inconsistent_module = false;
       for (int32_t ic = 0; ic < NChPerModule; ic++) {
         // Check if payload is present for channel
         if (ev.data[im][ic].f.fixed_0 == Id_w0 && ev.data[im][ic].f.fixed_1 == Id_w1 && ev.data[im][ic].f.fixed_2 == Id_w2) {
-          bcdata.channels |= 0x1 << (NChPerModule * im + ic); // Flag channel as present
+          if (mModuleConfig->modules[im].readChannel[ic] == false) {
+            // Channel should not be present in payload. It may happen for bc=0 and bc=3563
+            if (bcdata.ir.bc == 0 || bcdata.ir.bc == 3563) {
+              mDupOK[im][ic]++;
+            } else {
+              mDupKO[im][ic]++;
+            }
+            continue;
+          }
+          bcdata.channels |= (0x1 << (NChPerModule * im + ic)); // Flag channel as present
           auto& ch = ev.data[im][ic];
           uint16_t us[12];
           us[0] = ch.f.s00;
@@ -170,16 +260,22 @@ int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelDa
           if (ch.f.Hit) {
             bcdata.triggers |= (0x1 << (im * NChPerModule + ic));
           }
-          // TODO: Alice trigger bits
-          // TODO: consistency checks
           if (filled_event == false) {
-            mt.f.Alice_0 = ch.f.Alice_0;
-            mt.f.Alice_1 = ch.f.Alice_1;
-            mt.f.Alice_2 = ch.f.Alice_2;
-            mt.f.Alice_3 = ch.f.Alice_3;
+            // ALICE trigger bits must be the same for all readout modules
+            alice_0 = ch.f.Alice_0;
+            alice_1 = ch.f.Alice_1;
+            alice_2 = ch.f.Alice_2;
+            alice_3 = ch.f.Alice_3;
             filled_event = true;
-          } else if (mt.f.Alice_0 != ch.f.Alice_0 || mt.f.Alice_1 != ch.f.Alice_1 || mt.f.Alice_2 != ch.f.Alice_2 || mt.f.Alice_3 != ch.f.Alice_3) {
+          } else if (alice_0 != ch.f.Alice_0 || alice_1 != ch.f.Alice_1 || alice_2 != ch.f.Alice_2 || alice_3 != ch.f.Alice_3) {
             inconsistent_event = true;
+            inconsistent_alice_trig = true;
+            mt.f.AliceErr = true;
+            LOGF(warn, "%s (m,c)=(%d,%d) Alice [0123]      %u%s%u %u%s%u %u%s%u %u%s%u", thefcn, im, ic,
+                 alice_0, alice_0 == ch.f.Alice_0 ? "==" : "!=", ch.f.Alice_0,
+                 alice_1, alice_1 == ch.f.Alice_1 ? "==" : "!=", ch.f.Alice_1,
+                 alice_2, alice_2 == ch.f.Alice_2 ? "==" : "!=", ch.f.Alice_2,
+                 alice_3, alice_3 == ch.f.Alice_3 ? "==" : "!=", ch.f.Alice_3);
           }
           if (filled_module == false) {
             mt.f.Auto_m = ch.f.Auto_m;
@@ -187,28 +283,30 @@ int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelDa
             mt.f.Auto_1 = ch.f.Auto_1;
             mt.f.Auto_2 = ch.f.Auto_2;
             mt.f.Auto_3 = ch.f.Auto_3;
+            mt.f.Alice_0 = ch.f.Alice_0;
+            mt.f.Alice_1 = ch.f.Alice_1;
+            mt.f.Alice_2 = ch.f.Alice_2;
+            mt.f.Alice_3 = ch.f.Alice_3;
             filled_module = true;
           } else if (mt.f.Auto_m != ch.f.Auto_m || mt.f.Auto_0 != ch.f.Auto_0 || mt.f.Auto_1 != ch.f.Auto_1 || mt.f.Auto_2 != ch.f.Auto_2 || mt.f.Auto_3 != ch.f.Auto_3) {
-            inconsistent_module = true;
+            mt.f.AutoErr = true;
+            inconsistent_auto_trig = true;
+            LOGF(warn, "%s (m,c)=(%d,%d) Auto [m0123] %u%s%u %u%s%u %u%s%u %u%s%u %u%s%u", thefcn, im, ic,
+                 mt.f.Auto_m, mt.f.Auto_m == ch.f.Auto_m ? "==" : "!=", ch.f.Auto_m,
+                 mt.f.Auto_0, mt.f.Auto_0 == ch.f.Auto_0 ? "==" : "!=", ch.f.Auto_0,
+                 mt.f.Auto_1, mt.f.Auto_1 == ch.f.Auto_1 ? "==" : "!=", ch.f.Auto_1,
+                 mt.f.Auto_2, mt.f.Auto_2 == ch.f.Auto_2 ? "==" : "!=", ch.f.Auto_2,
+                 mt.f.Auto_3, mt.f.Auto_3 == ch.f.Auto_3 ? "==" : "!=", ch.f.Auto_3);
           }
-          // Verify trigger condition (if requested)
-          if (mVerifyTrigger) {
-            if ((mt.f.Alice_0 || mt.f.Alice_1) || (mt.f.Alice_2 && (mt.f.Auto_0 || mt.f.Auto_m)) || (mt.f.Alice_3 && mt.f.Auto_0) || (mt.f.Auto_0 || mt.f.Auto_1)) {
-              ncd++;
-            } else {
-              digitsCh.pop_back();
-            }
-          } else {
-            ncd++;
-          }
+          ncd++;
         } else if (ev.data[im][ic].f.fixed_0 == 0 && ev.data[im][ic].f.fixed_1 == 0 && ev.data[im][ic].f.fixed_2 == 0) {
           // Empty channel
         } else {
-          LOG(ERROR) << "Data format error";
+          LOG(error) << thefcn << "RAW Data format error";
         }
       }
       bcdata.moduleTriggers[im] = mt.w;
-      if (inconsistent_module == true) {
+      if (mt.f.AutoErr == true) {
         inconsistent_event = true;
       }
     }
@@ -226,7 +324,10 @@ int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelDa
       }
     }
     if (inconsistent_event) {
-      LOG(ERROR) << "Inconsistent event";
+      LOGF(error, "%s %u.%04u Inconsistent event:%s%s", thefcn, bcdata.ir.orbit, bcdata.ir.bc, (inconsistent_auto_trig ? " AUTOT" : ""), (inconsistent_alice_trig ? " ALICET" : ""));
+    }
+    if ((inconsistent_event && mVerbosity > DbgMinimal) || (mVerbosity >= DbgFull)) {
+      bcdata.print(mTriggerMask);
       for (int32_t im = 0; im < NModules; im++) {
         for (int32_t ic = 0; ic < NChPerModule; ic++) {
           if (ev.data[im][ic].f.fixed_0 == Id_w0 && ev.data[im][ic].f.fixed_1 == Id_w1 && ev.data[im][ic].f.fixed_2 == Id_w2) {
@@ -237,10 +338,36 @@ int RawReaderZDC::getDigits(std::vector<BCData>& digitsBC, std::vector<ChannelDa
         }
       }
     }
-  }
+  } // Loop on bunch crossings
+
+  inspectDup();
 
   mMapData.clear();
   return bcCounter;
+}
+
+//______________________________________________________________________________
+void RawReaderZDC::inspectDup()
+{
+  // This function allows to examine if there are duplicate channels for modules in which it
+  // is expected and for modules in which is not expected
+  // A duplicate channel is present in pedestal data for channels that are readout on
+  // one module but connected to two modules because readout is forced in the FEE.
+#ifdef O2_ZDC_DEBUG
+  LOG(info) << "RawReaderZDC::inspectDup()";
+#endif
+  for (int32_t im = 0; im < NModules; im++) {
+    for (int32_t ic = 0; ic < NChPerModule; ic++) {
+      if (mVerbosity > DbgMinimal) {
+        if (mDupOK[im][ic] > 0) {
+          LOG(info) << "DupOK module " << im << " ch " << ic << " = " << mDupOK[im][ic];
+        }
+      }
+      if (mDupKO[im][ic] > 0) {
+        LOG(error) << "DupKO module " << im << " ch " << ic << " = " << mDupKO[im][ic];
+      }
+    }
+  }
 }
 
 //______________________________________________________________________________
@@ -265,11 +392,12 @@ void RawReaderZDC::setTriggerMask()
       }
     }
     printTriggerMask += "]";
+#ifdef O2_ZDC_DEBUG
     uint32_t mytmask = mTriggerMask >> (im * NChPerModule);
-    LOGF(INFO, "Trigger mask for module %d 0123 %c%c%c%c", im,
-         mytmask & 0x1 ? 'T' : 'N', mytmask & 0x2 ? 'T' : 'N', mytmask & 0x4 ? 'T' : 'N', mytmask & 0x8 ? 'T' : 'N');
+    LOGF(info, "Trigger mask for module %d 0123 %c%c%c%c", im, mytmask & 0x1 ? 'T' : 'N', mytmask & 0x2 ? 'T' : 'N', mytmask & 0x4 ? 'T' : 'N', mytmask & 0x8 ? 'T' : 'N');
+#endif
   }
-  LOGF(INFO, "trigger_mask=0x%08x %s", mTriggerMask, printTriggerMask.c_str());
+  LOGF(info, "trigger_mask=0x%08x %s", mTriggerMask, printTriggerMask.c_str());
 }
 } // namespace zdc
 } // namespace o2

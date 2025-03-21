@@ -12,6 +12,8 @@
 o2_add_library(CPVWorkflow
                SOURCES src/RecoWorkflow.cxx
                        src/ReaderSpec.cxx
+                       src/DigitReaderSpec.cxx
+                       src/ClusterReaderSpec.cxx
                        src/WriterSpec.cxx
                        src/ClusterizerSpec.cxx
                        src/DigitsPrinterSpec.cxx
@@ -20,6 +22,7 @@ o2_add_library(CPVWorkflow
                        src/EntropyDecoderSpec.cxx
                PUBLIC_LINK_LIBRARIES O2::Framework
                                      O2::DataFormatsCPV
+                                     O2::DataFormatsCTP
                                      O2::DPLUtils
                                      O2::CPVBase
                                      O2::CPVSimulation
@@ -34,4 +37,19 @@ o2_add_executable(reco-workflow
 o2_add_executable(entropy-encoder-workflow
                   COMPONENT_NAME cpv
                   SOURCES src/entropy-encoder-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::CPVWorkflow)
+
+o2_add_executable(cluster-writer-workflow
+                  COMPONENT_NAME cpv
+                  SOURCES src/cluster-writer-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::CPVWorkflow)
+
+o2_add_executable(digit-reader-workflow
+                  COMPONENT_NAME cpv
+                  SOURCES src/digit-reader-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::CPVWorkflow)
+
+o2_add_executable(cluster-reader-workflow
+                  COMPONENT_NAME cpv
+                  SOURCES src/cluster-reader-workflow.cxx
                   PUBLIC_LINK_LIBRARIES O2::CPVWorkflow)

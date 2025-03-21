@@ -12,6 +12,7 @@
 #define O2_FRAMEWORK_DATADESCRIPTORMATCHER_H_
 
 #include "Framework/DataDescriptorMatcher.h"
+#include "Framework/TimesliceSlot.h"
 #include <variant>
 
 namespace o2::framework
@@ -55,6 +56,16 @@ struct VariableContextHelpers {
     auto pval = std::get_if<uint32_t>(&variables.get(data_matcher::TFCOUNTER_POS));
     if (pval == nullptr) {
       return -1;
+    }
+    return *pval;
+  }
+
+  static inline uint64_t getCreationTime(data_matcher::VariableContext const& variables)
+  {
+    // creation time is always at register 14
+    auto pval = std::get_if<uint64_t>(&variables.get(data_matcher::CREATIONTIME_POS));
+    if (pval == nullptr) {
+      return -1UL;
     }
     return *pval;
   }

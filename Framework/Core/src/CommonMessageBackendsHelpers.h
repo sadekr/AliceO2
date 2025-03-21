@@ -13,10 +13,14 @@
 
 #include "Framework/RawDeviceService.h"
 #include "Framework/DataProcessor.h"
+#include "Framework/DataSender.h"
+#include "Framework/ProcessingContext.h"
+#include "Framework/EndOfStreamContext.h"
+#include "Framework/FairMQDeviceProxy.h"
 #include "Framework/ServiceRegistry.h"
 #include "Framework/Tracing.h"
 
-#include <options/FairMQProgOptions.h>
+#include <fairmq/ProgOptions.h>
 
 namespace o2::framework
 {
@@ -25,19 +29,17 @@ template <typename T>
 struct CommonMessageBackendsHelpers {
   static ServiceInit createCallback()
   {
-    return [](ServiceRegistry& services, DeviceState&, fair::mq::ProgOptions& options) {
-      auto& device = services.get<RawDeviceService>();
-      return ServiceHandle{TypeIdHelpers::uniqueId<T>(), new T(FairMQDeviceProxy{device.device()})};
+    return [](ServiceRegistryRef services, DeviceState&, fair::mq::ProgOptions& options) {
+      auto& proxy = services.get<FairMQDeviceProxy>();
+      return ServiceHandle{TypeIdHelpers::uniqueId<T>(), new T(proxy), ServiceKind::Stream};
     };
   }
 
   static ServiceProcessingCallback sendCallback()
   {
     return [](ProcessingContext& ctx, void* service) {
-      ZoneScopedN("send message callback");
       T* context = reinterpret_cast<T*>(service);
-      auto& device = ctx.services().get<RawDeviceService>();
-      DataProcessor::doSend(*device.device(), *context, ctx.services());
+      DataProcessor::doSend(ctx.services().get<DataSender>(), *context, ctx.services());
     };
   }
 
@@ -61,8 +63,7 @@ struct CommonMessageBackendsHelpers {
   {
     return [](EndOfStreamContext& ctx, void* service) {
       T* context = reinterpret_cast<T*>(service);
-      auto& device = ctx.services().get<RawDeviceService>();
-      DataProcessor::doSend(*device.device(), *context, ctx.services());
+      DataProcessor::doSend(ctx.services().get<DataSender>(), *context, ctx.services());
     };
   }
 };

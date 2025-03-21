@@ -13,8 +13,8 @@
 /// \brief Configurable parameters for MCH clustering
 /// \author Philippe Pillot, Subatech
 
-#ifndef ALICEO2_MCH_CLUSTERIZERPARAM_H_
-#define ALICEO2_MCH_CLUSTERIZERPARAM_H_
+#ifndef O2_MCH_CLUSTERIZERPARAM_H_
+#define O2_MCH_CLUSTERIZERPARAM_H_
 
 #include "CommonUtils/ConfigurableParam.h"
 #include "CommonUtils/ConfigurableParamHelper.h"
@@ -27,19 +27,15 @@ namespace mch
 /// Configurable parameters for MCH clustering
 struct ClusterizerParam : public o2::conf::ConfigurableParamHelper<ClusterizerParam> {
 
-  double lowestPadCharge = 4.f * 0.22875f; ///< minimum charge of a pad
+  double lowestPadCharge = 15.; ///< minimum charge of a pad
 
-  double pitchSt1 = 0.21;    ///< anode-cathode pitch (cm) for station 1
-  double pitchSt2345 = 0.25; ///< anode-cathode pitch (cm) for station 2 to 5
+  double defaultClusterResolutionX = 0.2; ///< default cluster resolution in x direction (cm)
+  double defaultClusterResolutionY = 0.2; ///< default cluster resolution in y direction (cm)
 
-  double mathiesonSqrtKx3St1 = 0.7000;    ///< Mathieson parameter sqrt(K3) in x direction for station 1
-  double mathiesonSqrtKx3St2345 = 0.7131; ///< Mathieson parameter sqrt(K3) in x direction for station 2 to 5
+  double badClusterResolutionX = 10.; ///< bad (e.g. mono-cathode) cluster resolution in x direction (cm)
+  double badClusterResolutionY = 10.; ///< bad (e.g. mono-cathode) cluster resolution in y direction (cm)
 
-  double mathiesonSqrtKy3St1 = 0.7550;    ///< Mathieson parameter sqrt(K3) in y direction for station 1
-  double mathiesonSqrtKy3St2345 = 0.7642; ///< Mathieson parameter sqrt(K3) in y direction for station 2 to 5
-
-  double defaultClusterResolution = 0.2; ///< default cluster resolution (cm)
-  double badClusterResolution = 10.;     ///< bad (e.g. mono-cathode) cluster resolution (cm)
+  bool legacy = true; ///< use original (run2) clustering
 
   O2ParamDef(ClusterizerParam, "MCHClustering");
 };
@@ -47,4 +43,4 @@ struct ClusterizerParam : public o2::conf::ConfigurableParamHelper<ClusterizerPa
 } // namespace mch
 } // end namespace o2
 
-#endif // ALICEO2_MCH_CLUSTERIZERPARAM_H_
+#endif // O2_MCH_CLUSTERIZERPARAM_H_

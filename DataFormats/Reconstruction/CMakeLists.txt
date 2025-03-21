@@ -17,6 +17,7 @@ o2_add_library(ReconstructionDataFormats
                        src/TrackTPCITS.cxx
                        src/Vertex.cxx
                        src/PrimaryVertex.cxx
+                       src/PrimaryVertexExt.cxx
                        src/MatchInfoTOF.cxx
                        src/MatchInfoTOFReco.cxx
                        src/TrackLTIntegral.cxx
@@ -24,17 +25,23 @@ o2_add_library(ReconstructionDataFormats
                        src/DCA.cxx
                        src/V0.cxx
                        src/Cascade.cxx
+                       src/Decay3Body.cxx
+                       src/DecayNBodyIndex.cxx
+                       src/StrangeTrack.cxx
                        src/GlobalTrackID.cxx
                        src/VtxTrackIndex.cxx
                        src/VtxTrackRef.cxx
                        src/TrackTPCTOF.cxx
                        src/TrackCosmics.cxx
                        src/TrackMCHMID.cxx
+                       src/TrackHMP.cxx
+                       src/MatchInfoHMP.cxx
                PUBLIC_LINK_LIBRARIES O2::GPUCommon
                                      O2::GPUUtils
                                      O2::FrameworkLogger
                                      O2::DetectorsCommonDataFormats
-                                     O2::CommonDataFormat)
+                                     O2::CommonDataFormat
+                                     O2::Field)
 
 o2_target_root_dictionary(
   ReconstructionDataFormats
@@ -45,6 +52,7 @@ o2_target_root_dictionary(
           include/ReconstructionDataFormats/GlobalFwdTrack.h
           include/ReconstructionDataFormats/Vertex.h
           include/ReconstructionDataFormats/PrimaryVertex.h
+          include/ReconstructionDataFormats/PrimaryVertexExt.h
           include/ReconstructionDataFormats/MatchInfoTOF.h
           include/ReconstructionDataFormats/MatchInfoTOFReco.h
           include/ReconstructionDataFormats/TrackLTIntegral.h
@@ -52,12 +60,19 @@ o2_target_root_dictionary(
           include/ReconstructionDataFormats/DCA.h
           include/ReconstructionDataFormats/V0.h
           include/ReconstructionDataFormats/Cascade.h
+          include/ReconstructionDataFormats/DecayNBodyIndex.h
+          include/ReconstructionDataFormats/Decay3Body.h
+          include/ReconstructionDataFormats/StrangeTrack.h
           include/ReconstructionDataFormats/GlobalTrackID.h
           include/ReconstructionDataFormats/VtxTrackIndex.h
           include/ReconstructionDataFormats/VtxTrackRef.h
           include/ReconstructionDataFormats/TrackTPCTOF.h
           include/ReconstructionDataFormats/TrackCosmics.h
           include/ReconstructionDataFormats/TrackMCHMID.h
+          include/ReconstructionDataFormats/MatchInfoFwd.h
+          include/ReconstructionDataFormats/BCRange.h
+          include/ReconstructionDataFormats/TrackHMP.h
+          include/ReconstructionDataFormats/MatchInfoHMP.h
   )
 
 o2_add_test(Vertex

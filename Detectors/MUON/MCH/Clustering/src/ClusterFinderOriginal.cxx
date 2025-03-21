@@ -33,16 +33,16 @@
 #include <TMath.h>
 #include <TRandom.h>
 
-#include <FairMQLogger.h>
+#include <fairlogger/Logger.h>
 
+#include "MCHBase/Error.h"
+#include "MCHBase/MathiesonOriginal.h"
+#include "MCHBase/ResponseParam.h"
 #include "MCHClustering/ClusterizerParam.h"
 #include "PadOriginal.h"
 #include "ClusterOriginal.h"
-#include "MathiesonOriginal.h"
 
-namespace o2
-{
-namespace mch
+namespace o2::mch
 {
 
 //_________________________________________________________________________________________________
@@ -95,14 +95,14 @@ void ClusterFinderOriginal::init(bool run2Config)
     mLowestClusterCharge = 2. * mLowestPadCharge;
 
     // Mathieson function for station 1
-    mMathiesons[0].setPitch(ClusterizerParam::Instance().pitchSt1);
-    mMathiesons[0].setSqrtKx3AndDeriveKx2Kx4(ClusterizerParam::Instance().mathiesonSqrtKx3St1);
-    mMathiesons[0].setSqrtKy3AndDeriveKy2Ky4(ClusterizerParam::Instance().mathiesonSqrtKy3St1);
+    mMathiesons[0].setPitch(ResponseParam::Instance().pitchSt1);
+    mMathiesons[0].setSqrtKx3AndDeriveKx2Kx4(ResponseParam::Instance().mathiesonSqrtKx3St1);
+    mMathiesons[0].setSqrtKy3AndDeriveKy2Ky4(ResponseParam::Instance().mathiesonSqrtKy3St1);
 
     // Mathieson function for other stations
-    mMathiesons[1].setPitch(ClusterizerParam::Instance().pitchSt2345);
-    mMathiesons[1].setSqrtKx3AndDeriveKx2Kx4(ClusterizerParam::Instance().mathiesonSqrtKx3St2345);
-    mMathiesons[1].setSqrtKy3AndDeriveKy2Ky4(ClusterizerParam::Instance().mathiesonSqrtKy3St2345);
+    mMathiesons[1].setPitch(ResponseParam::Instance().pitchSt2345);
+    mMathiesons[1].setSqrtKx3AndDeriveKx2Kx4(ResponseParam::Instance().mathiesonSqrtKx3St2345);
+    mMathiesons[1].setSqrtKy3AndDeriveKy2Ky4(ResponseParam::Instance().mathiesonSqrtKy3St2345);
   }
 }
 
@@ -161,7 +161,7 @@ void ClusterFinderOriginal::findClusters(gsl::span<const Digit> digits)
 
       // give the new clusters a unique ID, make them point to these digits then set their resolution
       for (; iNewCluster < mClusters.size(); ++iNewCluster) {
-        mClusters[iNewCluster].uid = ClusterStruct::buildUniqueId(digits[0].getDetID() / 100 - 1, digits[0].getDetID(), iNewCluster);
+        mClusters[iNewCluster].uid = Cluster::buildUniqueId(digits[0].getDetID() / 100 - 1, digits[0].getDetID(), iNewCluster);
         mClusters[iNewCluster].firstDigit = iFirstNewDigit;
         mClusters[iNewCluster].nDigits = nNewDigits;
         setClusterResolution(mClusters[iNewCluster]);
@@ -604,7 +604,8 @@ void ClusterFinderOriginal::findLocalMaxima(std::unique_ptr<TH2D>& histAnode,
       }
     }
     if (localMaxima.size() > 99) {
-      LOG(WARNING) << "Too many local maxima !!!";
+      mErrorMap.add(ErrorType::Clustering_TooManyLocalMaxima, mSegmentation->detElemId(), 0);
+      LOG(warning) << "Too many local maxima !!!";
       break;
     }
   }
@@ -1288,7 +1289,7 @@ void ClusterFinderOriginal::cleanPixelArray(double threshold, std::vector<double
       }
     }
     if (iNeighbour < 0) {
-      LOG(ERROR) << "There is no pixel above the threshold!?";
+      LOG(info) << "There is no pixel above the threshold!?";
       continue;
     }
 
@@ -2055,7 +2056,7 @@ void ClusterFinderOriginal::updatePads(const double fitParam[SNFitParamMax + 1],
 }
 
 //_________________________________________________________________________________________________
-void ClusterFinderOriginal::setClusterResolution(ClusterStruct& cluster) const
+void ClusterFinderOriginal::setClusterResolution(Cluster& cluster) const
 {
   /// set the cluster resolution in both directions depending on whether its position
   /// lies on top of a fired digit in both planes or not (e.g. mono-cathode)
@@ -2063,8 +2064,8 @@ void ClusterFinderOriginal::setClusterResolution(ClusterStruct& cluster) const
   if (cluster.getChamberId() < 4) {
 
     // do not consider mono-cathode clusters in stations 1 and 2
-    cluster.ex = ClusterizerParam::Instance().defaultClusterResolution;
-    cluster.ey = ClusterizerParam::Instance().defaultClusterResolution;
+    cluster.ex = ClusterizerParam::Instance().defaultClusterResolutionX;
+    cluster.ey = ClusterizerParam::Instance().defaultClusterResolutionY;
 
   } else {
 
@@ -2085,12 +2086,11 @@ void ClusterFinderOriginal::setClusterResolution(ClusterStruct& cluster) const
     }
 
     // set the cluster resolution accordingly
-    cluster.ex = (itPadNB == mUsedDigits.end()) ? ClusterizerParam::Instance().badClusterResolution
-                                                : ClusterizerParam::Instance().defaultClusterResolution;
-    cluster.ey = (itPadB == mUsedDigits.end()) ? ClusterizerParam::Instance().badClusterResolution
-                                               : ClusterizerParam::Instance().defaultClusterResolution;
+    cluster.ex = (itPadNB == mUsedDigits.end()) ? ClusterizerParam::Instance().badClusterResolutionX
+                                                : ClusterizerParam::Instance().defaultClusterResolutionX;
+    cluster.ey = (itPadB == mUsedDigits.end()) ? ClusterizerParam::Instance().badClusterResolutionY
+                                               : ClusterizerParam::Instance().defaultClusterResolutionY;
   }
 }
 
-} // namespace mch
-} // namespace o2
+} // namespace o2::mch

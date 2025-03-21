@@ -16,11 +16,10 @@
 
 #include "ITSSimulation/V3Layer.h"
 #include "ITSBase/GeometryTGeo.h"
-#include "ITSSimulation/Detector.h"
 #include "ITSMFTSimulation/AlpideChip.h"
 #include "ITSMFTBase/SegmentationAlpide.h"
 
-#include "FairLogger.h" // for LOG
+#include <fairlogger/Logger.h> // for LOG
 
 #include <TGeoArb8.h>           // for TGeoArb8
 #include <TGeoBBox.h>           // for TGeoBBox
@@ -54,8 +53,8 @@ const Int_t V3Layer::sIBNChipRows = 1;
 const Double_t V3Layer::sIBChipZGap = 150.0 * sMicron;
 
 const Double_t V3Layer::sIBModuleZLength = 27.12 * sCm;
-const Double_t V3Layer::sIBFPCWiderXPlus = 850.0 * sMicron;
-const Double_t V3Layer::sIBFPCWiderXNeg = 300.0 * sMicron;
+const Double_t V3Layer::sIBFPCWiderXPlus = 950.0 * sMicron;
+const Double_t V3Layer::sIBFPCWiderXNeg = 400.0 * sMicron;
 const Double_t V3Layer::sIBFlexCableAlThick = 25.0 * sMicron;
 const Double_t V3Layer::sIBFPCAlGNDWidth = (4.1 + 11.15) * sMm;
 const Double_t V3Layer::sIBFPCAlAnodeWidth1 = 13.0 * sMm;
@@ -169,7 +168,7 @@ const Double_t V3Layer::sOBColdPlateZLenML = 87.55 * sCm;
 const Double_t V3Layer::sOBColdPlateZLenOL = 150.15 * sCm;
 const Double_t V3Layer::sOBColdPlateThick = 0.012 * sCm;
 const Double_t V3Layer::sOBHalfStaveYPos = 2.067 * sCm;
-const Double_t V3Layer::sOBHalfStaveYTrans = 1.76 * sMm;
+const Double_t V3Layer::sOBHalfStaveYTrans = 3.6 * sMm;
 const Double_t V3Layer::sOBHalfStaveXOverlap = 7.2 * sMm;
 const Double_t V3Layer::sOBGraphiteFoilThick = 30.0 * sMicron;
 const Double_t V3Layer::sOBCarbonFleeceThick = 20.0 * sMicron;
@@ -223,8 +222,8 @@ const Double_t V3Layer::sOBSFrameSideRibDiam = 1.25 * sMm;
 const Double_t V3Layer::sOBSFrameSideRibPhi = 70.0; // deg
 const Double_t V3Layer::sOBSFrameULegLen = 14.2 * sMm;
 const Double_t V3Layer::sOBSFrameULegWidth = 1.5 * sMm;
-const Double_t V3Layer::sOBSFrameULegHeight1 = 2.7 * sMm;
-const Double_t V3Layer::sOBSFrameULegHeight2 = 5.0 * sMm;
+const Double_t V3Layer::sOBSFrameULegHeight1 = 6.3 * sMm;
+const Double_t V3Layer::sOBSFrameULegHeight2 = 2.7 * sMm;
 const Double_t V3Layer::sOBSFrameULegThick = 0.3 * sMm;
 const Double_t V3Layer::sOBSFrameULegXPos = 12.9 * sMm;
 const Double_t V3Layer::sOBSFrameConnWidth = 42.0 * sMm;
@@ -254,7 +253,7 @@ ClassImp(V3Layer);
 #define SQ(A) (A) * (A)
 
 V3Layer::V3Layer()
-  : V11Geometry(),
+  : V11Geometry(0, "ITS"),
     mLayerNumber(0),
     mPhi0(0),
     mLayerRadius(0),
@@ -268,10 +267,7 @@ V3Layer::V3Layer()
     mChipTypeID(0),
     mIsTurbo(0),
     mBuildLevel(0),
-    mStaveModel(Detector::kIBModelDummy),
-    mAddGammaConv(kFALSE),
-    mGammaConvDiam(0),
-    mGammaConvXPos(0),
+    mStaveModel(kIBModelDummy),
     mIBModuleZLength(0),
     mOBModuleZLength(0)
 {
@@ -280,8 +276,8 @@ V3Layer::V3Layer()
   }
 }
 
-V3Layer::V3Layer(Int_t lay, Bool_t turbo, Int_t debug)
-  : V11Geometry(debug),
+V3Layer::V3Layer(Int_t lay, Bool_t turbo, Int_t debug, const char* name)
+  : V11Geometry(debug, name),
     mLayerNumber(lay),
     mPhi0(0),
     mLayerRadius(0),
@@ -295,10 +291,7 @@ V3Layer::V3Layer(Int_t lay, Bool_t turbo, Int_t debug)
     mChipTypeID(0),
     mIsTurbo(turbo),
     mBuildLevel(0),
-    mStaveModel(Detector::kIBModelDummy),
-    mAddGammaConv(kFALSE),
-    mGammaConvDiam(0),
-    mGammaConvXPos(0),
+    mStaveModel(kIBModelDummy),
     mIBModuleZLength(0),
     mOBModuleZLength(0)
 {
@@ -347,31 +340,31 @@ TGeoVolume* V3Layer::createHalfBarrel()
 
   // Check if the user set the proper parameters
   if (mLayerRadius <= 0) {
-    LOG(FATAL) << "Wrong layer radius " << mLayerRadius;
+    LOG(fatal) << "Wrong layer radius " << mLayerRadius;
   }
 
   if (mNumberOfStaves <= 0) {
-    LOG(FATAL) << "Wrong number of staves " << mNumberOfStaves;
+    LOG(fatal) << "Wrong number of staves " << mNumberOfStaves;
   }
 
   if (mNumberOfChips <= 0) {
-    LOG(FATAL) << "Wrong number of chips " << mNumberOfChips;
+    LOG(fatal) << "Wrong number of chips " << mNumberOfChips;
   }
 
   if (mLayerNumber >= sNumberOfInnerLayers && mNumberOfModules <= 0) {
-    LOG(FATAL) << "Wrong number of modules " << mNumberOfModules;
+    LOG(fatal) << "Wrong number of modules " << mNumberOfModules;
   }
 
   if (mChipThickness <= 0) {
-    LOG(FATAL) << "Chip thickness wrong or not set " << mChipThickness;
+    LOG(fatal) << "Chip thickness wrong or not set " << mChipThickness;
   }
 
   if (mSensorThickness <= 0) {
-    LOG(FATAL) << "Sensor thickness wrong or not set " << mSensorThickness;
+    LOG(fatal) << "Sensor thickness wrong or not set " << mSensorThickness;
   }
 
   if (mSensorThickness > mChipThickness) {
-    LOG(FATAL) << "Sensor thickness " << mSensorThickness << " is greater than chip thickness " << mChipThickness;
+    LOG(fatal) << "Sensor thickness " << mSensorThickness << " is greater than chip thickness " << mChipThickness;
   }
 
   // First create the stave container
@@ -416,11 +409,11 @@ TGeoVolume* V3Layer::createHalfBarrelTurbo()
 
   // Check if the user set the proper (remaining) parameters
   if (mStaveWidth <= 0) {
-    LOG(FATAL) << "Wrong stave width " << mStaveWidth;
+    LOG(fatal) << "Wrong stave width " << mStaveWidth;
   }
 
   if (Abs(mStaveTilt) > 45) {
-    LOG(WARNING) << "Stave tilt angle (" << mStaveTilt << ") greater than 45deg";
+    LOG(warning) << "Stave tilt angle (" << mStaveTilt << ") greater than 45deg";
   }
 
   snprintf(volumeName, nameLen, "%s%d", GeometryTGeo::getITSHalfBarrelPattern(), mLayerNumber);
@@ -476,10 +469,6 @@ TGeoVolume* V3Layer::createStave(const TGeoManager* /*mgr*/)
   char volumeName[nameLen];
 
   Double_t xpos, ypos, ymod;
-  Double_t alpha;
-
-  // First create all needed shapes
-  alpha = (360. / (2 * mNumberOfStaves)) * DegToRad();
 
   // The stave
   snprintf(volumeName, nameLen, "%s%d", GeometryTGeo::getITSStavePattern(), mLayerNumber);
@@ -500,14 +489,14 @@ TGeoVolume* V3Layer::createStave(const TGeoManager* /*mgr*/)
     mechStaveVol = createStaveStructInnerB();
     if (mechStaveVol) {
       ypos = ymod - ypos;
-      if (mStaveModel != Detector::kIBModel4) {
+      if (mStaveModel != kIBModel4) {
         ypos += (static_cast<TGeoBBox*>(mechStaveVol->GetShape()))->GetDY();
       }
       staveVol->AddNode(mechStaveVol, 1, new TGeoCombiTrans(0, -ypos, 0, new TGeoRotation("", 0, 0, 180)));
     }
   } else {
     TGeoVolume* hstaveVol = createStaveOuterB();
-    if (mStaveModel == Detector::kOBModel0) { // Create simplified stave struct as in v0
+    if (mStaveModel == kOBModel0) { // Create simplified stave struct as in v0
       staveVol->AddNode(hstaveVol, 0);
       mHierarchy[kHalfStave] = 1;
     } else { // (if mStaveModel) Create new stave struct as in TDR
@@ -522,7 +511,7 @@ TGeoVolume* V3Layer::createStave(const TGeoManager* /*mgr*/)
       if (mechStaveVol) {
         if (mBuildLevel < 6) { // Carbon
           staveVol->AddNode(mechStaveVol, 1,
-                            new TGeoCombiTrans(0, -sOBSFrameULegHeight1, 0, new TGeoRotation("", 180, 0, 0)));
+                            new TGeoCombiTrans(0, -sOBSFrameULegHeight2, 0, new TGeoRotation("", 180, 0, 0)));
         }
       }
     }
@@ -571,21 +560,21 @@ Double_t V3Layer::createStaveInnerB(TGeoVolume* mother, const TGeoManager* mgr)
   // Build up the stave
   // Chips are rotated by 180deg around Y axis
   // in order to have the correct X and Z axis orientation
-  xpos = -xtot + (static_cast<TGeoBBox*>(chipVol->GetShape()))->GetDX() + sIBFPCWiderXNeg;
   ypos = ymod - mChipThickness;
 
   for (Int_t j = 0; j < sIBChipsPerRow; j++) {
     zpos = ztot - j * (2 * zchip + sIBChipZGap) - zchip;
-    mother->AddNode(chipVol, j, new TGeoCombiTrans(xpos, ypos, zpos, new TGeoRotation("", 0, 180, 180)));
+    mother->AddNode(chipVol, j, new TGeoCombiTrans(0, ypos, zpos, new TGeoRotation("", 0, 180, 180)));
     mHierarchy[kChip]++;
   }
   ytot = ymod;
 
   // Place the FPC and glue
-  if (mStaveModel == Detector::kIBModel4) {
+  if (mStaveModel == kIBModel4) {
     Double_t yvol = (static_cast<TGeoBBox*>(ibModule->GetShape()))->GetDY();
+    xpos = 0.5 * (xtot - xchip);
     ypos += (ymod + yvol);
-    mother->AddNode(ibModule, 1, new TGeoTranslation(0, ypos, 0));
+    mother->AddNode(ibModule, 1, new TGeoTranslation(xpos, ypos, 0));
     ytot += yvol;
   }
 
@@ -635,9 +624,9 @@ TGeoVolume* V3Layer::createModuleInnerB(const Double_t xchip, const Double_t zch
   TGeoBBox* module = new TGeoBBox(xtot, ytot, ztot);
 
   // Now the volumes
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE_IBFPC$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE_IBFPC$", GetDetName()));
 
   snprintf(volumeName, nameLen, "ServicesContainer%d", mLayerNumber);
   TGeoVolume* modVol = new TGeoVolume(volumeName, module, medAir);
@@ -726,7 +715,7 @@ void V3Layer::createIBCapacitors(TGeoVolume* modvol, Double_t zchip, Double_t yz
   if (!capacitor) {
     TGeoBBox* capsh = new TGeoBBox(sIBFlexCapacitorXWid / 2, sIBFlexCapacitorYHi / 2, sIBFlexCapacitorZLen / 2);
 
-    TGeoMedium* medCeramic = mgr->GetMedium("ITS_CERAMIC$");
+    TGeoMedium* medCeramic = mgr->GetMedium(Form("%s_CERAMIC$", GetDetName()));
 
     capacitor = new TGeoVolume("IBFPCCapacitor", capsh, medCeramic);
     capacitor->SetLineColor(kBlack);
@@ -827,8 +816,8 @@ TGeoVolume* V3Layer::createIBFPCAlGnd(const Double_t xcable, const Double_t zcab
   TGeoBBox* aluminum = new TGeoBBox(xcable, sIBFlexCableAlThick / 2, zcable);
 
   // Then the volumes
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medAluminum = mgr->GetMedium("ITS_ALUMINUM$");
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medAluminum = mgr->GetMedium(Form("%s_ALUMINUM$", GetDetName()));
 
   TGeoVolume* coverlayVol = new TGeoVolume("FPCCoverlayGround", coverlay, medKapton);
   coverlayVol->SetLineColor(kBlue);
@@ -879,8 +868,8 @@ TGeoVolume* V3Layer::createIBFPCAlAnode(const Double_t xcable, const Double_t zc
   aluminum->DefineSection(1, sIBFlexCableAlThick / 2);
 
   // Then the volumes
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medAluminum = mgr->GetMedium("ITS_ALUMINUM$");
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medAluminum = mgr->GetMedium(Form("%s_ALUMINUM$", GetDetName()));
 
   TGeoVolume* coverlayVol = new TGeoVolume("FPCCoverlayAnode", coverlay, medKapton);
   coverlayVol->SetLineColor(kBlue);
@@ -912,21 +901,21 @@ TGeoVolume* V3Layer::createStaveStructInnerB(const TGeoManager* mgr)
   TGeoVolume* mechStavVol = nullptr;
 
   switch (mStaveModel) {
-    case Detector::kIBModelDummy:
+    case kIBModelDummy:
       mechStavVol = createStaveModelInnerBDummy(mgr);
       break;
-    case Detector::kIBModel0:
-    case Detector::kIBModel1:
-    case Detector::kIBModel21:
-    case Detector::kIBModel22:
-    case Detector::kIBModel3:
-      LOG(FATAL) << "Stave model " << mStaveModel << " obsolete and no longer supported";
+    case kIBModel0:
+    case kIBModel1:
+    case kIBModel21:
+    case kIBModel22:
+    case kIBModel3:
+      LOG(fatal) << "Stave model " << mStaveModel << " obsolete and no longer supported";
       break;
-    case Detector::kIBModel4:
+    case kIBModel4:
       mechStavVol = createStaveModelInnerB4(mgr);
       break;
     default:
-      LOG(FATAL) << "Unknown stave model " << mStaveModel;
+      LOG(fatal) << "Unknown stave model " << mStaveModel;
       break;
   }
   return mechStavVol;
@@ -1108,15 +1097,15 @@ TGeoVolume* V3Layer::createStaveModelInnerB4(const TGeoManager* mgr)
 
   // We have all shapes: now create the real volumes
 
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
-  TGeoMedium* medM55J6K = mgr->GetMedium("ITS_M55J6K$");
-  TGeoMedium* medM60J3K = mgr->GetMedium("ITS_M60J3K$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medK13D2U2k = mgr->GetMedium("ITS_K13D2U2k$");
-  TGeoMedium* medFGS003 = mgr->GetMedium("ITS_FGS003$");
-  TGeoMedium* medCarbonFleece = mgr->GetMedium("ITS_CarbonFleece$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
+  TGeoMedium* medM55J6K = mgr->GetMedium(Form("%s_M55J6K$", GetDetName()));
+  TGeoMedium* medM60J3K = mgr->GetMedium(Form("%s_M60J3K$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medK13D2U2k = mgr->GetMedium(Form("%s_K13D2U2k$", GetDetName()));
+  TGeoMedium* medFGS003 = mgr->GetMedium(Form("%s_FGS003$", GetDetName()));
+  TGeoMedium* medCarbonFleece = mgr->GetMedium(Form("%s_CarbonFleece$", GetDetName()));
 
   const Int_t nameLen = 30;
   char volname[nameLen];
@@ -1359,9 +1348,9 @@ void V3Layer::createIBConnectorsASide(const TGeoManager* mgr)
   Double_t xpos, ypos, zpos;
 
   // Gather all material pointers
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medPEEK = mgr->GetMedium("ITS_PEEKCF30$");
-  TGeoMedium* medInox304 = mgr->GetMedium("ITS_INOX304$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medPEEK = mgr->GetMedium(Form("%s_PEEKCF30$", GetDetName()));
+  TGeoMedium* medInox304 = mgr->GetMedium(Form("%s_INOX304$", GetDetName()));
 
   // First create all elements
   // (All measures refer to the blueprint ALIITSUP0051)
@@ -1576,8 +1565,8 @@ void V3Layer::createIBConnectorsCSide(const TGeoManager* mgr)
   Double_t xpos, ypos, zpos;
 
   // Gather all material pointers
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medPEEK = mgr->GetMedium("ITS_PEEKCF30$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medPEEK = mgr->GetMedium(Form("%s_PEEKCF30$", GetDetName()));
 
   // First create all elements
   // (All measures refer to the blueprint ALIITSUP0051)
@@ -1793,18 +1782,18 @@ TGeoVolume* V3Layer::createStaveOuterB(const TGeoManager* mgr)
   TGeoVolume* mechStavVol = nullptr;
 
   switch (mStaveModel) {
-    case Detector::kOBModelDummy:
+    case kOBModelDummy:
       mechStavVol = createStaveModelOuterBDummy(mgr);
       break;
-    case Detector::kOBModel0:
-    case Detector::kOBModel1:
-      LOG(FATAL) << "Stave model " << mStaveModel << " obsolete and no longer supported";
+    case kOBModel0:
+    case kOBModel1:
+      LOG(fatal) << "Stave model " << mStaveModel << " obsolete and no longer supported";
       break;
-    case Detector::kOBModel2:
+    case kOBModel2:
       mechStavVol = createStaveModelOuterB2(mgr);
       break;
     default:
-      LOG(FATAL) << "Unknown stave model " << mStaveModel;
+      LOG(fatal) << "Unknown stave model " << mStaveModel;
       break;
   }
   return mechStavVol;
@@ -1918,11 +1907,6 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
   TGeoTubeSeg* fleectub =
     new TGeoTubeSeg("FleecTube", rCoolMax + yGraph, rCoolMax + yCFleece + yGraph, zlen, 180., 360.);
 
-  TGeoTube* gammaConvRod;
-  if (mAddGammaConv) {
-    gammaConvRod = new TGeoTube("GammaConver", 0, 0.5 * mGammaConvDiam, zlen - sOBCPConnHollowZLen);
-  }
-
   //  TGeoBBox* flex1_5cm = new TGeoBBox("Flex1MV_5cm", xHalfSt, yFlex1 / 2, flexOverlap / 2);
   //  TGeoBBox* flex2_5cm = new TGeoBBox("Flex2MV_5cm", xHalfSt, yFlex2 / 2, flexOverlap / 2);
 
@@ -1934,9 +1918,6 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
   // The half stave container (an XTru to avoid overlaps between neightbours)
   xHalfSt = xmod; // add the cross cables when done!
   yHalfSt = ypowbus + ymod + coldPlate->GetDY() + 2 * fleeccent->GetDY() + graphlat->GetDY() + fleeclat->GetDY();
-  if (mAddGammaConv) {
-    yHalfSt += mGammaConvDiam;
-  }
 
   xtru[0] = xHalfSt;
   ytru[0] = 0;
@@ -1946,9 +1927,6 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
   ytru[2] = ytru[1];
   xtru[3] = xtru[2];
   ytru[3] = ytru[2] - (coolTube->GetRmax() + fleectub->GetRmax());
-  if (mAddGammaConv) {
-    ytru[3] -= mGammaConvDiam;
-  }
   xtru[4] = sOBCoolTubeXDist / 2 - fleectub->GetRmax();
   ytru[4] = ytru[3];
   xtru[5] = xtru[4];
@@ -1972,9 +1950,6 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
     new TGeoBBox("connCsideOB", sOBCPConnectorXWidth / 2, sOBCPConnBlockYHei / 2, sOBCPConnBlockZLen / 2);
 
   // The StaveStruct container, a Composite Shape
-  if (mAddGammaConv) {
-    yHalfSt -= mGammaConvDiam;
-  }
   ypos = 2 * yHalfSt + connAside->GetDY() - sOBCPConnHollowYHei;
   zpos = zlen + connAside->GetDZ() - sOBCPConnHollowZLen;
   snprintf(volname, nameLen, "transAsideOB%d", mLayerNumber);
@@ -1994,14 +1969,14 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
 
   // We have all shapes: now create the real volumes
 
-  TGeoMedium* medAluminum = mgr->GetMedium("ITS_ALUMINUM$");
-  TGeoMedium* medK13D2U120 = mgr->GetMedium("ITS_K13D2U120$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
-  TGeoMedium* medCarbonFleece = mgr->GetMedium("ITS_CarbonFleece$");
-  TGeoMedium* medFGS003 = mgr->GetMedium("ITS_FGS003$"); // amec thermasol
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medTungsten = mgr->GetMedium("ITS_TUNGSTEN$");
+  TGeoMedium* medAluminum = mgr->GetMedium(Form("%s_ALUMINUM$", GetDetName()));
+  TGeoMedium* medK13D2U120 = mgr->GetMedium(Form("%s_K13D2U120$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
+  TGeoMedium* medCarbonFleece = mgr->GetMedium(Form("%s_CarbonFleece$", GetDetName()));
+  TGeoMedium* medFGS003 = mgr->GetMedium(Form("%s_FGS003$", GetDetName())); // amec thermasol
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medTungsten = mgr->GetMedium(Form("%s_TUNGSTEN$", GetDetName()));
 
   TGeoVolume* coldPlateVol = new TGeoVolume("ColdPlateVol", coldPlate, medK13D2U120);
   coldPlateVol->SetLineColor(kYellow - 3);
@@ -2063,14 +2038,6 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
   fleectubVol->SetLineColor(kViolet);
   fleectubVol->SetFillColor(fleectubVol->GetLineColor());
   fleectubVol->SetFillStyle(4000); // 0% transparent
-
-  TGeoVolume* gammaConvRodVol;
-  if (mAddGammaConv) {
-    gammaConvRodVol = new TGeoVolume("GammaConversionRod", gammaConvRod, medTungsten);
-    gammaConvRodVol->SetLineColor(kBlack);
-    gammaConvRodVol->SetFillColor(gammaConvRodVol->GetLineColor());
-    gammaConvRodVol->SetFillStyle(4000); // 0% transparent
-  }
 
   snprintf(volname, nameLen, "%s%d", GeometryTGeo::getITSHalfStavePattern(), mLayerNumber);
   TGeoVolume* halfStaveVol = new TGeoVolume(volname, halfStave, medAir);
@@ -2172,13 +2139,6 @@ TGeoVolume* V3Layer::createStaveModelOuterB2(const TGeoManager* mgr)
     halfStaveVol->AddNode(fleecvertVol, 4, new TGeoTranslation(xpos, ypos1, 0));
   }
 
-  // Add the Gamma Converter Rod (only on Layer 3) - M.S. 17 Oct 2016
-  if (mAddGammaConv) {
-    xpos = mGammaConvXPos;
-    ypos1 = ypos - (fleeccent->GetDY() + 2 * graphlat->GetDY() + 2 * fleeclat->GetDY() + gammaConvRod->GetRmax());
-    halfStaveVol->AddNode(gammaConvRodVol, 1, new TGeoTranslation(xpos, ypos1, 0));
-  }
-
   // Add the end-stave connectors
   TGeoVolume *connectorASide, *connectorCSide;
 
@@ -2239,9 +2199,9 @@ TGeoVolume* V3Layer::createOBPowerBiasBuses(const Double_t zcable, const TGeoMan
   TGeoBBox* topBB = new TGeoBBox(xcable, sOBBiasBusAlThick / 2, zcable);
 
   // Then the volumes
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medAluminum = mgr->GetMedium("ITS_ALUMINUM$");
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medAluminum = mgr->GetMedium(Form("%s_ALUMINUM$", GetDetName()));
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   TGeoVolume* gndPBVol = new TGeoVolume("PowerBusGround", gndPB, medAluminum);
   gndPBVol->SetLineColor(kCyan);
@@ -2392,9 +2352,9 @@ void V3Layer::createOBColdPlateConnectorsASide()
   Double_t xpos, ypos, zpos;
 
   // Gather all material pointers
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medPEEK = mgr->GetMedium("ITS_PEEKCF30$");
-  TGeoMedium* medInox304 = mgr->GetMedium("ITS_INOX304$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medPEEK = mgr->GetMedium(Form("%s_PEEKCF30$", GetDetName()));
+  TGeoMedium* medInox304 = mgr->GetMedium(Form("%s_INOX304$", GetDetName()));
 
   // First create all elements
 
@@ -2549,8 +2509,8 @@ void V3Layer::createOBColdPlateConnectorsCSide()
   Double_t xpos, ypos, zpos;
 
   // Gather all material pointers
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medPEEK = mgr->GetMedium("ITS_PEEKCF30$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medPEEK = mgr->GetMedium(Form("%s_PEEKCF30$", GetDetName()));
 
   // First create all elements
 
@@ -2680,16 +2640,16 @@ TGeoVolume* V3Layer::createSpaceFrameOuterB(const TGeoManager* mgr)
   TGeoVolume* mechStavVol = nullptr;
 
   switch (mStaveModel) {
-    case Detector::kOBModelDummy:
-    case Detector::kOBModel0:
+    case kOBModelDummy:
+    case kOBModel0:
       mechStavVol = createSpaceFrameOuterBDummy(mgr);
       break;
-    case Detector::kOBModel1:
-    case Detector::kOBModel2:
+    case kOBModel1:
+    case kOBModel2:
       mechStavVol = createSpaceFrameOuterB2(mgr);
       break;
     default:
-      LOG(FATAL) << "Unknown stave model " << mStaveModel;
+      LOG(fatal) << "Unknown stave model " << mStaveModel;
       break;
   }
 
@@ -2733,7 +2693,7 @@ TGeoVolume* V3Layer::createSpaceFrameOuterB2(const TGeoManager* mgr)
   // Updated:      20 Jul 2017  Mario Sitta  O2 version
   //
 
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   TGeoVolume *unitVol[2], *next2EndVol[2], *endVol[2];
   Double_t *xtru, *ytru;
@@ -2857,9 +2817,9 @@ void V3Layer::createOBSpaceFrameObjects(const TGeoManager* mgr)
   //
 
   // Materials defined in AliITSUv2
-  TGeoMedium* medCarbon = mgr->GetMedium("ITS_M55J6K$");
-  TGeoMedium* medF6151B05M = mgr->GetMedium("ITS_F6151B05M$");
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medCarbon = mgr->GetMedium(Form("%s_M55J6K$", GetDetName()));
+  TGeoMedium* medF6151B05M = mgr->GetMedium(Form("%s_F6151B05M$", GetDetName()));
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   // Local parameters
   Double_t halfFrameWidth = sOBSpaceFrameWidth / 2;
@@ -3298,7 +3258,7 @@ void V3Layer::createOBSpaceFrameConnector(TGeoVolume* mother, const Double_t ymo
   // Created:      09 Sep 2019  M. Sitta
 
   // Materials defined in AliITSUv2
-  TGeoMedium* medPEEK = mgr->GetMedium("ITS_PEEKCF30$");
+  TGeoMedium* medPEEK = mgr->GetMedium(Form("%s_PEEKCF30$", GetDetName()));
 
   // Local parameters
   TString connName, compoShape;
@@ -3495,9 +3455,9 @@ TGeoVolume* V3Layer::createModuleOuterB(const TGeoManager* mgr)
 
   // We have all shapes: now create the real volumes
 
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
 
   TGeoVolume* glueFPCVol = new TGeoVolume("GlueFPCVol", glueFPC, medGlue);
   glueFPCVol->SetLineColor(kBlack);
@@ -3594,8 +3554,8 @@ TGeoVolume* V3Layer::createOBFPCCuGnd(const Double_t zcable, const TGeoManager* 
   TGeoBBox* copper = new TGeoBBox(xcable, sOBFPCCopperThick / 2, zcable);
 
   // Then the volumes
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medCopper = mgr->GetMedium("ITS_COPPER$");
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medCopper = mgr->GetMedium(Form("%s_COPPER$", GetDetName()));
 
   TGeoVolume* soldmaskVol = new TGeoVolume("FPCGndSolderMask", soldmask, medKapton);
   soldmaskVol->SetLineColor(kBlue);
@@ -3640,8 +3600,8 @@ TGeoVolume* V3Layer::createOBFPCCuSig(const Double_t zcable, const TGeoManager* 
   TGeoBBox* copper = new TGeoBBox(xcable, sOBFPCCopperThick / 2, zcable);
 
   // Then the volumes
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medCopper = mgr->GetMedium("ITS_COPPER$");
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medCopper = mgr->GetMedium(Form("%s_COPPER$", GetDetName()));
 
   TGeoVolume* soldmaskVol = new TGeoVolume("FPCSigSolderMask", soldmask, medKapton);
   soldmaskVol->SetLineColor(kBlue);
@@ -3657,51 +3617,6 @@ TGeoVolume* V3Layer::createOBFPCCuSig(const Double_t zcable, const TGeoManager* 
   }
 
   return soldmaskVol;
-}
-
-Double_t V3Layer::getGammaConversionRodDiam()
-{
-  //
-  // Gets the diameter of the gamma conversion rods, if defined
-  //
-  //
-  // Input:
-  //
-  // Output:
-  //
-  // Return:
-  //         the diameter of the gamma conversion rods for this layer
-  //
-  // Created:      26 Oct 2016  Mario Sitta
-  //
-
-  if (!mAddGammaConv) {
-    LOG(WARNING) << "Gamma Conversion rods not defined for this layer";
-  }
-  return mGammaConvDiam;
-}
-
-Double_t V3Layer::getGammaConversionRodXPos()
-{
-  //
-  // Gets the X position of the gamma conversion rods, if defined
-  //
-  //
-  // Input:
-  //
-  // Output:
-  //
-  // Return:
-  //         the X position of the gamma conversion rods for this layer
-  //         in the Half Stave reference system
-  //
-  // Created:      26 Oct 2016  Mario Sitta
-  //
-
-  if (!mAddGammaConv) {
-    LOG(WARNING) << "Gamma Conversion rods not defined for this layer";
-  }
-  return mGammaConvXPos;
 }
 
 Double_t V3Layer::radiusOmTurboContainer()
@@ -3741,7 +3656,7 @@ void V3Layer::setStaveTilt(const Double_t t)
   if (mIsTurbo) {
     mStaveTilt = t;
   } else {
-    LOG(ERROR) << "Not a Turbo layer";
+    LOG(error) << "Not a Turbo layer";
   }
 }
 
@@ -3750,7 +3665,7 @@ void V3Layer::setStaveWidth(const Double_t w)
   if (mIsTurbo) {
     mStaveWidth = w;
   } else {
-    LOG(ERROR) << "Not a Turbo layer";
+    LOG(error) << "Not a Turbo layer";
   }
 }
 

@@ -11,6 +11,7 @@
 #ifndef O2_FRAMEWORK_CONFIGURABLE_H_
 #define O2_FRAMEWORK_CONFIGURABLE_H_
 #include "Framework/ConfigurableKinds.h"
+#include "Framework/Traits.h"
 #include <string>
 #include <vector>
 namespace o2::framework
@@ -82,7 +83,21 @@ struct Configurable : IP {
 template <typename T, ConfigParamKind K = ConfigParamKind::kGeneric>
 using MutableConfigurable = Configurable<T, K, ConfigurablePolicyMutable<T, K>>;
 
+template <typename T>
+concept is_configurable = requires(T& t) {
+  typename T::type;
+  requires std::same_as<std::string, decltype(t.name)>;
+  &T::operator typename T::type;
+};
+
 using ConfigurableAxis = Configurable<std::vector<double>, ConfigParamKind::kAxisSpec, ConfigurablePolicyConst<std::vector<double>, ConfigParamKind::kAxisSpec>>;
+
+template <typename T>
+concept is_configurable_axis = is_configurable<T>&&
+  requires()
+{
+  T::kind == ConfigParamKind::kAxisSpec;
+};
 
 template <typename R, typename T, typename... As>
 struct ProcessConfigurable : Configurable<bool, ConfigParamKind::kProcessFlag> {
@@ -95,8 +110,13 @@ struct ProcessConfigurable : Configurable<bool, ConfigParamKind::kProcessFlag> {
   (As...);
 };
 
+template <typename T>
+concept is_process_configurable = is_configurable<T> && requires(T& t) { t.process; };
+
 #define PROCESS_SWITCH(_Class_, _Name_, _Help_, _Default_) \
   decltype(ProcessConfigurable{&_Class_ ::_Name_, #_Name_, _Default_, _Help_}) do##_Name_ = ProcessConfigurable{&_Class_ ::_Name_, #_Name_, _Default_, _Help_};
+#define PROCESS_SWITCH_FULL(_Class_, _Method_, _Name_, _Help_, _Default_) \
+  decltype(ProcessConfigurable{&_Class_ ::_Method_, #_Name_, _Default_, _Help_}) do##_Name_ = ProcessConfigurable{&_Class_ ::_Method_, #_Name_, _Default_, _Help_};
 
 template <typename T, ConfigParamKind K, typename IP>
 std::ostream& operator<<(std::ostream& os, Configurable<T, K, IP> const& c)
@@ -104,6 +124,26 @@ std::ostream& operator<<(std::ostream& os, Configurable<T, K, IP> const& c)
   os << c.value;
   return os;
 }
+
+/// Can be used to group together a number of Configurables
+/// to overcome the limit of 100 Configurables per task.
+/// In order to do so you can do:
+///
+/// struct MyTask {
+///   struct MyGroup : ConfigurableGroup {
+///     Configurable<int> aCut{...};
+///     Configurable<float> bCut{...};
+///   } group;
+/// };
+///
+/// and access it with
+///
+/// group.aCut;
+struct ConfigurableGroup {
+};
+
+template <typename T>
+concept is_configurable_group = std::derived_from<T, ConfigurableGroup>;
 
 } // namespace o2::framework
 #endif // O2_FRAMEWORK_CONFIGURABLE_H_

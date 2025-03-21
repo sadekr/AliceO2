@@ -28,7 +28,7 @@
 #include <TGeoGlobalMagField.h>
 
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/ControlService.h"
@@ -46,12 +46,18 @@
 #include "MCHBase/TrackBlock.h"
 #include "MCHTracking/TrackParam.h"
 #include "MCHTracking/TrackExtrap.h"
-#include "TrackAtVtxStruct.h"
 
 namespace o2
 {
 namespace mch
 {
+
+struct TrackAtVtxStruct {
+  TrackParamStruct paramAtVertex{};
+  double dca = 0.;
+  double rAbs = 0.;
+  int mchTrackIdx = 0;
+};
 
 using namespace std;
 using namespace o2::framework;
@@ -92,7 +98,7 @@ class TrackAtVertexTask
   {
     /// Prepare the track extrapolation tools
 
-    LOG(INFO) << "initializing track extrapolation to vertex";
+    LOG(info) << "initializing track extrapolation to vertex";
 
     auto grpFile = ic.options().get<std::string>("grp-file");
     if (std::filesystem::exists(grpFile)) {
@@ -102,9 +108,9 @@ class TrackAtVertexTask
     }
 
     auto stop = [this]() {
-      LOG(INFO) << "track propagation to vertex duration = " << mElapsedTime.count() << " s";
+      LOG(info) << "track propagation to vertex duration = " << mElapsedTime.count() << " s";
     };
-    ic.services().get<CallbackService>().set(CallbackService::Id::Stop, stop);
+    ic.services().get<CallbackService>().set<CallbackService::Id::Stop>(stop);
   }
 
   //_________________________________________________________________________________________________
@@ -133,7 +139,7 @@ class TrackAtVertexTask
     }
 
     // create the output message
-    auto msgOut = pc.outputs().make<char>(Output{"MCH", "TRACKSATVERTEX", 0, Lifetime::Timeframe},
+    auto msgOut = pc.outputs().make<char>(Output{"MCH", "TRACKSATVERTEX", 0},
                                           mTracksAtVtx.size() * sizeof(int) + nTracksTot * sizeof(TrackAtVtxStruct));
 
     // write the tracks

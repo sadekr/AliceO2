@@ -19,6 +19,7 @@
 #include "Framework/Task.h"
 #include "TOFReconstruction/CTFCoder.h"
 #include <TStopwatch.h>
+#include "TOFBase/WindowFiller.h"
 
 namespace o2
 {
@@ -28,19 +29,21 @@ namespace tof
 class EntropyDecoderSpec : public o2::framework::Task
 {
  public:
-  EntropyDecoderSpec();
+  EntropyDecoderSpec(int verbosity);
   ~EntropyDecoderSpec() override = default;
   void run(o2::framework::ProcessingContext& pc) final;
   void init(o2::framework::InitContext& ic) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   o2::tof::CTFCoder mCTFCoder;
+  WindowFiller mFiller;
   TStopwatch mTimer;
 };
 
 /// create a processor spec
-framework::DataProcessorSpec getEntropyDecoderSpec();
+framework::DataProcessorSpec getEntropyDecoderSpec(int verbosity, unsigned int sspec);
 
 } // namespace tof
 } // namespace o2

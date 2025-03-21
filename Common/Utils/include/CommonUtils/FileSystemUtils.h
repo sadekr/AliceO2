@@ -16,6 +16,7 @@
 
 #include <vector>
 #include <string>
+#include <unistd.h>
 
 namespace o2::utils
 {
@@ -27,6 +28,16 @@ std::vector<std::string> listFiles(std::string const& dir, std::string const& se
 
 // same in the current dir
 std::vector<std::string> listFiles(std::string const& searchpattern);
+
+// create path if absent, account for eventual concurrent creation
+void createDirectoriesIfAbsent(std::string const& path);
+
+// A function to expand a string containing shell variables
+// to a string in which these vars have been substituted.
+// Motivation:: filesystem::exists() does not do this by default
+// and I couldn't find information on this. Potentially there is an
+// existing solution.
+std::string expandShellVarsInFileName(std::string const& input);
 
 } // namespace o2::utils
 

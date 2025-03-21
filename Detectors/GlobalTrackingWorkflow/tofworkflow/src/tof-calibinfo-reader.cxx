@@ -18,13 +18,20 @@
 #include "TOFWorkflowIO/CalibInfoReaderSpec.h"
 #include "Framework/WorkflowSpec.h"
 #include "Framework/ConfigParamSpec.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "CommonUtils/ConfigurableParam.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
+#include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
 
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
+
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
 
 // add workflow options, note that customization needs to be declared before
 // including Framework/runDataProcessing
@@ -34,6 +41,7 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
   workflowOptions.push_back(ConfigParamSpec{"ninstances", o2::framework::VariantType::Int, 1, {"Number of reader instances"}});
   workflowOptions.push_back(ConfigParamSpec{"tpc-matches", o2::framework::VariantType::Bool, false, {"Made from TOF-TPC matches"}});
   workflowOptions.push_back(ConfigParamSpec{"configKeyValues", o2::framework::VariantType::String, "", {"Semicolon separated key=value strings ..."}});
+  o2::raw::HBFUtilsInitializer::addConfigOption(workflowOptions, o2::raw::HBFUtilsInitializer::HBFUSrc);
 }
 
 #include "Framework/runDataProcessing.h" // the main driver
@@ -66,8 +74,8 @@ WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
   auto listname = cfgc.options().get<std::string>("collection-infile");
   auto toftpc = cfgc.options().get<bool>("tpc-matches");
 
-  char* stringTBP = new char[listname.size()];
-  sprintf(stringTBP, "%s", listname.c_str());
+  char* stringTBP = new char[listname.size() + 1];
+  snprintf(stringTBP, listname.size() + 1, "%s", listname.c_str());
 
   // the lane configuration defines the subspecification ids to be distributed among the lanes.
   // auto tofSectors = o2::RangeTokenizer::tokenize<int>(cfgc.options().get<std::string>("tof-sectors"));
@@ -77,7 +85,11 @@ WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
     specs.emplace_back(o2::tof::getCalibInfoReaderSpec(i, ninstances, stringTBP, toftpc));
   }
 
-  LOG(INFO) << "Number of active devices = " << specs.size();
-
+  LOG(info) << "Number of active devices = " << specs.size();
+  if (ninstances == 1) {
+    o2::raw::HBFUtilsInitializer hbfIni(cfgc, specs);
+  } else {
+    LOG(warning) << "Cannot use HBFUtilsInitializer with multiple instances";
+  }
   return std::move(specs);
 }

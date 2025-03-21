@@ -17,61 +17,28 @@
 
 #include "GPUCommonDef.h"
 
-#ifdef GPUCA_ALIROOT_LIB
-#define TRD_TRACK_TYPE_ALIROOT
-#else
-#define TRD_TRACK_TYPE_O2
-#endif
-
-#ifdef GPUCA_ALIROOT_LIB
-class AliExternalTrackParam;
-class AliTrackerBase;
-#else
-namespace o2
-{
-namespace track
+namespace o2::track
 {
 template <typename>
 class TrackParametrizationWithError;
-} // namespace track
-namespace base
+} // namespace o2::track
+
+namespace o2::base
 {
 template <typename>
 class PropagatorImpl;
-} // namespace base
-} // namespace o2
-#endif
+} // namespace o2::base
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 
-#ifdef GPUCA_ALIROOT_LIB
-typedef double My_Float;
-#else
-typedef float My_Float;
-#endif
-
-#if defined(TRD_TRACK_TYPE_ALIROOT)
-typedef AliExternalTrackParam TRDBaseTrack;
-class GPUTPCGMTrackParam;
-typedef GPUTPCGMTrackParam TRDBaseTrackGPU;
-#elif defined(TRD_TRACK_TYPE_O2)
 typedef o2::track::TrackParametrizationWithError<float> TRDBaseTrack;
 class GPUTPCGMTrackParam;
 typedef GPUTPCGMTrackParam TRDBaseTrackGPU;
-#endif
 
-#ifdef GPUCA_ALIROOT_LIB
-typedef AliTrackerBase TRDBasePropagator;
-class GPUTPCGMPropagator;
-typedef GPUTPCGMPropagator TRDBasePropagatorGPU;
-#else
 typedef o2::base::PropagatorImpl<float> TRDBasePropagator;
 class GPUTPCGMPropagator;
 typedef GPUTPCGMPropagator TRDBasePropagatorGPU;
-#endif
 
 template <class T>
 class trackInterface;
@@ -91,7 +58,6 @@ class GPUTRDTracker_t;
 typedef GPUTRDTracker_t<GPUTRDTrack, GPUTRDPropagator> GPUTRDTracker;
 typedef GPUTRDTracker_t<GPUTRDTrackGPU, GPUTRDPropagatorGPU> GPUTRDTrackerGPU;
 
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif // GPUTRDDEF_H

@@ -13,6 +13,9 @@
 #define ALICEO2_TRD_HELPERMETHODS_HH
 
 #include "DataFormatsTRD/Constants.h"
+#include <iostream>
+#include <string>
+#include <fmt/format.h>
 
 namespace o2
 {
@@ -45,6 +48,25 @@ struct HelperMethods {
   static int getPadRowFromMCM(int irob, int imcm)
   {
     return constants::NMCMROBINROW * (irob / 2) + imcm / constants::NMCMROBINCOL;
+  }
+
+  static void printSectorStackLayer(int det)
+  {
+    // for a given chamber number prints SECTOR_STACK_LAYER
+    printf("%02i_%i_%i\n", det / constants::NCHAMBERPERSEC, (det % constants::NCHAMBERPERSEC) / constants::NLAYER, det % constants::NLAYER);
+  }
+
+  static std::string getSectorStackLayerSide(int hcid)
+  {
+    int det = hcid / 2;
+    std::string side = (hcid % 2 == 0) ? "A" : "B";
+    return fmt::format("{}_{}_{}{}", getSector(det), getStack(det), getLayer(det), side);
+  }
+
+  static void printSectorStackLayerSide(int hcid)
+  {
+    // for a given half-chamber number prints SECTOR_STACK_LAYER_side
+    printf("%s\n", getSectorStackLayerSide(hcid).c_str());
   }
 
   static int getPadColFromADC(int irob, int imcm, int iadc)
@@ -82,41 +104,55 @@ struct HelperMethods {
     return det % constants::NLAYER;
   }
 
-  static int getORIinSuperModule(int detector, int readoutboard)
+  static int getDetector(int sector, int stack, int layer)
   {
-    //given a detector and readoutboard
+    return (layer + stack * constants::NLAYER + sector * constants::NLAYER * constants::NSTACK);
+  }
+
+  static int getORIinSuperModule(int hcid)
+  {
+    // given a half chamber ID compute the link ID from [0..59]
+    // where link ID [0..29] is for A-side CRU and [30..59] for C-side CRU
     int ori = -1;
-    int trdstack = HelperMethods::getStack(detector);
-    int trdlayer = HelperMethods::getLayer(detector);
-    int side = HelperMethods::getROBSide(readoutboard);
-    //TODO ccdb lookup of detector/stack/layer/side for link id.
-    bool aside = false;
-    if (trdstack == 0 || trdstack == 1) {
-      aside = true; //aside
-    } else {
-      if (trdstack != 2) {
-        aside = false; //cside
-      } else {
-        if (side == 0) {
-          aside = true; //stack
-        } else {
-          aside = false; //stack2, halfchamber 1
-        }
-      }
+    int stack = getStack(hcid / 2);
+    int layer = getLayer(hcid / 2);
+    int side = (hcid % 2 == 0) ? 0 : 1;
+    bool isAside = false;
+    if (stack < 2 || (stack == 2 && side == 0)) {
+      isAside = true;
     }
-    if (aside) {
-      ori = trdstack * 12 + (5 - trdlayer + side * 5) + trdlayer / 6 + side; // <- that is correct for A side at least for now, probably not for very long LUT as that will come form CCDB ni anycase.
+    if (isAside) {
+      ori = stack * constants::NLAYER * 2 + side * constants::NLAYER + 5 - layer;
     } else {
-      //cside
-      int newside = side;
-      if (trdstack == 2) {
-        newside = 0; // the last part of C side CRU is a special case.
+      // C-side
+      ori = (4 - stack) * constants::NLAYER * 2 + side * constants::NLAYER + 5 - layer;
+      if (stack == 2) {
+        ori -= constants::NLAYER;
       }
-      ori = (4 - trdstack) * 12 + (5 - trdlayer + newside * 5) + trdlayer / 6 + newside;
-      ori += 30; // 30 to offset if from the a side link , 69 links in total
+      ori += constants::NLINKSPERCRU;
     }
-    //see TDP for explanation of mapping TODO should probably come from CCDB
+    // TODO: put mapping into TDP and prepare for alternative mapping (CCDB?)
     return ori;
+  }
+
+  static int getHCIDFromLinkID(int link)
+  {
+    // link = halfcrulink [0..14] + halfcru [0..71] * constants::NLINKSPERHALFCRU (15) -> [0..1079]
+
+    int sector = link / constants::NHCPERSEC;
+    int linkSector = link % constants::NHCPERSEC;       // [0..59]
+    int linkCRU = linkSector % constants::NLINKSPERCRU; // [0..29]
+    int stack = linkCRU / (constants::NLAYER * 2);
+    int layer = 5 - (linkCRU % constants::NLAYER);
+    int side = (linkCRU / constants::NLAYER) % 2;
+    if (linkSector >= constants::NLINKSPERCRU) {
+      // C-side
+      stack = 4 - stack;
+      if (stack == 2) {
+        side = 1;
+      }
+    }
+    return sector * constants::NHCPERSEC + stack * constants::NLAYER * 2 + layer * 2 + side;
   }
 
   static int getLinkIDfromHCID(int hcid)
@@ -124,28 +160,56 @@ struct HelperMethods {
     //return a number in range [0:29] for the link related to this hcid with in its respective CRU
     //lower 15 is endpoint 0 and upper 15 is endpoint 1
     //a side has 30, c side has 30 to give 60 links for a supermodule
-    int detector = hcid / 2;
-    int supermodule = hcid / 60;
-    int chamberside = hcid % 2; // 0 for side 0, 1 for side 1;
-    int ori = -1;
-    // now offset for supermodule (+60*supermodule);
-    return HelperMethods::getORIinSuperModule(detector, chamberside) + 60 * supermodule; // it takes readoutboard but only cares if its odd or even hence side here.
+    int sector = hcid / constants::NHCPERSEC;
+    return getORIinSuperModule(hcid) + constants::NHCPERSEC * sector;
   }
 
-  inline static void swapByteOrder(unsigned int& word)
+  static int getChannelIndexInColumn(int rob, int mcm, int channel)
   {
-    word = (word >> 24) |
-           ((word << 8) & 0x00FF0000) |
-           ((word >> 8) & 0x0000FF00) |
-           (word << 24);
+    // the highest ADC channel number corresponds to the lowest pad column connected to given MCM
+    int mcmCol = (rob % 2) ? mcm % constants::NMCMROBINROW + constants::NMCMROBINCOL : mcm % constants::NMCMROBINROW;
+    return mcmCol * constants::NADCMCM + constants::NADCMCM - 1 - channel;
   }
-  inline static unsigned int swapByteOrderreturn(unsigned int word)
+
+  static int getGlobalChannelIndex(int det, int rob, int mcm, int channel)
   {
-    //    word = (word >> 24) |
-    //         ((word << 8) & 0x00FF0000) |
-    //        ((word >> 8) & 0x0000FF00) |
-    //       (word << 24);
-    return word;
+    // return global readout channel index for given detector, ROB, MCM and channel index
+    // start with sector offset
+    int idx = getSector(det) * constants::NCHANNELSPERSECTOR;
+    // layer offset
+    idx += getLayer(det) * constants::NCHANNELSPERLAYER;
+    // stack offset
+    idx += (getStack(det) < 3) ? getStack(det) * constants::NCHANNELSC1 : (getStack(det) - 1) * constants::NCHANNELSC1 + constants::NCHANNELSC0;
+    // pad row offset
+    idx += getPadRowFromMCM(rob, mcm) * constants::NCHANNELSPERROW;
+    // position within pad column
+    idx += getChannelIndexInColumn(rob, mcm, channel);
+
+    return idx;
+  }
+
+  static void getPositionFromGlobalChannelIndex(int idx, int& det, int& rob, int& mcm, int& channel)
+  {
+    int sec = idx / constants::NCHANNELSPERSECTOR;
+    int layer = (idx % constants::NCHANNELSPERSECTOR) / constants::NCHANNELSPERLAYER;
+    int stackIndex = ((idx % constants::NCHANNELSPERSECTOR) % constants::NCHANNELSPERLAYER);
+    int stack, chamberIndex;
+    if (stackIndex >= 2 * constants::NCHANNELSC1 + constants::NCHANNELSC0) {
+      stack = 3 + (stackIndex - 2 * constants::NCHANNELSC1 - constants::NCHANNELSC0) / constants::NCHANNELSC1;
+      chamberIndex = (stackIndex - constants::NCHANNELSC0) % constants::NCHANNELSC1;
+    } else if (stackIndex > 2 * constants::NCHANNELSC1) {
+      stack = 2;
+      chamberIndex = stackIndex - 2 * constants::NCHANNELSC1;
+    } else {
+      stack = stackIndex / constants::NCHANNELSC1;
+      chamberIndex = stackIndex % constants::NCHANNELSC1;
+    }
+    int row = chamberIndex / constants::NCHANNELSPERROW;
+    int mcmCol = (chamberIndex % constants::NCHANNELSPERROW) / constants::NADCMCM;
+    det = getDetector(sec, stack, layer);
+    rob = (mcmCol >= constants::NMCMROBINCOL) ? (row / constants::NMCMROBINROW) * 2 + 1 : (row / constants::NMCMROBINROW) * 2;
+    mcm = (row % constants::NMCMROBINROW) * constants::NMCMROBINCOL + (mcmCol % constants::NMCMROBINCOL);
+    channel = constants::NADCMCM - 1 - ((chamberIndex % constants::NCHANNELSPERROW) % constants::NADCMCM);
   }
 };
 

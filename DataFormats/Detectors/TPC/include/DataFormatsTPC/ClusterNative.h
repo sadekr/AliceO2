@@ -31,7 +31,7 @@ template <class T>
 class ConstMCTruthContainer;
 template <class T>
 class ConstMCTruthContainerView;
-}
+} // namespace dataformats
 } // namespace o2
 
 namespace o2
@@ -76,7 +76,7 @@ struct ClusterNative {
   GPUd() static float unpackPad(uint16_t pad) { return float(pad) * (1.f / scalePadPacked); }
   GPUd() static float unpackTime(uint32_t time) { return float(time) * (1.f / scaleTimePacked); }
 
-  GPUdDefault() ClusterNative() CON_DEFAULT;
+  GPUdDefault() ClusterNative() = default;
   GPUd() ClusterNative(uint32_t time, uint8_t flags, uint16_t pad, uint8_t sigmaTime, uint8_t sigmaPad, uint16_t qmax, uint16_t qtot) : padPacked(pad), sigmaTimePacked(sigmaTime), sigmaPadPacked(sigmaPad), qMax(qmax), qTot(qtot)
   {
     setTimePackedFlags(time, flags);
@@ -155,6 +155,17 @@ struct ClusterNative {
     } else {
       return (this->getFlags() < rhs.getFlags());
     }
+  }
+
+  GPUd() bool operator==(const ClusterNative& rhs) const
+  {
+    return this->getTimePacked() == rhs.getTimePacked() &&
+           this->padPacked == rhs.padPacked &&
+           this->sigmaTimePacked == rhs.sigmaTimePacked &&
+           this->sigmaPadPacked == rhs.sigmaPadPacked &&
+           this->qMax == rhs.qMax &&
+           this->qTot == rhs.qTot &&
+           this->getFlags() == rhs.getFlags();
   }
 };
 

@@ -8,12 +8,9 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#define BOOST_TEST_MODULE Test Framework DeviceSpec
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
 
 #include "Mocking.h"
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 #include "../src/DeviceSpecHelpers.h"
 #include "../src/SimpleResourceManager.h"
 #include "../src/ComputingResourceHelpers.h"
@@ -50,27 +47,30 @@ WorkflowSpec defineSimplePipelining()
   return result;
 }
 
-BOOST_AUTO_TEST_CASE(TimePipeliningSimple)
+TEST_CASE("TimePipeliningSimple")
 {
   auto workflow = defineSimplePipelining();
   std::vector<DeviceSpec> devices;
   auto configContext = makeEmptyConfigContext();
   auto channelPolicies = ChannelConfigurationPolicy::createDefaultPolicies(*configContext);
   auto completionPolicies = CompletionPolicy::createDefaultPolicies();
+  auto callbacksPolicies = CallbacksPolicy::createDefaultPolicies();
   std::vector<ComputingResource> resources = {ComputingResourceHelpers::getLocalhostResource()};
   SimpleResourceManager rm(resources);
-  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, devices, rm, "workflow-id");
-  BOOST_REQUIRE_EQUAL(devices.size(), 4);
+  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, callbacksPolicies, devices, rm, "workflow-id", *configContext);
+  REQUIRE(devices.size() == 4);
   auto& producer = devices[0];
   auto& layer0Consumer0 = devices[1];
   auto& layer0Consumer1 = devices[2];
   auto& layer1Consumer0 = devices[3];
-  BOOST_CHECK_EQUAL(producer.id, "A");
-  BOOST_CHECK_EQUAL(layer0Consumer0.id, "B_t0");
-  BOOST_CHECK_EQUAL(layer0Consumer1.id, "B_t1");
-  BOOST_CHECK_EQUAL(layer1Consumer0.id, "C");
+  REQUIRE(producer.id == "A");
+  REQUIRE(layer0Consumer0.id == "B_t0");
+  REQUIRE(layer0Consumer1.id == "B_t1");
+  REQUIRE(layer1Consumer0.id == "C");
 }
 
+namespace
+{
 // This is how you can define your processing in a declarative way
 WorkflowSpec defineDataProcessing()
 {
@@ -102,18 +102,20 @@ WorkflowSpec defineDataProcessing()
 
   return result;
 }
+} // namespace
 
-BOOST_AUTO_TEST_CASE(TimePipeliningFull)
+TEST_CASE("TimePipeliningFull")
 {
   auto workflow = defineDataProcessing();
   std::vector<DeviceSpec> devices;
   auto configContext = makeEmptyConfigContext();
   auto channelPolicies = ChannelConfigurationPolicy::createDefaultPolicies(*configContext);
   auto completionPolicies = CompletionPolicy::createDefaultPolicies();
+  auto callbacksPolicies = CallbacksPolicy::createDefaultPolicies();
   std::vector<ComputingResource> resources = {ComputingResourceHelpers::getLocalhostResource()};
   SimpleResourceManager rm(resources);
-  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, devices, rm, "workflow-id");
-  BOOST_REQUIRE_EQUAL(devices.size(), 7);
+  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, callbacksPolicies, devices, rm, "workflow-id", *configContext);
+  REQUIRE(devices.size() == 7);
   auto& producer = devices[0];
   auto& layer0Consumer0 = devices[1];
   auto& layer0Consumer1 = devices[2];
@@ -121,11 +123,11 @@ BOOST_AUTO_TEST_CASE(TimePipeliningFull)
   auto& layer1Consumer1 = devices[4];
   auto& layer1Consumer2 = devices[5];
   auto& layer2Consumer0 = devices[6];
-  BOOST_CHECK_EQUAL(producer.id, "A");
-  BOOST_CHECK_EQUAL(layer0Consumer0.id, "B_t0");
-  BOOST_CHECK_EQUAL(layer0Consumer1.id, "B_t1");
-  BOOST_CHECK_EQUAL(layer1Consumer0.id, "C_t0");
-  BOOST_CHECK_EQUAL(layer1Consumer1.id, "C_t1");
-  BOOST_CHECK_EQUAL(layer1Consumer2.id, "C_t2");
-  BOOST_CHECK_EQUAL(layer2Consumer0.id, "D");
+  REQUIRE(producer.id == "A");
+  REQUIRE(layer0Consumer0.id == "B_t0");
+  REQUIRE(layer0Consumer1.id == "B_t1");
+  REQUIRE(layer1Consumer0.id == "C_t0");
+  REQUIRE(layer1Consumer1.id == "C_t1");
+  REQUIRE(layer1Consumer2.id == "C_t2");
+  REQUIRE(layer2Consumer0.id == "D");
 }

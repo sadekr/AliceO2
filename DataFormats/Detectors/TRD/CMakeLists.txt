@@ -13,13 +13,18 @@ o2_add_library(DataFormatsTRD
                SOURCES src/TriggerRecord.cxx
                        src/LinkRecord.cxx
                        src/AngularResidHistos.cxx
+                       src/GainCalibHistos.cxx
+                       src/T0FitHistos.cxx
+                       src/DcsCcdbObjects.cxx
                        src/Tracklet64.cxx
                        src/RawData.cxx
+                       src/HelperMethods.cxx
                        src/RawDataStats.cxx
                        src/CompressedDigit.cxx
                        src/CTF.cxx
                        src/Digit.cxx
                        src/KrCluster.cxx
+                       src/NoiseCalibration.cxx
                PUBLIC_LINK_LIBRARIES O2::CommonDataFormat O2::SimulationDataFormat)
 
 o2_target_root_dictionary(DataFormatsTRD
@@ -30,14 +35,22 @@ o2_target_root_dictionary(DataFormatsTRD
                        include/DataFormatsTRD/RawData.h
                        include/DataFormatsTRD/Constants.h
                        include/DataFormatsTRD/CalibratedTracklet.h
+                       include/DataFormatsTRD/DcsCcdbObjects.h
                        include/DataFormatsTRD/AngularResidHistos.h
+                       include/DataFormatsTRD/GainCalibHistos.h
+                       include/DataFormatsTRD/T0FitHistos.h
                        include/DataFormatsTRD/HelperMethods.h
                        include/DataFormatsTRD/Hit.h
                        include/DataFormatsTRD/Digit.h
                        include/DataFormatsTRD/KrCluster.h
                        include/DataFormatsTRD/KrClusterTriggerRecord.h
+                       include/DataFormatsTRD/NoiseCalibration.h
+                       include/DataFormatsTRD/PHData.h
+                       include/DataFormatsTRD/RawDataStats.h
                        include/DataFormatsTRD/CTF.h
                        include/DataFormatsTRD/CalVdriftExB.h
+                       include/DataFormatsTRD/CalGain.h
+                       include/DataFormatsTRD/CalT0.h
                        include/DataFormatsTRD/SignalArray.h
                        include/DataFormatsTRD/CompressedDigit.h
                        include/DataFormatsTRD/CompressedHeader.h)
@@ -49,3 +62,11 @@ o2_add_test(Digit
             ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
             LABELS trd
 )
+
+o2_add_test(RawData
+            COMPONENT_NAME trd
+            PUBLIC_LINK_LIBRARIES O2::DataFormatsTRD
+            SOURCES test/testRawData.cxx
+            ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
+            LABELS trd
+            )

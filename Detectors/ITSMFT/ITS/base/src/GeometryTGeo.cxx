@@ -16,12 +16,17 @@
 
 // ATTENTION: In opposite to old AliITSgeomTGeo, all indices start from 0, not from 1!!!
 
+#include <fairlogger/Logger.h> // for LOG
 #include "ITSBase/GeometryTGeo.h"
 #include "DetectorsBase/GeometryManager.h"
 #include "ITSMFTBase/SegmentationAlpide.h"
 #include "MathUtils/Cartesian.h"
 
-#include "FairLogger.h" // for LOG
+#ifdef ENABLE_UPGRADES
+#include "ITS3Base/SpecsV2.h"
+#include "ITS3Base/SegmentationSuperAlpide.h"
+using SuperSegmentation = o2::its3::SegmentationSuperAlpide;
+#endif
 
 #include <TGeoBBox.h>         // for TGeoBBox
 #include <TGeoManager.h>      // for gGeoManager, TGeoManager
@@ -40,6 +45,7 @@
 #include <cctype>  // for isdigit
 #include <cstdio>  // for snprintf, NULL, printf
 #include <cstring> // for strstr, strlen
+#include <algorithm>
 
 using namespace TMath;
 using namespace o2::its;
@@ -50,7 +56,13 @@ using Segmentation = o2::itsmft::SegmentationAlpide;
 ClassImp(o2::its::GeometryTGeo);
 
 std::unique_ptr<o2::its::GeometryTGeo> GeometryTGeo::sInstance;
-o2::its::GeometryTGeo::~GeometryTGeo() = default;
+o2::its::GeometryTGeo::~GeometryTGeo()
+{
+  if (!mOwner) {
+    mOwner = true;
+    sInstance.release();
+  }
+}
 
 std::string GeometryTGeo::sVolumeName = "ITSV";               ///< Mother volume name
 std::string GeometryTGeo::sLayerName = "ITSULayer";           ///< Layer name
@@ -62,32 +74,39 @@ std::string GeometryTGeo::sChipName = "ITSUChip";             ///< Chip name
 std::string GeometryTGeo::sSensorName = "ITSUSensor";         ///< Sensor name
 std::string GeometryTGeo::sWrapperVolumeName = "ITSUWrapVol"; ///< Wrapper volume name
 
+const std::string GeometryTGeo::sLayerNameITS3 = "ITS3Layer";           ///< Layer name for ITS3
+const std::string GeometryTGeo::sHalfBarrelNameITS3 = "ITS3CarbonForm"; ///< HalfBarrel name for ITS3
+const std::string GeometryTGeo::sStaveNameITS3 = "ITS3Chip";            ///< Stave name for ITS3
+const std::string GeometryTGeo::sHalfStaveNameITS3 = "ITS3Segment";     ///< HalfStave name for ITS3
+const std::string GeometryTGeo::sModuleNameITS3 = "ITS3RSU";            ///< Module name for ITS3
+const std::string GeometryTGeo::sChipNameITS3 = "ITS3Tile";             ///< Chip name for ITS3
+const std::string GeometryTGeo::sSensorNameITS3 = "ITS3PixelArray";     ///< Sensor name for ITS3
+
 //__________________________________________________________________________
 GeometryTGeo::GeometryTGeo(bool build, int loadTrans) : o2::itsmft::GeometryTGeo(DetID::ITS)
 {
   // default c-tor, if build is true, the structures will be filled and the transform matrices
   // will be cached
   if (sInstance) {
-    LOG(FATAL) << "Invalid use of public constructor: o2::its::GeometryTGeo instance exists";
+    LOG(fatal) << "Invalid use of public constructor: o2::its::GeometryTGeo instance exists";
     // throw std::runtime_error("Invalid use of public constructor: o2::its::GeometryTGeo instance exists");
   }
 
-  for (int i = MAXLAYERS; i--;) {
-    mLayerToWrapper[i] = -1;
-  }
+  mLayerToWrapper.fill(-1);
   if (build) {
     Build(loadTrans);
   }
 }
 
 //__________________________________________________________________________
-void GeometryTGeo::adopt(GeometryTGeo* raw)
+void GeometryTGeo::adopt(GeometryTGeo* raw, bool canDelete)
 {
   // adopt the unique instance from external raw pointer (to be used only to read saved instance from file)
   if (sInstance) {
-    LOG(FATAL) << "No adoption: o2::its::GeometryTGeo instance exists";
+    LOG(fatal) << "No adoption: o2::its::GeometryTGeo instance exists";
   }
   sInstance = std::unique_ptr<o2::its::GeometryTGeo>(raw);
+  sInstance->mOwner = canDelete;
 }
 
 //__________________________________________________________________________
@@ -190,7 +209,7 @@ int GeometryTGeo::getModule(int index) const
   }
   index -= getFirstChipIndex(lay);
   index %= mNumberOfChipsPerStave[lay];
-  if (mNumberOfHalfStaves[lay]) {
+  if (mNumberOfHalfStaves[lay] != 0) {
     index %= mNumberOfChipsPerHalfStave[lay];
   }
   return index / mNumberOfChipsPerModule[lay];
@@ -273,54 +292,58 @@ bool GeometryTGeo::getChipId(int index, int& lay, int& hba, int& sta, int& hsta,
 }
 
 //__________________________________________________________________________
-const char* GeometryTGeo::composeSymNameLayer(int lr)
+const char* GeometryTGeo::composeSymNameITS(bool isITS3)
 {
-  return Form("%s/%s%d", composeSymNameITS(), getITSLayerPattern(), lr);
+  if (isITS3) {
+#ifdef ENABLE_UPGRADES
+    return o2::detectors::DetID(o2::detectors::DetID::IT3).getName();
+#endif
+  }
+
+  return o2::detectors::DetID(o2::detectors::DetID::ITS).getName();
 }
 
 //__________________________________________________________________________
-const char* GeometryTGeo::composeSymNameHalfBarrel(int lr, int hbarrel)
+const char* GeometryTGeo::composeSymNameLayer(int lr, bool isITS3)
 {
-  return hbarrel >= 0 ? Form("%s/%s%d", composeSymNameLayer(lr), getITSHalfBarrelPattern(), hbarrel)
+  return Form("%s/%s%d", composeSymNameITS(), isITS3 ? getITS3LayerPattern() : getITSLayerPattern(), lr);
+}
+
+//__________________________________________________________________________
+const char* GeometryTGeo::composeSymNameHalfBarrel(int lr, int hbarrel, bool isITS3)
+{
+  return hbarrel >= 0 ? Form("%s/%s%d", composeSymNameLayer(lr, isITS3), isITS3 ? getITS3HalfBarrelPattern() : getITSHalfBarrelPattern(), hbarrel)
                       : composeSymNameLayer(lr);
 }
 
 //__________________________________________________________________________
-const char* GeometryTGeo::composeSymNameStave(int lr, int hbarrel, int stave)
+const char* GeometryTGeo::composeSymNameStave(int lr, int hbarrel, int stave, bool isITS3)
 {
-  return Form("%s/%s%d", composeSymNameHalfBarrel(lr, hbarrel), getITSStavePattern(), stave);
+  return Form("%s/%s%d", composeSymNameHalfBarrel(lr, hbarrel, isITS3), isITS3 ? getITS3StavePattern() : getITSStavePattern(), stave);
 }
 
 //__________________________________________________________________________
-const char* GeometryTGeo::composeSymNameHalfStave(int lr, int hba, int stave, int substave)
+const char* GeometryTGeo::composeSymNameHalfStave(int lr, int hba, int stave, int substave, bool isITS3)
 {
-  return substave >= 0 ? Form("%s/%s%d", composeSymNameStave(lr, hba, stave), getITSHalfStavePattern(), substave)
-                       : composeSymNameStave(lr, hba, stave);
+  return substave >= 0 ? Form("%s/%s%d", composeSymNameStave(lr, hba, stave, isITS3), isITS3 ? getITS3HalfStavePattern() : getITSHalfStavePattern(), substave)
+                       : composeSymNameStave(lr, hba, stave, isITS3);
 }
 
 //__________________________________________________________________________
-const char* GeometryTGeo::composeSymNameModule(int lr, int hba, int stave, int substave, int mod)
+const char* GeometryTGeo::composeSymNameModule(int lr, int hba, int stave, int substave, int mod, bool isITS3)
 {
-  return mod >= 0 ? Form("%s/%s%d", composeSymNameHalfStave(lr, hba, stave, substave), getITSModulePattern(), mod)
-                  : composeSymNameHalfStave(lr, hba, stave, substave);
+  return mod >= 0 ? Form("%s/%s%d", composeSymNameHalfStave(lr, hba, stave, substave, isITS3), isITS3 ? getITS3ModulePattern() : getITSModulePattern(), mod)
+                  : composeSymNameHalfStave(lr, hba, stave, substave, isITS3);
 }
 
 //__________________________________________________________________________
-const char* GeometryTGeo::composeSymNameChip(int lr, int hba, int sta, int substave, int mod, int chip)
+const char* GeometryTGeo::composeSymNameChip(int lr, int hba, int sta, int substave, int mod, int chip, bool isITS3)
 {
-  return Form("%s/%s%d", composeSymNameModule(lr, hba, sta, substave, mod), getITSChipPattern(), chip);
+  return Form("%s/%s%d", composeSymNameModule(lr, hba, sta, substave, mod, isITS3), isITS3 ? getITS3ChipPattern() : getITSChipPattern(), chip);
 }
 
-//__________________________________________________________________________
-TGeoHMatrix* GeometryTGeo::extractMatrixSensor(int index) const
+TString GeometryTGeo::getMatrixPath(int index) const
 {
-  // extract matrix transforming from the PHYSICAL sensor frame to global one
-  // Note, the if the effective sensitive layer thickness is smaller than the
-  // total physical sensor tickness, this matrix is biased and connot be used
-  // directly for transformation from sensor frame to global one.
-  //
-  // Therefore we need to add a shift
-
   int lay, hba, stav, sstav, mod, chipInMod;
   getChipId(index, lay, hba, stav, sstav, mod, chipInMod);
 
@@ -332,42 +355,79 @@ TGeoHMatrix* GeometryTGeo::extractMatrixSensor(int index) const
     path += Form("%s%d_1/", getITSWrapVolPattern(), wrID);
   }
 
-  path +=
-    Form("%s%d_1/", GeometryTGeo::getITSLayerPattern(), lay);
+  if (!mIsLayerITS3[lay]) {
+    path +=
+      Form("%s%d_1/", getITSLayerPattern(), lay);
+    if (mNumberOfHalfBarrels > 0) {
+      path += Form("%s%d_%d/", getITSHalfBarrelPattern(), lay, hba);
+    }
+    path +=
+      Form("%s%d_%d/", getITSStavePattern(), lay, stav);
 
-  if (mNumberOfHalfBarrels > 0) {
-    path += Form("%s%d_%d/", GeometryTGeo::getITSHalfBarrelPattern(), lay, hba);
+    if (mNumberOfHalfStaves[lay] > 0) {
+      path += Form("%s%d_%d/", getITSHalfStavePattern(), lay, sstav);
+    }
+    if (mNumberOfModules[lay] > 0) {
+      path += Form("%s%d_%d/", getITSModulePattern(), lay, mod);
+    }
+    path += Form("%s%d_%d/%s%d_1", getITSChipPattern(), lay, chipInMod, getITSSensorPattern(), lay);
+  } else {
+    // hba = carbonform
+    // stav = 0
+    // sstav = segment
+    // mod = rsu
+    // chipInMod = tile
+    // sensor = pixelarray
+    path += Form("%s_0/", getITS3LayerPattern(lay));
+    path += Form("%s_%d/", getITS3CarbonFormPattern(lay), hba);
+    path += Form("%s_0/", getITS3ChipPattern(lay));
+    path += Form("%s_%d/", getITS3SegmentPattern(lay), sstav);
+    path += Form("%s_%d/", getITS3RSUPattern(lay), mod);
+    path += Form("%s_%d/", getITS3TilePattern(lay), chipInMod);
+    path += Form("%s_0", getITS3PixelArrayPattern(lay));
   }
-  path +=
-    Form("%s%d_%d/", GeometryTGeo::getITSStavePattern(), lay, stav);
+  return path;
+}
 
-  if (mNumberOfHalfStaves[lay] > 0) {
-    path += Form("%s%d_%d/", GeometryTGeo::getITSHalfStavePattern(), lay, sstav);
-  }
-  if (mNumberOfModules[lay] > 0) {
-    path += Form("%s%d_%d/", GeometryTGeo::getITSModulePattern(), lay, mod);
-  }
-  path +=
-    Form("%s%d_%d/%s%d_1", GeometryTGeo::getITSChipPattern(), lay, chipInMod, GeometryTGeo::getITSSensorPattern(), lay);
+//__________________________________________________________________________
+TGeoHMatrix* GeometryTGeo::extractMatrixSensor(int index) const
+{
+  // extract matrix transforming from the PHYSICAL sensor frame to global one
+  // Note, the if the effective sensitive layer thickness is smaller than the
+  // total physical sensor tickness, this matrix is biased and connot be used
+  // directly for transformation from sensor frame to global one.
+  //
+  // Therefore we need to add a shift
+  auto path = getMatrixPath(index);
 
   static TGeoHMatrix matTmp;
   gGeoManager->PushPath();
 
   if (!gGeoManager->cd(path.Data())) {
     gGeoManager->PopPath();
-    LOG(ERROR) << "Error in cd-ing to " << path.Data();
+    LOG(error) << "Error in cd-ing to " << path.Data();
     return nullptr;
   } // end if !gGeoManager
 
   matTmp = *gGeoManager->GetCurrentMatrix(); // matrix may change after cd
+
   // RSS
-  //  printf("%d/%d/%d %s\n",lay,stav,detInSta,path.Data());
-  //  mat->Print();
+  // printf("%d/%d/%d %s\n", lay, stav, detInSta, path.Data());
+  // matTmp.Print();
   // Restore the modeler state.
   gGeoManager->PopPath();
 
-  // account for the difference between physical sensitive layer (where charge collection is simulated) and effective sensor ticknesses
-  static TGeoTranslation tra(0., 0.5 * (Segmentation::SensorLayerThickness - Segmentation::SensorLayerThicknessEff), 0.);
+  static int chipInGlo{0};
+
+  // account for the difference between physical sensitive layer (where charge collection is simulated) and effective sensor thicknesses
+  double delta = Segmentation::SensorLayerThickness - Segmentation::SensorLayerThicknessEff;
+#ifdef ENABLE_UPGRADES
+  if (mIsLayerITS3[getLayer(index)]) {
+    delta = its3::SegmentationSuperAlpide::mSensorLayerThickness - its3::SegmentationSuperAlpide::mSensorLayerThicknessEff;
+  }
+#endif
+
+  static TGeoTranslation tra(0., 0.5 * delta, 0.);
 
   matTmp *= tra;
 
@@ -375,20 +435,34 @@ TGeoHMatrix* GeometryTGeo::extractMatrixSensor(int index) const
 }
 
 //__________________________________________________________________________
+const o2::math_utils::Transform3D GeometryTGeo::getT2LMatrixITS3(int isn, float alpha)
+{
+  // create for sensor isn the TGeo matrix for Tracking to Local frame transformations
+  static TGeoHMatrix t2l;
+  t2l.Clear();
+  t2l.RotateZ(alpha * RadToDeg()); // rotate in direction of normal to the tangent to the cylinder
+  const TGeoHMatrix& matL2G = getMatrixL2G(isn);
+  const auto& matL2Gi = matL2G.Inverse();
+  t2l.MultiplyLeft(&matL2Gi);
+  return Mat3D(t2l);
+}
+
+//__________________________________________________________________________
 void GeometryTGeo::Build(int loadTrans)
 {
   if (isBuilt()) {
-    LOG(WARNING) << "Already built";
+    LOG(warning) << "Already built";
     return; // already initialized
   }
 
-  if (!gGeoManager) {
+  if (gGeoManager == nullptr) {
     // RSTODO: in future there will be a method to load matrices from the CDB
-    LOG(FATAL) << "Geometry is not loaded";
+    LOG(fatal) << "Geometry is not loaded";
   }
 
+  mIsLayerITS3.fill(false);
   mNumberOfLayers = extractNumberOfLayers();
-  if (!mNumberOfLayers) {
+  if (mNumberOfLayers == 0) {
     return;
   }
 
@@ -417,9 +491,33 @@ void GeometryTGeo::Build(int loadTrans)
     numberOfChips += mNumberOfChipsPerLayer[i];
     mLastChipIndex[i] = numberOfChips - 1;
   }
+
+  LOGP(debug, "Summary of extracted Geometry:");
+  LOGP(debug, "  There are {} Layers and {} HalfBarrels", mNumberOfLayers, mNumberOfHalfBarrels);
+  for (int i = 0; i < mNumberOfLayers; i++) {
+    LOGP(debug, "    Layer {}: {:*^30}", i, "START");
+    LOGP(debug, "      - mNumberOfStaves={}", mNumberOfStaves[i]);
+    LOGP(debug, "        - mNumberOfChipsPerStave={}", mNumberOfChipsPerStave[i]);
+    LOGP(debug, "      - mNumberOfHalfStaves={}", mNumberOfHalfStaves[i]);
+    LOGP(debug, "        - mNumberOfChipsPerHalfStave={}", mNumberOfChipsPerHalfStave[i]);
+    LOGP(debug, "      - mNumberOfModules={}", mNumberOfModules[i]);
+    LOGP(debug, "        - mNumberOfChipsPerModules={}", mNumberOfChipsPerModule[i]);
+    LOGP(debug, "        - mNumberOfChipsPerLayer={}", mNumberOfChipsPerLayer[i]);
+    LOGP(debug, "        - mNumberOfChipsPerHalfBarrel={}", mNumberOfChipsPerHalfBarrel[i]);
+    LOGP(debug, "      - mLastChipIndex={}", mLastChipIndex[i]);
+    LOGP(debug, "    Layer {}: {:*^30}", i, "END");
+  }
+  LOGP(debug, "In total there {} chips registered", numberOfChips);
+
+#ifdef ENABLE_UPGRADES
+  if (std::any_of(mIsLayerITS3.cbegin(), mIsLayerITS3.cend(), [](auto b) { return b; })) {
+    LOGP(info, "Found active IT3 layers -> Renaming Detector ITS to IT3");
+    mDetID = DetID::IT3;
+  }
+#endif
+
   setSize(numberOfChips);
   fillTrackingFramesCache();
-  //
   fillMatrixCache(loadTrans);
 }
 
@@ -429,7 +527,7 @@ void GeometryTGeo::fillMatrixCache(int mask)
   // populate matrix cache for requested transformations
   //
   if (mSize < 1) {
-    LOG(WARNING) << "The method Build was not called yet";
+    LOG(warning) << "The method Build was not called yet";
     Build(mask);
     return;
   }
@@ -437,7 +535,7 @@ void GeometryTGeo::fillMatrixCache(int mask)
   // build matrices
   if ((mask & o2::math_utils::bit2Mask(o2::math_utils::TransformType::L2G)) && !getCacheL2G().isFilled()) {
     // Matrices for Local (Sensor!!! rather than the full chip) to Global frame transformation
-    LOG(INFO) << "Loading ITS L2G matrices from TGeo";
+    LOGP(info, "Loading {} L2G matrices from TGeo; there are {} matrices", getName(), mSize);
     auto& cacheL2G = getCacheL2G();
     cacheL2G.setSize(mSize);
 
@@ -449,7 +547,7 @@ void GeometryTGeo::fillMatrixCache(int mask)
 
   if ((mask & o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2L)) && !getCacheT2L().isFilled()) {
     // matrices for Tracking to Local (Sensor!!! rather than the full chip) frame transformation
-    LOG(INFO) << "Loading ITS T2L matrices from TGeo";
+    LOGP(info, "Loading {} T2L matrices from TGeo", getName());
     auto& cacheT2L = getCacheT2L();
     cacheT2L.setSize(mSize);
     for (int i = 0; i < mSize; i++) {
@@ -458,27 +556,32 @@ void GeometryTGeo::fillMatrixCache(int mask)
     }
   }
 
-  if ((mask & o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2G)) && !getCacheT2G().isFilled()) {
-    LOG(WARNING) << "It is faster to use 2D rotation for T2G instead of full Transform3D matrices";
-    // matrices for Tracking to Global frame transformation
-    LOG(INFO) << "Loading ITS T2G matrices from TGeo";
-    auto& cacheT2G = getCacheT2G();
-    cacheT2G.setSize(mSize);
-
-    for (int i = 0; i < mSize; i++) {
-      TGeoHMatrix& mat = createT2LMatrix(i);
-      mat.MultiplyLeft(extractMatrixSensor(i));
-      cacheT2G.setMatrix(Mat3D(mat), i);
-    }
-  }
-
   if ((mask & o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2GRot)) && !getCacheT2GRot().isFilled()) {
     // 2D rotation matrices for Tracking frame to Global rotations
-    LOG(INFO) << "Loading ITS T2G rotation 2D matrices";
+    LOGP(info, "Loading {} T2G rotation 2D matrices", getName());
     auto& cacheT2Gr = getCacheT2GRot();
     cacheT2Gr.setSize(mSize);
     for (int i = 0; i < mSize; i++) {
       cacheT2Gr.setMatrix(Rot2D(getSensorRefAlpha(i)), i);
+    }
+  }
+
+  if ((mask & o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2G)) && !getCacheT2G().isFilled()) {
+    LOG(debug) << "It is faster to use 2D rotation for T2G instead of full Transform3D matrices";
+    // matrices for Tracking to Global frame transformation
+    LOGP(info, "Creating {} T2G matrices from TGeo", getName());
+    auto& cacheT2G = getCacheT2G();
+    cacheT2G.setSize(mSize);
+
+    for (int i = 0; i < mSize; i++) {
+      /*
+  TGeoHMatrix& mat = createT2LMatrix(i);
+  mat.MultiplyLeft(extractMatrixSensor(i));
+      */
+      Rot2D r(getSensorRefAlpha(i));
+      Mat3D mat{};
+      mat.SetComponents(r.getCos(), -r.getSin(), 0., 0., r.getSin(), r.getCos(), 0., 0., 0., 0., 1., 0.);
+      cacheT2G.setMatrix(mat, i);
     }
   }
 }
@@ -503,44 +606,44 @@ int GeometryTGeo::extractNumberOfLayers()
   int numberOfLayers = 0;
 
   TGeoVolume* itsV = gGeoManager->GetVolume(getITSVolPattern());
-  if (!itsV) {
-    LOG(FATAL) << "ITS volume " << getITSVolPattern() << " is not in the geometry";
+  if (itsV == nullptr) {
+    LOG(fatal) << getName() << " volume " << getITSVolPattern() << " is not in the geometry";
   }
 
   // Loop on all ITSV nodes, count Layer volumes by checking names
   // Build on the fly layer - wrapper correspondence
   TObjArray* nodes = itsV->GetNodes();
   int nNodes = nodes->GetEntriesFast();
-
   for (int j = 0; j < nNodes; j++) {
     int lrID = -1;
-    TGeoNode* nd = (TGeoNode*)nodes->At(j);
+    auto nd = dynamic_cast<TGeoNode*>(nodes->At(j));
     const char* name = nd->GetName();
 
-    if (strstr(name, getITSLayerPattern())) {
+    if ((strstr(name, getITSLayerPattern()) != nullptr) || (strstr(name, getITS3LayerPattern()) != nullptr)) {
       numberOfLayers++;
       if ((lrID = extractVolumeCopy(name, GeometryTGeo::getITSLayerPattern())) < 0) {
-        LOG(FATAL) << "Failed to extract layer ID from the " << name;
-        exit(1);
+        if ((lrID = extractVolumeCopy(name, GeometryTGeo::getITS3LayerPattern())) < 0) {
+          LOG(fatal) << "Failed to extract layer ID from the " << name;
+        }
+        mIsLayerITS3[lrID] = true;
       }
-
-      mLayerToWrapper[lrID] = -1;                      // not wrapped
-    } else if (strstr(name, getITSWrapVolPattern())) { // this is a wrapper volume, may cointain layers
+      mLayerToWrapper[lrID] = -1;                                 // not wrapped
+    } else if (strstr(name, getITSWrapVolPattern()) != nullptr) { // this is a wrapper volume, may cointain layers
       int wrID = -1;
       if ((wrID = extractVolumeCopy(name, GeometryTGeo::getITSWrapVolPattern())) < 0) {
-        LOG(FATAL) << "Failed to extract wrapper ID from the " << name;
-        exit(1);
+        LOG(fatal) << "Failed to extract wrapper ID from the " << name;
       }
-
       TObjArray* nodesW = nd->GetNodes();
       int nNodesW = nodesW->GetEntriesFast();
 
       for (int jw = 0; jw < nNodesW; jw++) {
-        TGeoNode* ndW = (TGeoNode*)nodesW->At(jw);
-        if (strstr(ndW->GetName(), getITSLayerPattern())) {
-          if ((lrID = extractVolumeCopy(ndW->GetName(), GeometryTGeo::getITSLayerPattern())) < 0) {
-            LOG(FATAL) << "Failed to extract layer ID from the " << name;
-            exit(1);
+        auto ndW = dynamic_cast<TGeoNode*>(nodesW->At(jw))->GetName();
+        if ((strstr(ndW, getITSLayerPattern()) != nullptr) || (strstr(ndW, getITS3LayerPattern()) != nullptr)) {
+          if ((lrID = extractVolumeCopy(ndW, GeometryTGeo::getITSLayerPattern())) < 0) {
+            if ((lrID = extractVolumeCopy(ndW, GeometryTGeo::getITS3LayerPattern())) < 0) {
+              LOGP(fatal, "Failed to extract layer ID from wrapper volume '{}' from one of its nodes '{}'", name, ndW);
+            }
+            mIsLayerITS3[lrID] = true;
           }
           numberOfLayers++;
           mLayerToWrapper[lrID] = wrID;
@@ -566,23 +669,23 @@ int GeometryTGeo::extractNumberOfStaves(int lay) const
   int numberOfStaves = 0;
   char hbarnam[30];
   if (mNumberOfHalfBarrels == 0) {
-    snprintf(hbarnam, 30, "%s%d", getITSLayerPattern(), lay);
+    snprintf(hbarnam, 30, "%s%d", mIsLayerITS3[lay] ? getITS3LayerPattern() : getITSLayerPattern(), lay);
   } else {
-    snprintf(hbarnam, 30, "%s%d", getITSHalfBarrelPattern(), lay);
+    snprintf(hbarnam, 30, "%s%d", mIsLayerITS3[lay] ? getITS3HalfBarrelPattern() : getITSHalfBarrelPattern(), lay);
   }
   TGeoVolume* volHb = gGeoManager->GetVolume(hbarnam);
-  if (!volHb) {
-    LOG(FATAL) << "can't find " << hbarnam << " volume";
+  if (volHb == nullptr) {
+    LOGP(fatal, "Can't find '{}' volume (ITS3={})", hbarnam, mIsLayerITS3[lay]);
     return -1;
   }
 
   // Loop on all half barrel nodes, count Stave volumes by checking names
   int nNodes = volHb->GetNodes()->GetEntries();
   for (int j = 0; j < nNodes; j++) {
-    // LOG(INFO) << "L" << lay << " " << j << " of " << nNodes << " "
+    // LOG(info) << "L" << lay << " " << j << " of " << nNodes << " "
     //           << volHb->GetNodes()->At(j)->GetName() << " "
-    //           << getITSStavePattern() << " -> " << numberOfStaves;
-    if (strstr(volHb->GetNodes()->At(j)->GetName(), getITSStavePattern())) {
+    //           << mIsLayerITS3[lay] ? getITS3StavePattern() : getITSStavePattern() << " -> " << numberOfStaves;
+    if (strstr(volHb->GetNodes()->At(j)->GetName(), mIsLayerITS3[lay] ? getITS3StavePattern() : getITSStavePattern()) != nullptr) {
       numberOfStaves++;
     }
   }
@@ -597,15 +700,15 @@ int GeometryTGeo::extractNumberOfHalfStaves(int lay) const
   }
   int nSS = 0;
   char stavnam[30];
-  snprintf(stavnam, 30, "%s%d", getITSStavePattern(), lay);
+  snprintf(stavnam, 30, "%s%d", mIsLayerITS3[lay] ? getITS3StavePattern() : getITSStavePattern(), lay);
   TGeoVolume* volLd = gGeoManager->GetVolume(stavnam);
-  if (!volLd) {
-    LOG(FATAL) << "can't find volume " << stavnam;
+  if (volLd == nullptr) {
+    LOG(fatal) << "can't find volume " << stavnam;
   }
   // Loop on all stave nodes, count Chip volumes by checking names
   int nNodes = volLd->GetNodes()->GetEntries();
   for (int j = 0; j < nNodes; j++) {
-    if (strstr(volLd->GetNodes()->At(j)->GetName(), getITSHalfStavePattern())) {
+    if (strstr(volLd->GetNodes()->At(j)->GetName(), mIsLayerITS3[lay] ? getITS3HalfStavePattern() : getITSHalfStavePattern()) != nullptr) {
       nSS++;
     }
   }
@@ -623,11 +726,11 @@ int GeometryTGeo::extractNumberOfModules(int lay) const
   TGeoVolume* volLd = nullptr;
 
   if (!sHalfStaveName.empty()) {
-    snprintf(stavnam, 30, "%s%d", getITSHalfStavePattern(), lay);
+    snprintf(stavnam, 30, "%s%d", mIsLayerITS3[lay] ? getITS3HalfStavePattern() : getITSHalfStavePattern(), lay);
     volLd = gGeoManager->GetVolume(stavnam);
   }
   if (!volLd) { // no substaves, check staves
-    snprintf(stavnam, 30, "%s%d", getITSStavePattern(), lay);
+    snprintf(stavnam, 30, "%s%d", mIsLayerITS3[lay] ? getITS3StavePattern() : getITSStavePattern(), lay);
     volLd = gGeoManager->GetVolume(stavnam);
   }
   if (!volLd) {
@@ -640,7 +743,7 @@ int GeometryTGeo::extractNumberOfModules(int lay) const
   int nNodes = volLd->GetNodes()->GetEntries();
 
   for (int j = 0; j < nNodes; j++) {
-    if (strstr(volLd->GetNodes()->At(j)->GetName(), getITSModulePattern())) {
+    if (strstr(volLd->GetNodes()->At(j)->GetName(), mIsLayerITS3[lay] ? getITS3ModulePattern() : getITSModulePattern())) {
       nMod++;
     }
   }
@@ -650,6 +753,15 @@ int GeometryTGeo::extractNumberOfModules(int lay) const
 //__________________________________________________________________________
 int GeometryTGeo::extractNumberOfChipsPerModule(int lay, int& nrow) const
 {
+#ifdef ENABLE_UPGRADES
+  // FS: TODO
+  // For now we hardcode ITS3 number of chips is eq. to the number of tiles per RSU
+  // The test in the end does not work for ITS3.
+  if (mIsLayerITS3[lay]) {
+    nrow = o2::its3::constants::pixelarray::nRows;
+    return o2::its3::constants::rsu::nTiles;
+  }
+#endif
   int numberOfChips = 0;
   char stavnam[30];
   TGeoVolume* volLd = nullptr;
@@ -669,7 +781,7 @@ int GeometryTGeo::extractNumberOfChipsPerModule(int lay, int& nrow) const
     volLd = gGeoManager->GetVolume(stavnam);
   }
   if (!volLd) {
-    LOG(FATAL) << "can't find volume containing chips on layer " << lay;
+    LOG(fatal) << "can't find volume containing chips on layer " << lay;
   }
 
   // Loop on all stave nodes, count Chip volumes by checking names
@@ -680,10 +792,8 @@ int GeometryTGeo::extractNumberOfChipsPerModule(int lay, int& nrow) const
   double dx = -1, dz = -1;
 
   for (int j = 0; j < nNodes; j++) {
-    //    AliInfo(Form("L%d %d of %d %s %s ->
-    // %d",lay,j,nNodes,volLd->GetNodes()->At(j)->GetName(),GetITSChipPattern(),numberOfChips));
     TGeoNodeMatrix* node = (TGeoNodeMatrix*)volLd->GetNodes()->At(j);
-    if (!strstr(node->GetName(), getITSChipPattern())) {
+    if (strstr(node->GetName(), getITSChipPattern()) == nullptr) {
       continue;
     }
     node->LocalToMaster(loc, lab);
@@ -706,7 +816,7 @@ int GeometryTGeo::extractNumberOfChipsPerModule(int lay, int& nrow) const
       TGeoShape* chShape = node->GetVolume()->GetShape();
       TGeoBBox* bbox = dynamic_cast<TGeoBBox*>(chShape);
       if (!bbox) {
-        LOG(FATAL) << "Chip " << node->GetName() << " volume is of unprocessed shape " << chShape->IsA()->GetName();
+        LOG(fatal) << "Chip " << node->GetName() << " volume is of unprocessed shape " << chShape->IsA()->GetName();
       } else {
         dx = 2 * bbox->GetDX();
         dz = 2 * bbox->GetDZ();
@@ -719,9 +829,11 @@ int GeometryTGeo::extractNumberOfChipsPerModule(int lay, int& nrow) const
   nrow = TMath::Nint(spanX / dx + 1);
   int ncol = TMath::Nint(spanZ / dz + 1);
   if (nrow * ncol != numberOfChips) {
-    LOG(ERROR) << "Inconsistency between Nchips=" << numberOfChips << " and Nrow*Ncol=" << nrow << "*" << ncol << "->"
+    LOG(error) << "Inconsistency between Nchips=" << numberOfChips << " and Nrow*Ncol=" << nrow << "*" << ncol << "->"
                << nrow * ncol << "\n"
-               << "Extracted chip dimensions (x,z): " << dx << " " << dz << " Module Span: " << spanX << " " << spanZ;
+               << "Extracted chip dimensions (x,z): " << dx << " " << dz << " Module Span: " << spanX << " " << spanZ << "\n"
+               << "xmin=" << xmin << "   xmax=" << xmax
+               << "   zmin=" << zmin << "   zmax=" << zmax;
   }
   return numberOfChips;
 }
@@ -730,10 +842,10 @@ int GeometryTGeo::extractNumberOfChipsPerModule(int lay, int& nrow) const
 int GeometryTGeo::extractLayerChipType(int lay) const
 {
   char stavnam[30];
-  snprintf(stavnam, 30, "%s%d", getITSLayerPattern(), lay);
+  snprintf(stavnam, 30, "%s%d", mIsLayerITS3[lay] ? getITS3LayerPattern() : getITSLayerPattern(), lay);
   TGeoVolume* volLd = gGeoManager->GetVolume(stavnam);
   if (!volLd) {
-    LOG(FATAL) << "can't find volume " << stavnam;
+    LOG(fatal) << "can't find volume " << stavnam;
     return -1;
   }
   return volLd->GetUniqueID();
@@ -742,19 +854,21 @@ int GeometryTGeo::extractLayerChipType(int lay) const
 //__________________________________________________________________________
 void GeometryTGeo::Print(Option_t*) const
 {
-  printf("NLayers:%d NChips:%d\n", mNumberOfLayers, getNumberOfChips());
   if (!isBuilt()) {
+    LOGF(info, "Geometry not built yet!");
     return;
   }
 
+  LOGF(info, "Summary of GeometryTGeo: %s", getName());
+  LOGF(info, "NLayers:%d NChips:%d\n", mNumberOfLayers, getNumberOfChips());
   for (int i = 0; i < mNumberOfLayers; i++) {
-    printf(
-      "Lr%2d\tNStav:%2d\tNChips:%2d "
-      "(%dx%-2d)\tNMod:%d\tNSubSt:%d\tNSt:%3d\tChip#:%5d:%-5d\tWrapVol:%d\n",
-      i, mNumberOfStaves[i], mNumberOfChipsPerModule[i], mNumberOfChipRowsPerModule[i],
-      mNumberOfChipRowsPerModule[i] ? mNumberOfChipsPerModule[i] / mNumberOfChipRowsPerModule[i] : 0,
-      mNumberOfModules[i], mNumberOfHalfStaves[i], mNumberOfStaves[i], getFirstChipIndex(i), getLastChipIndex(i),
-      mLayerToWrapper[i]);
+    LOGF(info,
+         "Lr%2d\tNStav:%2d\tNChips:%2d "
+         "(%dx%-2d)\tNMod:%d\tNSubSt:%d\tNSt:%3d\tChip#:%5d:%-5d\tWrapVol:%d",
+         i, mNumberOfStaves[i], mNumberOfChipsPerModule[i], mNumberOfChipRowsPerModule[i],
+         mNumberOfChipRowsPerModule[i] ? mNumberOfChipsPerModule[i] / mNumberOfChipRowsPerModule[i] : 0,
+         mNumberOfModules[i], mNumberOfHalfStaves[i], mNumberOfStaves[i], getFirstChipIndex(i), getLastChipIndex(i),
+         mLayerToWrapper[i]);
   }
 }
 
@@ -763,8 +877,29 @@ void GeometryTGeo::extractSensorXAlpha(int isn, float& x, float& alp)
 {
   // calculate r and phi of the impact of the normal on the sensor
   // (i.e. phi of the tracking frame alpha and X of the sensor in this frame)
-  double locA[3] = {-100., 0., 0.}, locB[3] = {100., 0., 0.}, gloA[3], gloB[3];
+
   const TGeoHMatrix* matL2G = extractMatrixSensor(isn);
+  double locA[3] = {-100., 0., 0.}, locB[3] = {100., 0., 0.}, gloA[3], gloB[3];
+  int iLayer = getLayer(isn);
+
+#ifdef ENABLE_UPGRADES
+  if (mIsLayerITS3[iLayer]) {
+    // We need to calcualte the line tangent at the mid-point in the geometry
+    const auto radius = o2::its3::constants::radii[iLayer];
+    const auto phi1 = o2::its3::constants::tile::width / radius;
+    const auto phi2 = o2::its3::constants::pixelarray::width / radius + phi1;
+    const auto phi3 = (phi2 - phi1) / 2.; // mid-point in phi
+    const auto x = radius * std::cos(phi3);
+    const auto y = radius * std::sin(phi3);
+    // For the tangent we make the parametric line equation y = m * x - c
+    const auto m = x / y;
+    const auto c = y - m * x;
+    // Now we can given any x calulate points along this line, we pick points far away,
+    // the calculation of the normal should work then below.
+    locA[1] = m * locA[0] + c;
+    locB[1] = m * locB[0] + c;
+  }
+#endif
 
   matL2G->LocalToMaster(locA, gloA);
   matL2G->LocalToMaster(locB, gloB);

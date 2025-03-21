@@ -35,6 +35,7 @@ def mainDataModel(DMs, initCard, todo=0):
         if todo == 1:
           print("  name: ", fileName)
         dm = O2IF.datamodel(mainProducer, ["", "", mainProducer, ptype, dmname], fileName, initCard)
+        dm.setTableCategories(subDM)
         break
 
   return dm
@@ -152,8 +153,11 @@ def setProducers(O2Physicsdir, cerelations, dm, subDM, todo=0):
   # update the data model accordingly using setProducer
   for codefile in codefiles:
     codefile = codefile.rstrip("\n")
-  
+
     CErelation = cerelations.getExecutable(codefile)
+    if (len(CErelation) != 5):
+      print("Problem with CE relation for codeFile: ", codefile)
+      continue
     codeFile = O2CF.codeFile(codefile)
     for tableName in codeFile.tableNames:
       # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -165,7 +169,7 @@ def setProducers(O2Physicsdir, cerelations, dm, subDM, todo=0):
       #
       # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
       dm.setProducer(CErelation, tableName)
-  
+
   return True
 
 # -----------------------------------------------------------------------------

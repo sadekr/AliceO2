@@ -22,6 +22,7 @@
 #include "DataFormatsTPC/Defs.h"
 #include "TPCCalibration/IDCContainer.h"
 #include "TPCCalibration/IDCFourierTransformBase.h"
+#include "CommonConstants/LHCConstants.h"
 
 using fftwf_plan = struct fftwf_plan_s*;
 using fftwf_complex = float[2];
@@ -42,7 +43,7 @@ class IDCFourierTransform : public IDCFourierTransformBase<Type>
   /// \param timeFrames number of time frames which will be stored
   /// \param nFourierCoefficientsStore number of courier coefficients (real+imag) which will be stored (the maximum can be 'rangeIDC + 2', should be an even number when using naive FT). If less than maximum is setn the inverse fourier transform will not work.
   template <bool IsEnabled = true, typename std::enable_if<(IsEnabled && (std::is_same<Type, IDCFourierTransformBaseAggregator>::value)), int>::type = 0>
-  IDCFourierTransform(const unsigned int rangeIDC = 200, const unsigned int timeFrames = 2000, const unsigned int nFourierCoefficientsStore = 200 + 2) : IDCFourierTransformAggregator(rangeIDC, timeFrames), mFourierCoefficients{timeFrames, nFourierCoefficientsStore}, mVal1DIDCs(sNThreads), mCoefficients(sNThreads)
+  IDCFourierTransform(const unsigned int rangeIDC = 200, const unsigned int nFourierCoefficientsStore = 200 + 2) : IDCFourierTransformAggregator(rangeIDC), mFourierCoefficients{1, nFourierCoefficientsStore}, mVal1DIDCs(sNThreads), mCoefficients(sNThreads)
   {
     initFFTW3Members();
   };
@@ -71,12 +72,23 @@ class IDCFourierTransform : public IDCFourierTransformBase<Type>
     sNThreads = nThreads;
   }
 
-  /// calculate fourier coefficients
-  void calcFourierCoefficients() { sFftw ? calcFourierCoefficientsFFTW3() : calcFourierCoefficientsNaive(); }
+  /// calculate fourier coefficients for one TPC side
+  template <bool IsEnabled = true, typename std::enable_if<(IsEnabled && (std::is_same<Type, IDCFourierTransformBaseAggregator>::value)), int>::type = 0>
+  void calcFourierCoefficients(const unsigned int timeFrames = 2000)
+  {
+    mFourierCoefficients.resize(timeFrames);
+    sFftw ? calcFourierCoefficientsFFTW3() : calcFourierCoefficientsNaive();
+  }
+
+  /// calculate fourier coefficients for one TPC side
+  template <bool IsEnabled = true, typename std::enable_if<(IsEnabled && (std::is_same<Type, IDCFourierTransformBaseEPN>::value)), int>::type = 0>
+  void calcFourierCoefficients()
+  {
+    sFftw ? calcFourierCoefficientsFFTW3() : calcFourierCoefficientsNaive();
+  }
 
   /// get IDC0 values from the inverse fourier transform. Can be used for debugging. std::vector<std::vector<float>>: first vector interval second vector IDC0 values
-  /// \param side TPC side
-  std::vector<std::vector<float>> inverseFourierTransform(const o2::tpc::Side side) const { return sFftw ? inverseFourierTransformFFTW3(side) : inverseFourierTransformNaive(side); }
+  std::vector<std::vector<float>> inverseFourierTransform() const { return sFftw ? inverseFourierTransformFFTW3() : inverseFourierTransformNaive(); }
 
   /// \return returns number of IDCs for each interval which will be used to calculate the fourier coefficients
   unsigned int getrangeIDC() const { return this->mRangeIDC; }
@@ -102,8 +114,20 @@ class IDCFourierTransform : public IDCFourierTransformBase<Type>
   /// printing information about the algorithms which are used by FFTW for debugging e.g. seeing if SIMD instructions will be used
   void printFFTWPlan() const;
 
+  /// return the frequencies and the magnitude of the frequency. std::pair of <frequency, magnitude>
+  /// \param samplingFrequency sampling frequency of the signal in Hz (default is IDC sampling rate in Hz)
+  std::vector<std::pair<float, float>> getFrequencies(const float samplingFrequency = getSamplingFrequencyIDCHz()) const { return getFrequencies(mFourierCoefficients, samplingFrequency); }
+
+  /// return the frequencies and the magnitude of the frequency
+  /// \param coeff fourier coefficients
+  /// \param samplingFrequency sampling frequency of the signal in Hz (default is IDC sampling rate in Hz)
+  static std::vector<std::pair<float, float>> getFrequencies(const FourierCoeff& coeff, const float samplingFrequency = getSamplingFrequencyIDCHz());
+
+  /// \return returns sampling frequency of IDCs in Hz
+  static float getSamplingFrequencyIDCHz() { return 1e6 / (12 * o2::constants::lhc::LHCOrbitMUS); }
+
  private:
-  FourierCoeff mFourierCoefficients;         ///< fourier coefficients. side -> interval -> coefficient
+  FourierCoeff mFourierCoefficients;         ///< fourier coefficients. interval -> coefficient
   inline static int sFftw{1};                ///< using fftw or naive approach for calculation of fourier coefficients
   inline static int sNThreads{1};            ///< number of threads which are used during the calculation of the fourier coefficients
   fftwf_plan mFFTWPlan{nullptr};             ///<! FFTW plan which is used during the ft
@@ -114,29 +138,18 @@ class IDCFourierTransform : public IDCFourierTransformBase<Type>
   void calcFourierCoefficientsNaive();
 
   /// calculate fourier coefficients
-  /// \param side TPC side
-  void calcFourierCoefficientsNaive(const o2::tpc::Side side);
-
-  /// calculate fourier coefficients
   void calcFourierCoefficientsFFTW3();
 
-  /// calculate fourier coefficients using FFTW3 package
   /// get IDC0 values from the inverse fourier transform. Can be used for debugging. std::vector<std::vector<float>>: first vector interval second vector IDC0 values
-  /// \param side TPC side
-  void calcFourierCoefficientsFFTW3(const o2::tpc::Side side);
-
-  /// get IDC0 values from the inverse fourier transform. Can be used for debugging. std::vector<std::vector<float>>: first vector interval second vector IDC0 values
-  /// \param side TPC side
-  std::vector<std::vector<float>> inverseFourierTransformNaive(const o2::tpc::Side side) const;
+  std::vector<std::vector<float>> inverseFourierTransformNaive() const;
 
   /// get IDC0 values from the inverse fourier transform using FFTW3. Can be used for debugging. std::vector<std::vector<float>>: first vector interval second vector IDC0 values
-  /// \param side TPC side
-  std::vector<std::vector<float>> inverseFourierTransformFFTW3(const o2::tpc::Side side) const;
+  std::vector<std::vector<float>> inverseFourierTransformFFTW3() const;
 
   /// divide coefficients by number of IDCs used
-  void normalizeCoefficients(const o2::tpc::Side side)
+  void normalizeCoefficients()
   {
-    std::transform(mFourierCoefficients.mFourierCoefficients[side].begin(), mFourierCoefficients.mFourierCoefficients[side].end(), mFourierCoefficients.mFourierCoefficients[side].begin(), [norm = this->mRangeIDC](auto& val) { return val / norm; });
+    std::transform(mFourierCoefficients.mFourierCoefficients.begin(), mFourierCoefficients.mFourierCoefficients.end(), mFourierCoefficients.mFourierCoefficients.begin(), [norm = this->mRangeIDC](auto& val) { return val / norm; });
   };
 
   /// \return returns maximum numbers of stored real/imag fourier coeffiecients
@@ -146,7 +159,7 @@ class IDCFourierTransform : public IDCFourierTransformBase<Type>
   void initFFTW3Members();
 
   /// performing of ft using FFTW
-  void fftwLoop(const std::vector<float>& idcOneExpanded, const std::vector<unsigned int>& offsetIndex, const unsigned int interval, const o2::tpc::Side side, const unsigned int thread);
+  void fftwLoop(const std::vector<float>& idcOneExpanded, const std::vector<unsigned int>& offsetIndex, const unsigned int interval, const unsigned int thread);
 
   ClassDefNV(IDCFourierTransform, 1)
 };

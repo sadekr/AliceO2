@@ -16,9 +16,6 @@
 #define GPUO2INTERFACEDisplay_H
 
 // Some defines denoting that we are compiling for O2
-#ifndef GPUCA_HAVE_O2HEADERS
-#define GPUCA_HAVE_O2HEADERS
-#endif
 #ifndef GPUCA_TPC_GEOMETRY_O2
 #define GPUCA_TPC_GEOMETRY_O2
 #endif
@@ -28,30 +25,34 @@
 
 #include <memory>
 #include <vector>
+#include "GPUDataTypes.h"
 
 namespace o2::gpu
 {
-class GPUDisplay;
+class GPUDisplayInterface;
 class GPUQA;
 struct GPUParam;
 struct GPUTrackingInOutPointers;
 struct GPUO2InterfaceConfiguration;
-class GPUDisplayBackend;
+struct GPUSettingsGRP;
+class GPUDisplayFrontendInterface;
 class GPUO2InterfaceDisplay
 {
  public:
   GPUO2InterfaceDisplay(const GPUO2InterfaceConfiguration* config = nullptr);
   ~GPUO2InterfaceDisplay();
 
-  int startDisplay();
-  int show(const GPUTrackingInOutPointers* ptrs);
-  int endDisplay();
+  void UpdateCalib(const GPUCalibObjectsConst* calib);
+  void UpdateGRP(const GPUSettingsGRP* grp);
+  int32_t startDisplay();
+  int32_t show(const GPUTrackingInOutPointers* ptrs);
+  int32_t endDisplay();
 
  private:
-  std::unique_ptr<GPUDisplay> mDisplay;
+  std::unique_ptr<GPUDisplayInterface> mDisplay;
   std::unique_ptr<GPUQA> mQA;
   std::unique_ptr<GPUParam> mParam;
-  std::unique_ptr<GPUDisplayBackend> mBackend;
+  std::unique_ptr<GPUDisplayFrontendInterface> mFrontend;
   std::unique_ptr<GPUO2InterfaceConfiguration> mConfig;
 };
 } // namespace o2::gpu

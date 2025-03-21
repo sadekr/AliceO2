@@ -17,12 +17,12 @@ jobs:
     if: github.repository == 'AliceO2Group/AliceO2'
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python 3.7
-      uses: actions/setup-python@v1
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.7
-    - uses: actions/cache@v2
+        python-version: '3.10'
+    - uses: actions/cache@v4
       name: Configure pip caching
       with:
         path: ~/.cache/pip
@@ -81,7 +81,7 @@ jobs:
       run: |
         set -x
         mkdir -p doc/data
-        # We create new files once per month, mostly so that 
+        # We create new files once per month, mostly so that
         # we can keep the query results small. It does not
         # matter if we get results from different months,
         # as what matters is how we merge them.
@@ -96,7 +96,6 @@ jobs:
         #        being published
         LAST_RELEASE="${{ github.event.inputs.LAST_RELEASE_DATE }}"
         MERGED_AFTER=${LAST_RELEASE:-$(date -v -14d +%Y-%m-%d)}
-        
         # Here we convert all the json files to per subsystem
         # logs, using the MERGED_AFTER date to further filter them.
         # Notice we can have duplicates in each file,
@@ -106,7 +105,7 @@ jobs:
         for f in doc/data/*_prs.json; do
           for x in Algorithm Analysis Common DataFormats Detectors EventVisualisation Examples Framework Generators Steer Testing Utilities; do
             cat $f | jq ".repository.pullRequests.edges[].node | select(.files.edges[].node.path | test(\"$x\")) | del(.files) | select(.state == \"MERGED\" and .mergedAt >= \"${MERGED_AFTER}\")" > /tmp/${x}_prs.json
-            if [ ! X`jq -s length /tmp/${x}_prs.json` = X0 ]; then 
+            if [ ! X`jq -s length /tmp/${x}_prs.json` = X0 ]; then
               cat /tmp/${x}_prs.json | jq -r '"- [#\(.number)](https://github.com/AliceO2Group/AliceO2/pull/\(.number)) \(.mergedAt | split("T")[0]): \(.title) by [@\(.author.login)](https://github.com/\(.author.login))"' | sort -u >> /tmp/${x}_prs.md
             fi
           done
@@ -127,11 +126,6 @@ jobs:
         git config --global user.name "GitHub Action Bot"
         git commit -m "Updated README" -a || echo "No changes to commit"
         git push origin HEAD:changelog -f
-        GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}  \
-          hub pull-request -f -b dev -h changelog \
-              --no-edit --no-maintainer-edits     \
-              'Auto-generated changelog'          \
-              -m 'The following changelog has been automatically generated.' ||
-            # If the PR already exists, the force-push will have updated it.
-            # It's fine if this step fails.
-            true
+        # If the PR already exists, the force-push will have updated it.
+        # It's fine if this step fails.
+        GH_TOKEN=${{ secrets.GITHUB_TOKEN }} gh pr create -B dev -H changelog -t 'Auto-generated changelog' -b 'The following changelog has been automatically generated.' || true

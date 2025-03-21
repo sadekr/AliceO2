@@ -23,6 +23,7 @@
 #include "Headers/DataHeader.h"
 #include "ITSMFTReconstruction/RUInfo.h"
 #include "DetectorsCommonDataFormats/DetID.h"
+#include "Framework/Logger.h"
 
 namespace o2
 {
@@ -34,6 +35,15 @@ namespace itsmft
 class ChipMappingITS
 {
  public:
+  struct Overlaps {
+    enum OverlappingRow : signed char { NONE = -1,
+                                        LowRow = 0,
+                                        HighRow = 1,
+                                        NSides = 2 };
+    int16_t rowSide[2] = {NONE, NONE}; // chip overlapping from low/high row side
+    OverlappingRow rowSideOverlap[2] = {NONE, NONE};
+  };
+
   ///< these public methods must be defined in the mapping class for raw data encoding/decoding
   ChipMappingITS();
   ~ChipMappingITS() = default;
@@ -131,10 +141,65 @@ class ChipMappingITS
     }
   }
 
-  ///< get chip global SW ID from chipID on module, cable SW ID and stave (RU) info
-  uint16_t getGlobalChipID(uint16_t chOnModuleHW, int cableHW, const RUInfo& ruInfo) const
+  ///< get chipID on module from chip global SW ID, cable SW ID and stave (RU) info
+  uint16_t getLocalChipID(uint16_t globalID, int cableHW, const RUInfo& ruInfo)
+    const
   {
-    return ruInfo.firstChipIDSW + mCableHWFirstChip[ruInfo.ruType][cableHW] + chipModuleIDHW2SW(ruInfo.ruType, chOnModuleHW);
+    if (cableHW <= MaxHWCableID[ruInfo.ruType] && globalID != 0xffff) {
+      uint16_t chipOnRU = globalID - ruInfo.firstChipIDSW;
+      switch (ruInfo.ruType) {
+        case IB:
+          return chipOnRU;
+        case MB:
+          for (int ihw = 0; ihw < 15; ihw++) {
+            if (HWCableHWChip2ChipOnRU_MB[cableHW][ihw] == chipOnRU)
+              return ihw;
+          }
+          break;
+        case OB:
+          for (int ihw = 0; ihw < 15; ihw++) {
+            if (HWCableHWChip2ChipOnRU_OB[cableHW][ihw] == chipOnRU)
+              return ihw;
+          }
+          break;
+      }
+    }
+    return 0xffff;
+  }
+
+  ///< get chip global SW ID from chipID on module, cable SW ID and stave (RU)
+  /// info
+  uint16_t getGlobalChipID(uint16_t chOnModuleHW, int cableHW,
+                           const RUInfo& ruInfo) const
+  {
+    if (chOnModuleHW < MaxHWChipIDPerModuleSB[ruInfo.ruType] &&
+        cableHW <= MaxHWCableID[ruInfo.ruType]) {
+      uint16_t chipOnRU = 0xff;
+      switch (ruInfo.ruType) {
+        case IB:
+          if (cableHW == chOnModuleHW)
+            chipOnRU = cableHW;
+          break;
+        case MB:
+          chipOnRU = HWCableHWChip2ChipOnRU_MB[cableHW][chOnModuleHW];
+          break;
+        case OB:
+          chipOnRU = HWCableHWChip2ChipOnRU_OB[cableHW][chOnModuleHW];
+          break;
+      }
+      return chipOnRU < 0xff ? ruInfo.firstChipIDSW + chipOnRU : 0xffff;
+    }
+    return 0xffff;
+  }
+
+  ///< get chip global SW ID from Layer, abs Stave, module in Stave and chipID_on_module SW IDs
+  uint16_t getGlobalChipIDSW(int lay, int staSW, int modSW, int chipInModSW) const
+  {
+    uint16_t id = getFirstChipsOnLayer(lay) + (staSW - getFirstStavesOnLr(lay)) * NChipsPerStaveSB[RUTypeLr[lay]] + chipInModSW;
+    if (RUTypeLr[lay] != 0) {
+      id += modSW * NChipsPerModuleSB[RUTypeLr[lay]];
+    }
+    return id;
   }
 
   ///< get SW id of the RU from RU HW id
@@ -174,7 +239,7 @@ class ChipMappingITS
   uint8_t cableHW2Pos(uint8_t ruType, uint8_t hwid) const { return mCableHW2Pos[ruType][hwid]; }
 
   ///< convert HW cable ID to SW ID for given RU type (see ChipOnRUInfo.cableSW explanation)
-  uint8_t cableHW2SW(uint8_t ruType, uint8_t hwid) const { return mCableHW2SW[ruType][hwid]; }
+  uint8_t cableHW2SW(uint8_t ruType, uint8_t hwid) const { return hwid < mCableHW2SW[ruType].size() ? mCableHW2SW[ruType][hwid] : 0xff; }
 
   ///< convert cable iterator ID to the position on the ActiveLanes word in the GBT.header for given RU type; MFT lanes position compatible
   uint8_t cablePos(uint8_t ruType, uint8_t id) const { return mCablePos[ruType][id]; }
@@ -229,6 +294,22 @@ class ChipMappingITS
     return sid + ruOnLr;
   }
 
+  static constexpr int getLayer(int chipSW)
+  {
+    int i = 0;
+    do {
+      if (chipSW < FirstChipsOnLr[i] + NChipsOnLr[i]) {
+        break;
+      }
+    } while (++i < NLayers);
+    return i;
+  }
+  static constexpr int getNModulesPerStave(int ruType) { return NModulesPerStaveSB[ruType]; }
+  static constexpr int getNChipsOnLayer(int lr) { return NChipsOnLr[lr]; }
+  static constexpr int getFirstChipsOnLayer(int lr) { return FirstChipsOnLr[lr]; }
+
+  std::vector<Overlaps> getOverlapsInfo() const;
+
   // sub-barrel types, their number, N layers, Max N GBT Links per RU
   static constexpr int IB = 0, MB = 1, OB = 2, NSubB = 3, NLayers = 7, NLinks = 3;
 
@@ -239,10 +320,13 @@ class ChipMappingITS
   static constexpr std::array<int, NSubB> NChipsPerCableSB = {1, 7, 7};
 
   ///< N modules along the stave (or halfstave..)
-  static constexpr std::array<int, NSubB> NModulesAlongStaveSB = {9, 4, 7};
+  static constexpr std::array<int, NSubB> NModulesAlongStaveSB = {1, 4, 7};
 
   ///< N chips per module of each sub-barrel
   static constexpr std::array<int, NSubB> NChipsPerModuleSB = {9, 14, 14};
+
+  ///< Max HW chip ID
+  static constexpr std::array<int, NSubB> MaxHWChipIDPerModuleSB = {9, 15, 15};
 
   ///< N cables per module of each sub-barrel
   static constexpr std::array<int, NSubB> NCablesPerModule = {9, 2, 2}; // NChipsPerModuleSB[]/NChipsPerCableSB[]
@@ -255,6 +339,12 @@ class ChipMappingITS
 
   ///< number of staves per layer
   static constexpr std::array<int, NLayers> FirstStaveOnLr = {0, 12, 28, 48, 72, 102, 144};
+
+  ///< number of chips per layer
+  static constexpr std::array<int, NLayers> NChipsOnLr = {108, 144, 180, 2688, 3360, 8232, 9408};
+
+  ///< 1st chipID on layer
+  static constexpr std::array<int, NLayers> FirstChipsOnLr = {0, 108, 252, 432, 3120, 6480, 14712};
 
   ///< RU types for each layer
   static constexpr std::array<uint8_t, NLayers> RUTypeLr = {IB, IB, IB, MB, MB, OB, OB};
@@ -291,7 +381,7 @@ class ChipMappingITS
   static constexpr std::uint8_t ChipOBModSW2HW[14] = {0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14};
   // HW ID -> SW ID within the module
   static constexpr std::uint8_t ChipOBModHW2SW[15] = {0, 1, 2, 3, 4, 5, 6, 255, 7, 8, 9, 10, 11, 12, 13};
-
+  static constexpr std::array<int, NSubB> MaxHWCableID = {8, 27, 30};
   /// info per stave
   std::array<RUInfo, NStavesSB[IB] + NStavesSB[MB] + NStavesSB[OB]> mStavesInfo;
   std::vector<uint8_t> mFEEId2RUSW; // HW RU ID -> SW ID conversion
@@ -306,6 +396,8 @@ class ChipMappingITS
   std::vector<uint8_t> mCableHWFirstChip[NSubB]; ///< 1st chip of module (relative to the 1st chip of the stave) served by each cable
 
   std::array<int, NSubB> mCablesOnStaveSB = {0}; ///< pattern of cables per stave of sub-barrel
+  std::array<std::array<uint8_t, 15>, MaxHWCableID[MB] + 1> HWCableHWChip2ChipOnRU_MB; // mapping from HW cable ID / HW chip ID to Chip on RU, 255 means NA
+  std::array<std::array<uint8_t, 15>, MaxHWCableID[OB] + 1> HWCableHWChip2ChipOnRU_OB; // mapping from HW cable ID / HW chip ID to Chip on RU, 255 means NA
 
   ClassDefNV(ChipMappingITS, 1);
 };

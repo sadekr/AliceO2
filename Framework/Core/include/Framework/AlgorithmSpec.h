@@ -44,24 +44,13 @@ struct AlgorithmSpec {
   using ProcessCallback = std::function<void(ProcessingContext&)>;
   using InitCallback = std::function<ProcessCallback(InitContext&)>;
   using ErrorCallback = std::function<void(ErrorContext&)>;
+  using InitErrorCallback = std::function<void(InitErrorContext&)>;
 
-  static AlgorithmSpec dummyAlgorithm()
-  {
-    return AlgorithmSpec{ProcessCallback{nullptr}};
-  }
+  static AlgorithmSpec dummyAlgorithm();
+  static ErrorCallback& emptyErrorCallback();
+  static InitErrorCallback& emptyInitErrorCallback();
 
-  static ErrorCallback& emptyErrorCallback()
-  {
-    static ErrorCallback callback = nullptr;
-    return callback;
-  }
-
-  AlgorithmSpec()
-    : onInit{nullptr},
-      onProcess{nullptr},
-      onError{nullptr}
-  {
-  }
+  AlgorithmSpec() = default;
 
   AlgorithmSpec(AlgorithmSpec&&) = default;
   AlgorithmSpec(const AlgorithmSpec&) = default;
@@ -71,28 +60,47 @@ struct AlgorithmSpec {
   AlgorithmSpec(ProcessCallback process, ErrorCallback& error = emptyErrorCallback())
     : onInit{nullptr},
       onProcess{process},
-      onError{error}
+      onError{error},
+      onInitError{nullptr}
   {
   }
 
-  AlgorithmSpec(InitCallback init, ErrorCallback& error = emptyErrorCallback())
+  AlgorithmSpec(InitCallback init, ErrorCallback& error = emptyErrorCallback(), InitErrorCallback& initError = emptyInitErrorCallback())
     : onInit{init},
       onProcess{nullptr},
-      onError{error}
+      onError{error},
+      onInitError{initError}
   {
   }
 
   InitCallback onInit = nullptr;
   ProcessCallback onProcess = nullptr;
   ErrorCallback onError = nullptr;
+  InitErrorCallback onInitError = nullptr;
 };
 
 /// Helper class for an algorithm which is loaded as a plugin.
 struct AlgorithmPlugin {
-  virtual AlgorithmSpec create() = 0;
+  virtual AlgorithmSpec create(ConfigContext const&) = 0;
+};
+// Allow fetching inputs from the context using a string literal.
+template <StringLiteral lit, typename T>
+struct Input {
+  // The size of the string is available as a constant expression.
+  static constexpr auto size = sizeof(lit.value);
+  // and so is the string's content.
+  static constexpr auto contents = lit.value;
+  ProcessingContext& ctx;
+  Input(ProcessingContext& c) : ctx(c)
+  {
+  }
+  operator T const&() const
+  {
+    return ctx.inputs().template get<T>(lit.value);
+  }
 };
 
-template <typename T>
+template <typename T, typename S = std::void_t<>>
 struct ContextElementTraits {
   static decltype(auto) get(ProcessingContext& ctx)
   {
@@ -112,6 +120,15 @@ struct ContextElementTraits<ConfigParamRegistry const> {
   }
 };
 
+template <typename S>
+struct ContextElementTraits<ConfigParamRegistry, S> {
+  static ConfigParamRegistry const& get(InitContext& ctx)
+  {
+    static_assert(always_static_assert_v<S>, "Should be ConfigParamRegistry const&");
+    return ctx.options();
+  }
+};
+
 template <>
 struct ContextElementTraits<InputRecord> {
   static InputRecord& get(ProcessingContext& ctx)
@@ -125,6 +142,38 @@ struct ContextElementTraits<DataAllocator> {
   static DataAllocator& get(ProcessingContext& ctx)
   {
     return ctx.outputs();
+  }
+};
+
+template <>
+struct ContextElementTraits<ProcessingContext> {
+  static ProcessingContext& get(ProcessingContext& ctx)
+  {
+    return ctx;
+  }
+};
+
+template <>
+struct ContextElementTraits<InitContext> {
+  static InitContext& get(InitContext& ctx)
+  {
+    return ctx;
+  }
+};
+
+template <StringLiteral L, typename T>
+struct ContextElementTraits<Input<L, T> const> {
+  static Input<L, T> get(ProcessingContext& ctx)
+  {
+    return Input<L, T>{ctx};
+  }
+};
+
+template <StringLiteral L, typename T>
+struct ContextElementTraits<Input<L, T>> {
+  static Input<L, T> get(ProcessingContext& ctx)
+  {
+    static_assert(always_static_assert_v<Input<L, T>>, "Should be Input<L, T> const&");
   }
 };
 
@@ -168,6 +217,11 @@ AlgorithmSpec::ProcessCallback adaptStatelessP(R (*callback)(ARGS...))
 ///   inputs.get<int>("someInt");
 /// }}
 ///
+/// and if you have C++20 enabled you can also do:
+///
+/// AlgorithmSpec{[](Input<"someInt", int> someInt){
+///  someInt.value; // do something with the inputs
+/// }
 /// Notice you can specify in any order any of InputRecord, DataAllocator,
 /// ConfigParamRegistry or any of the services which are usually hanging
 /// from the ServiceRegistry, e.g. ControlService.

@@ -22,6 +22,8 @@
 #include <gsl/gsl>
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/ControlService.h"
+#include "Framework/DataRefUtils.h"
+#include "Framework/InputRecordWalker.h"
 #include "Framework/InputSpec.h"
 #include "Framework/Logger.h"
 #include "Framework/Task.h"
@@ -55,20 +57,40 @@ class MaskMakerDeviceDPL
 
     auto stop = [this]() {
       double scaleFactor = (mCounter == 0) ? 0 : 1.e6 / mCounter;
-      LOG(INFO) << "Processing time / " << mCounter << " events: full: " << mTimer.count() * scaleFactor << " us  mask maker: " << mTimerMaskMaker.count() * scaleFactor << " us";
+      LOG(info) << "Processing time / " << mCounter << " events: full: " << mTimer.count() * scaleFactor << " us  mask maker: " << mTimerMaskMaker.count() * scaleFactor << " us";
     };
-    ic.services().get<of::CallbackService>().set(of::CallbackService::Id::Stop, stop);
+    ic.services().get<of::CallbackService>().set<of::CallbackService::Id::Stop>(stop);
   }
 
   void run(of::ProcessingContext& pc)
   {
     auto tStart = std::chrono::high_resolution_clock::now();
 
-    auto calibData = pc.inputs().get<gsl::span<ColumnData>>("mid_calib");
-    auto calibDataRof = pc.inputs().get<gsl::span<ROFRecord>>("mid_calib_rof");
+    gsl::span<const ColumnData> calibData, fetData;
+    gsl::span<const ROFRecord> calibDataRof, fetDataRof;
 
-    auto fetData = pc.inputs().get<gsl::span<ColumnData>>("mid_fet");
-    auto fetDataRof = pc.inputs().get<gsl::span<ROFRecord>>("mid_fet_rof");
+    std::vector<of::InputSpec> filter = {
+      {"check_data", of::ConcreteDataTypeMatcher{header::gDataOriginMID, "DATA"}, of::Lifetime::Timeframe},
+      {"check_rof", of::ConcreteDataTypeMatcher{header::gDataOriginMID, "DATAROF"}, of::Lifetime::Timeframe},
+    };
+
+    for (auto const& inputRef : of::InputRecordWalker(pc.inputs(), filter)) {
+      auto const* dh = framework::DataRefUtils::getHeader<o2::header::DataHeader*>(inputRef);
+      if (of::DataRefUtils::match(inputRef, "mid_data")) {
+        if (dh->subSpecification == 1) {
+          calibData = pc.inputs().get<gsl::span<o2::mid::ColumnData>>(inputRef);
+        } else if (dh->subSpecification == 2) {
+          fetData = pc.inputs().get<gsl::span<o2::mid::ColumnData>>(inputRef);
+        }
+      }
+      if (of::DataRefUtils::match(inputRef, "mid_data_rof")) {
+        if (dh->subSpecification == 1) {
+          calibDataRof = pc.inputs().get<gsl::span<o2::mid::ROFRecord>>(inputRef);
+        } else if (dh->subSpecification == 2) {
+          fetDataRof = pc.inputs().get<gsl::span<o2::mid::ROFRecord>>(inputRef);
+        }
+      }
+    }
 
     unsigned long nEvents = calibDataRof.size();
     if (nEvents == 0) {
@@ -95,7 +117,7 @@ class MaskMakerDeviceDPL
     if (mCounterSinceReset >= mNReset) {
       for (size_t itype = 0; itype < 2; ++itype) {
         auto masks = o2::mid::makeMasks(mScalers[itype], mCounterSinceReset, mThreshold, mRefMasks);
-        pc.outputs().snapshot(of::Output{header::gDataOriginMID, "MASKS", static_cast<header::DataHeader::SubSpecificationType>(itype + 1), of::Lifetime::Timeframe}, masks);
+        pc.outputs().snapshot(of::Output{header::gDataOriginMID, "MASKS", static_cast<header::DataHeader::SubSpecificationType>(itype + 1)}, masks);
       }
       mCounterSinceReset = 0;
       for (auto& scaler : mScalers) {
@@ -122,11 +144,9 @@ class MaskMakerDeviceDPL
 
 framework::DataProcessorSpec getMaskMakerSpec(const FEEIdConfig& feeIdConfig, const CrateMasks& crateMasks)
 {
-  std::vector<of::InputSpec> inputSpecs{
-    of::InputSpec{"mid_calib", header::gDataOriginMID, "DATA", 1},
-    of::InputSpec{"mid_calib_rof", header::gDataOriginMID, "DATAROF", 1},
-    of::InputSpec{"mid_fet", header::gDataOriginMID, "DATA", 2},
-    of::InputSpec{"mid_fet_rof", header::gDataOriginMID, "DATAROF", 2}};
+  std::vector<of::InputSpec> inputSpecs;
+  inputSpecs.emplace_back("mid_data", of::ConcreteDataTypeMatcher(header::gDataOriginMID, "DATA"), of::Lifetime::Timeframe);
+  inputSpecs.emplace_back("mid_data_rof", of::ConcreteDataTypeMatcher(header::gDataOriginMID, "DATAROF"), of::Lifetime::Timeframe);
 
   std::vector<of::OutputSpec> outputSpecs{
     of::OutputSpec{header::gDataOriginMID, "MASKS", 1},

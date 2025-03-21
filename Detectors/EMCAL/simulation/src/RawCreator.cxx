@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 #include "Framework/Logger.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include <boost/program_options.hpp>
 
@@ -27,7 +27,7 @@
 #include "DataFormatsEMCAL/TriggerRecord.h"
 #include "EMCALBase/Geometry.h"
 #include "EMCALSimulation/RawWriter.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 namespace bpo = boost::program_options;
 
@@ -73,7 +73,7 @@ int main(int argc, const char** argv)
 
   auto debuglevel = vm["debug"].as<uint32_t>();
   if (debuglevel > 0) {
-    FairLogger::GetLogger()->SetLogScreenLevel("DEBUG");
+    fair::Logger::SetConsoleSeverity("DEBUG");
   }
 
   std::string confDig = vm["hbfutils-config"].as<std::string>();
@@ -89,9 +89,9 @@ int main(int argc, const char** argv)
   // if needed, create output directory
   if (!std::filesystem::exists(outputdir)) {
     if (!std::filesystem::create_directories(outputdir)) {
-      LOG(FATAL) << "could not create output directory " << outputdir;
+      LOG(fatal) << "could not create output directory " << outputdir;
     } else {
-      LOG(INFO) << "created output directory " << outputdir;
+      LOG(info) << "created output directory " << outputdir;
     }
   }
 
@@ -105,8 +105,12 @@ int main(int argc, const char** argv)
     granularity = o2::emcal::RawWriter::FileFor_t::kFullDet;
   } else if (filefor == "subdet") {
     granularity = o2::emcal::RawWriter::FileFor_t::kSubDet;
+  } else if (filefor == "crorc") {
+    granularity = o2::emcal::RawWriter::FileFor_t::kCRORC;
   } else if (filefor == "link") {
     granularity = o2::emcal::RawWriter::FileFor_t::kLink;
+  } else {
+    LOG(fatal) << "Unknown granularity, supported: all, subdet, crorc, link";
   }
 
   o2::emcal::RawWriter rawwriter;
@@ -118,7 +122,7 @@ int main(int argc, const char** argv)
   rawwriter.init();
 
   // Loop over all entries in the tree, where each tree entry corresponds to a time frame
-  for (auto en : *treereader) {
+  while (treereader->Next()) {
     rawwriter.digitsToRaw(*digitbranch, *triggerbranch);
   }
   rawwriter.getWriter().writeConfFile("EMC", "RAWDATA", o2::utils::Str::concat_string(outputdir, "/EMCraw.cfg"));

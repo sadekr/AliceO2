@@ -26,7 +26,6 @@
 #include "Framework/DeviceSpec.h"
 #include "Framework/Output.h"
 #include <cstring>
-#include <iostream>
 #include <regex>
 
 void customize(std::vector<o2::framework::DispatchPolicy>& policies)
@@ -54,7 +53,7 @@ void customize(std::vector<o2::framework::CompletionPolicy>& policies)
                         // search for spec names starting with "processor"
                         return spec.name.find("processor") == 0;
                       },
-                      [](auto const&) { return o2::framework::CompletionPolicy::CompletionOp::Consume; }});
+                      [](auto const&, auto const&, auto&) { return o2::framework::CompletionPolicy::CompletionOp::Consume; }});
 }
 
 #include "Framework/runDataProcessing.h"
@@ -63,7 +62,7 @@ using namespace o2::framework;
 
 #define ASSERT_ERROR(condition)                                   \
   if ((condition) == false) {                                     \
-    LOG(FATAL) << R"(Test condition ")" #condition R"(" failed)"; \
+    LOG(fatal) << R"(Test condition ")" #condition R"(" failed)"; \
   }
 
 constexpr size_t nPipelines = 3;
@@ -86,9 +85,9 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
       // since the snapshot copy is ready for sending it is scheduled but held back
       // because of the CompletionPolicy trigger matcher. This message will be
       // sent together with the second message.
-      outputs.snapshot(Output{"PROD", "CHANNEL", subspec, Lifetime::Timeframe}, subspec);
+      outputs.snapshot(Output{"PROD", "CHANNEL", subspec}, subspec);
       device.waitFor(100);
-      outputs.snapshot(Output{"PROD", "TRIGGER", subspec, Lifetime::Timeframe}, subspec);
+      outputs.snapshot(Output{"PROD", "TRIGGER", subspec}, subspec);
       device.waitFor(100);
     }
     control.endOfStream();
@@ -107,10 +106,11 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
       LOG(info) << "processing " << input.spec->binding << " " << data;
       // check if the channel binding starts with 'trigger'
       if (input.spec->binding.find("trigger") == 0) {
-        pc.outputs().make<MyDataType>(Output{"PROC", "CHANNEL", data, Lifetime::Timeframe}) = data;
+        pc.outputs().make<MyDataType>(Output{"PROC", "CHANNEL", data}) = data;
       }
       nActiveInputs++;
     }
+    LOG(info) << "processed " << nActiveInputs << " inputs";
     // since we publish with delays, and two channels are always sent together
     ASSERT_ERROR(nActiveInputs == 2);
   };
@@ -120,7 +120,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
   };
 
   auto sinkFct = adaptStateful([](CallbackService& callbacks) {
-    callbacks.set(CallbackService::Id::EndOfStream, [](EndOfStreamContext& context) {
+    callbacks.set<CallbackService::Id::EndOfStream>([](EndOfStreamContext& context) {
       context.services().get<ControlService>().readyToQuit(QuitRequest::All);
     });
     return adaptStateless([](InputRecord& inputs) {

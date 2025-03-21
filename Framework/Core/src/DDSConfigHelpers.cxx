@@ -9,13 +9,16 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 #include "DDSConfigHelpers.h"
-#include "ChannelSpecHelpers.h"
+#include "Framework/ChannelSpecHelpers.h"
+#include "WorkflowSerializationHelpers.h"
+#include "DeviceSpecHelpers.h"
 #include <map>
 #include <iostream>
 #include <cstring>
 #include <regex>
 #include <fmt/format.h>
 #include <libgen.h>
+#include <regex>
 
 namespace o2::framework
 {
@@ -80,14 +83,66 @@ struct ChannelRewriter : FairMQChannelConfigParser {
   std::vector<bool> hasAddress;
 };
 
-void dumpDeviceSpec2DDS(std::ostream& out,
-                        std::string const& workflowSuffix,
-                        const std::vector<DeviceSpec>& specs,
-                        const std::vector<DeviceExecution>& executions,
-                        const CommandInfo& commandInfo)
+// encode &, ', ", < and > as &amp;, &apos;, &quot;, &lt; and &gt; respectively
+std::string xmlEncode(std::string const& source)
 {
+  std::string result;
+  result.reserve(source.size() * 2);
+  for (char c : source) {
+    switch (c) {
+      case '&':
+        result += "&amp;";
+        break;
+      case '\'':
+        result += "&apos;";
+        break;
+      case '"':
+        result += "&quot;";
+        break;
+      case '<':
+        result += "&lt;";
+        break;
+      case '>':
+        result += "&gt;";
+        break;
+      default:
+        result += c;
+    }
+  }
+  return result;
+}
+
+void DDSConfigHelpers::dumpDeviceSpec2DDS(std::ostream& out,
+                                          DriverMode driverMode,
+                                          std::string const& workflowSuffix,
+                                          std::vector<DataProcessorSpec> const& workflow,
+                                          std::vector<DataProcessorInfo> const& dataProcessorInfos,
+                                          const std::vector<DeviceSpec>& specs,
+                                          const std::vector<DeviceExecution>& executions,
+                                          const CommandInfo& commandInfo)
+{
+  std::ostringstream asset;
+  WorkflowSerializationHelpers::dump(asset, workflow, dataProcessorInfos, commandInfo);
+  // Check if any expendable task is present
+  bool hasExpendableTask = false;
+  for (auto& spec : specs) {
+    for (auto& label : spec.labels) {
+      if (label.value == "expendable") {
+        hasExpendableTask = true;
+        break;
+      }
+    }
+  }
   out << R"(<topology name="o2-dataflow">)"
          "\n";
+  if (hasExpendableTask || driverMode == DriverMode::EMBEDDED) {
+    out << R"(<declrequirement name="odc_expendable_task" type="custom" value="true" />)"
+           "\n";
+  }
+  out << fmt::format(R"(<asset name="dpl_json{}" type="inline" visibility="global" value="{}"/>)",
+                     workflowSuffix,
+                     xmlEncode(asset.str()))
+      << "\n";
   assert(specs.size() == executions.size());
   std::vector<ChannelRewriter> rewriters;
   rewriters.resize(specs.size());
@@ -97,7 +152,6 @@ void dumpDeviceSpec2DDS(std::ostream& out,
   // and address.
   for (size_t di = 0; di < specs.size(); ++di) {
     auto& rewriter = rewriters[di];
-    auto& spec = specs[di];
     auto& execution = executions[di];
     for (size_t cci = 0; cci < execution.args.size(); cci++) {
       const char* arg = execution.args[cci];
@@ -117,6 +171,22 @@ void dumpDeviceSpec2DDS(std::ostream& out,
     }
   }
 
+  if (driverMode == DriverMode::EMBEDDED) {
+    out << "   "
+        << fmt::format("<decltask name=\"{}{}\">\n", "dplDriver", workflowSuffix);
+    out << "       "
+        << fmt::format(R"(<assets><name>dpl_json{}</name></assets>)", workflowSuffix) << "\n";
+    out << "       "
+        << R"(<exe reachable="true">)";
+    out << fmt::format("cat ${{DDS_LOCATION}}/dpl_json{}.asset | o2-dpl-run --driver-mode embedded", workflowSuffix);
+    out << R"(</exe>)"
+        << "<requirements>\n"
+        << "  <name>odc_expendable_task</name>\n"
+        << "</requirements>\n"
+        << "\n";
+    out << "</decltask>";
+  }
+
   for (size_t di = 0; di < specs.size(); ++di) {
     auto& spec = specs[di];
     auto& execution = executions[di];
@@ -127,14 +197,12 @@ void dumpDeviceSpec2DDS(std::ostream& out,
     out << "   "
         << fmt::format("<decltask name=\"{}{}\">\n", spec.id, workflowSuffix);
     out << "       "
+        << fmt::format(R"(<assets><name>dpl_json{}</name></assets>)", workflowSuffix) << "\n";
+    out << "       "
         << R"(<exe reachable="true">)";
-    out << std::regex_replace(commandInfo.command, std::regex{"--dds(?!-)"}, "--dump") << " | ";
-    for (size_t ei = 0; ei < execution.environ.size(); ++ei) {
-      out << fmt::format(execution.environ[ei],
-                         fmt::arg("timeslice0", spec.inputTimesliceId),
-                         fmt::arg("timeslice1", spec.inputTimesliceId + 1),
-                         fmt::arg("timeslice4", spec.inputTimesliceId + 4))
-          << " ";
+    out << fmt::format("cat ${{DDS_LOCATION}}/dpl_json{}.asset | ", workflowSuffix);
+    for (auto ei : execution.environ) {
+      out << DeviceSpecHelpers::reworkTimeslicePlaceholder(ei, spec) << " ";
     }
     std::string accumulatedChannelPrefix;
     char* s = strdup(execution.args[0]);
@@ -178,6 +246,15 @@ void dumpDeviceSpec2DDS(std::ostream& out,
       out << " --channel-config \"" << accumulatedChannelPrefix << "\"";
     }
     out << "</exe>\n";
+    // Check if the expendable label is there, and if so, add
+    // the requirement to the XML.
+    if (std::find_if(spec.labels.begin(), spec.labels.end(), [](const auto& label) {
+          return label.value == "expendable";
+        }) != spec.labels.end()) {
+      out << "       <requirements>\n";
+      out << "           <name>odc_expendable_task</name>\n";
+      out << "       </requirements>\n";
+    }
     auto& rewriter = rewriters[di];
     if (rewriter.requiresProperties.empty() == false) {
       out << "   <properties>\n";
@@ -192,8 +269,11 @@ void dumpDeviceSpec2DDS(std::ostream& out,
     out << "   </decltask>\n";
   }
   out << "   <declcollection name=\"DPL\">\n       <tasks>\n";
-  for (size_t di = 0; di < specs.size(); ++di) {
-    out << fmt::format("          <name>{}{}</name>\n", specs[di].id, workflowSuffix);
+  for (const auto& spec : specs) {
+    out << fmt::format("          <name>{}{}</name>\n", spec.id, workflowSuffix);
+  }
+  if (driverMode == DriverMode::EMBEDDED) {
+    out << fmt::format("          <name>{}{}</name>\n", "dplDriver", workflowSuffix);
   }
   out << "       </tasks>\n   </declcollection>\n";
   out << "</topology>\n";

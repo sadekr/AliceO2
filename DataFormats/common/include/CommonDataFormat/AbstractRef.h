@@ -20,9 +20,7 @@
 #include "GPUCommonRtypes.h"
 #include "GPUCommonTypeTraits.h"
 
-namespace o2
-{
-namespace dataformats
+namespace o2::dataformats
 {
 
 template <int NBIdx, int NBSrc, int NBFlg>
@@ -32,8 +30,19 @@ class AbstractRef
   static constexpr auto MVAR()
   {
     static_assert(NBIT <= 64, "> 64 bits not supported");
-    typename std::conditional<(NBIT > 32), uint64_t, typename std::conditional<(NBIT > 16), uint32_t, typename std::conditional<(NBIT > 8), uint16_t, uint8_t>::type>::type>::type tp = 0;
-    return tp;
+    if constexpr (NBIT > 32) {
+      uint64_t tp = 0;
+      return tp;
+    } else if constexpr (NBIT > 16) {
+      uint32_t tp = 0;
+      return tp;
+    } else if constexpr (NBIT > 8) {
+      uint16_t tp = 0;
+      return tp;
+    } else {
+      uint8_t tp = 0;
+      return tp;
+    }
   }
 
  public:
@@ -55,7 +64,6 @@ class AbstractRef
   GPUdi() AbstractRef(Idx_t idx, Src_t src) { set(idx, src); }
   GPUdi() AbstractRef(Base_t raw) : mRef(raw) {}
 
-  GPUdDefault() AbstractRef(const AbstractRef& src) = default;
   //
   GPUdi() Idx_t getIndex() const { return static_cast<Idx_t>(mRef & IdxMask); }
   GPUdi() void setIndex(Idx_t idx) { mRef = (mRef & (BaseMask & ~IdxMask)) | (IdxMask & idx); }
@@ -80,6 +88,7 @@ class AbstractRef
 
   GPUdi() bool operator==(const AbstractRef& o) const { return getRawWOFlags() == o.getRawWOFlags(); }
   GPUdi() bool operator!=(const AbstractRef& o) const { return !operator==(o); }
+  GPUdi() void clear() { setRaw((Base_t(SrcMask & ((0x1 << NBSrc) - 1)) << NBIdx) | Base_t(IdxMask & ((0x1 << NBIdx) - 1))); }
 
  protected:
   Base_t mRef = IdxMask | (SrcMask << NBIdx); // packed reference, dummy by default
@@ -87,7 +96,6 @@ class AbstractRef
   ClassDefNV(AbstractRef, 1);
 };
 
-} // namespace dataformats
-} // namespace o2
+} // namespace o2::dataformats
 
 #endif

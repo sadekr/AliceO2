@@ -12,8 +12,10 @@
 #ifndef ZDC_TDC_DATA_H
 #define ZDC_TDC_DATA_H
 
+#include "Framework/Logger.h"
 #include "ZDCBase/Constants.h"
 #include <array>
+#include <TMath.h>
 #include <Rtypes.h>
 
 /// \file ZDCTDCData.h
@@ -25,36 +27,122 @@ namespace o2
 namespace zdc
 {
 
+struct ZDCTDCDataErr {
+
+  static uint32_t mErrVal[NTDCChannels]; // Errors in encoding TDC values
+  static uint32_t mErrId;                // Errors with TDC Id
+
+  static void print()
+  {
+    if (mErrId > 0) {
+      LOG(error) << "TDCId was out of range #times = " << mErrId;
+    }
+    for (int itdc = 0; itdc < NTDCChannels; itdc++) {
+      if (mErrVal[itdc] > 0) {
+        LOG(error) << "TDCVal itdc=" << itdc << " " << ChannelNames[TDCSignal[itdc]] << " was out of range #times = " << mErrVal[itdc];
+      }
+    }
+  }
+};
+
 struct ZDCTDCData {
 
-  int8_t id = IdDummy; // channel ID
-  int16_t val = 0;     // tdc value
-  int16_t amp = 0;     // tdc amplitude
+  uint8_t id = 0xff; // channel ID
+  int16_t val = 0;   // tdc value
+  float amp = 0;     // tdc amplitude
 
   ZDCTDCData() = default;
-  ZDCTDCData(int8_t ida, int16_t vala, int16_t ampa)
+
+  ZDCTDCData(uint8_t ida, int16_t vala, float ampa, bool isbeg = false, bool isend = false)
   {
-    id = ida;
-    val = vala;
+    // TDC value and amplitude are encoded externally
+    id = ida < NTDCChannels ? ida : 0xf;
+    id = id | (isbeg ? 0x80 : 0x00);
+    id = id | (isend ? 0x40 : 0x00);
+
+    if (ida < NTDCChannels) {
+      val = vala;
+      amp = ampa;
+    } else {
+      val = kMaxShort;
+      amp = FInfty;
+#ifdef O2_ZDC_DEBUG
+      LOG(error) << __func__ << "TDC Id = " << int(ida) << " is out of range";
+#endif
+      ZDCTDCDataErr::mErrId++;
+    }
+  }
+
+  ZDCTDCData(uint8_t ida, float vala, float ampa, bool isbeg = false, bool isend = false)
+  {
+    // TDC value and amplitude are encoded externally but argument is float
+    id = ida < NTDCChannels ? ida : 0xf;
+    id = id | (isbeg ? 0x80 : 0x00);
+    id = id | (isend ? 0x40 : 0x00);
+
+    if (ida >= NTDCChannels) {
+      val = kMaxShort;
+      amp = FInfty;
+#ifdef O2_ZDC_DEBUG
+      LOG(error) << __func__ << "TDC Id = " << int(ida) << " is out of range";
+#endif
+      ZDCTDCDataErr::mErrId++;
+      return;
+    }
+
+    auto TDCVal = std::nearbyint(vala);
+
+    if (TDCVal < kMinShort) {
+      int itdc = int(id);
+#ifdef O2_ZDC_DEBUG
+      LOG(error) << __func__ << "TDCVal itdc=" << itdc << " " << ChannelNames[TDCSignal[itdc]] << " = " << TDCVal << " is out of range";
+#endif
+      ZDCTDCDataErr::mErrVal[itdc]++;
+      TDCVal = kMinShort;
+    }
+
+    if (TDCVal > kMaxShort) {
+      int itdc = int(ida);
+#ifdef O2_ZDC_DEBUG
+      LOG(error) << __func__ << "TDCVal itdc=" << itdc << " " << ChannelNames[TDCSignal[itdc]] << " = " << TDCVal << " is out of range";
+#endif
+      ZDCTDCDataErr::mErrVal[itdc]++;
+      TDCVal = kMaxShort;
+    }
+
+    val = TDCVal;
     amp = ampa;
   }
 
   inline float amplitude() const
   {
-    return FTDCAmp * amp;
+    return amp;
   }
+
   inline float value() const
   {
+    // Return decoded value (ns)
     return FTDCVal * val;
   }
-  inline uint8_t ch() const
+
+  inline int ch() const
   {
-    return id;
+    return (id & 0x0f);
+  }
+
+  inline bool isBeg() const
+  {
+    return id & 0x80 ? true : false;
+  }
+
+  inline bool isEnd() const
+  {
+    return id & 0x40 ? true : false;
   }
 
   void print() const;
 
-  ClassDefNV(ZDCTDCData, 1);
+  ClassDefNV(ZDCTDCData, 2);
 };
 } // namespace zdc
 } // namespace o2

@@ -15,6 +15,7 @@
 
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
+#include "Framework/CCDBParamSpec.h"
 #include "TRDWorkflow/EntropyEncoderSpec.h"
 #include "TRDReconstruction/CTFCoder.h"
 #include "DetectorsCommonDataFormats/DetID.h"
@@ -30,70 +31,89 @@ namespace trd
 class EntropyEncoderSpec : public o2::framework::Task
 {
  public:
-  EntropyEncoderSpec();
+  EntropyEncoderSpec(bool selIR);
   ~EntropyEncoderSpec() override = default;
   void run(o2::framework::ProcessingContext& pc) final;
   void init(o2::framework::InitContext& ic) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   o2::trd::CTFCoder mCTFCoder;
+  bool mSelIR = false;
   TStopwatch mTimer;
 };
 
-EntropyEncoderSpec::EntropyEncoderSpec()
+EntropyEncoderSpec::EntropyEncoderSpec(bool selIR) : mCTFCoder(o2::ctf::CTFCoderBase::OpType::Encoder), mSelIR(selIR)
 {
   mTimer.Stop();
   mTimer.Reset();
 }
 
+void EntropyEncoderSpec::finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj)
+{
+  if (mCTFCoder.finaliseCCDB<CTF>(matcher, obj)) {
+    return;
+  }
+}
+
 void EntropyEncoderSpec::init(o2::framework::InitContext& ic)
 {
-  std::string dictPath = ic.options().get<std::string>("ctf-dict");
-  mCTFCoder.setMemMarginFactor(ic.options().get<float>("mem-factor"));
-  if (!dictPath.empty() && dictPath != "none") {
-    mCTFCoder.createCoders(dictPath, o2::ctf::CTFCoderBase::OpType::Encoder);
-  }
+  mCTFCoder.init<CTF>(ic);
+  int checkBogus = ic.options().get<int>("bogus-trigger-check");
+  mCTFCoder.setCheckBogusTrig(checkBogus < 0 ? 0x7fffffff : checkBogus);
 }
 
 void EntropyEncoderSpec::run(ProcessingContext& pc)
 {
   auto cput = mTimer.CpuTime();
   mTimer.Start(false);
+  mCTFCoder.updateTimeDependentParams(pc, true);
   auto triggers = pc.inputs().get<gsl::span<TriggerRecord>>("triggers");
   auto tracklets = pc.inputs().get<gsl::span<Tracklet64>>("tracklets");
   auto digits = pc.inputs().get<gsl::span<Digit>>("digits");
-
-  auto& buffer = pc.outputs().make<std::vector<o2::ctf::BufferType>>(Output{"TRD", "CTFDATA", 0, Lifetime::Timeframe});
-  mCTFCoder.encode(buffer, triggers, tracklets, digits);
-  auto eeb = CTF::get(buffer.data()); // cast to container pointer
-  eeb->compactify();                  // eliminate unnecessary padding
-  buffer.resize(eeb->size());         // shrink buffer to strictly necessary size
-  //  eeb->print();
+  mCTFCoder.setFirstTFOrbit(pc.services().get<o2::framework::TimingInfo>().firstTForbit);
+  if (mSelIR) {
+    mCTFCoder.setSelectedIRFrames(pc.inputs().get<gsl::span<o2::dataformats::IRFrame>>("selIRFrames"));
+  }
+  auto& buffer = pc.outputs().make<std::vector<o2::ctf::BufferType>>(Output{"TRD", "CTFDATA", 0});
+  auto iosize = mCTFCoder.encode(buffer, triggers, tracklets, digits);
+  pc.outputs().snapshot({"ctfrep", 0}, iosize);
+  if (mSelIR) {
+    mCTFCoder.getIRFramesSelector().clear();
+  }
   mTimer.Stop();
-  LOG(INFO) << "Created encoded data of size " << eeb->size() << " for TRD in " << mTimer.CpuTime() - cput << " s";
+  LOG(info) << iosize.asString() << " in " << mTimer.CpuTime() - cput << " s";
 }
 
 void EntropyEncoderSpec::endOfStream(EndOfStreamContext& ec)
 {
-  LOGF(INFO, "TRD Entropy Encoding total timing: Cpu: %.3e Real: %.3e s in %d slots",
+  LOGF(info, "TRD Entropy Encoding total timing: Cpu: %.3e Real: %.3e s in %d slots",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
 }
 
-DataProcessorSpec getEntropyEncoderSpec()
+DataProcessorSpec getEntropyEncoderSpec(bool selIR)
 {
   std::vector<InputSpec> inputs;
   inputs.emplace_back("triggers", "TRD", "TRKTRGRD", 0, Lifetime::Timeframe);
   inputs.emplace_back("tracklets", "TRD", "TRACKLETS", 0, Lifetime::Timeframe);
   inputs.emplace_back("digits", "TRD", "DIGITS", 0, Lifetime::Timeframe);
-
+  inputs.emplace_back("ctfdict", "TRD", "CTFDICT", 0, Lifetime::Condition, ccdbParamSpec("TRD/Calib/CTFDictionaryTree"));
+  if (selIR) {
+    inputs.emplace_back("selIRFrames", "CTF", "SELIRFRAMES", 0, Lifetime::Timeframe);
+  }
   return DataProcessorSpec{
     "trd-entropy-encoder",
     inputs,
-    Outputs{{"TRD", "CTFDATA", 0, Lifetime::Timeframe}},
-    AlgorithmSpec{adaptFromTask<EntropyEncoderSpec>()},
-    Options{{"ctf-dict", VariantType::String, o2::base::NameConf::getCTFDictFileName(), {"File of CTF encoding dictionary"}},
-            {"mem-factor", VariantType::Float, 1.f, {"Memory allocation margin factor"}}}};
+    Outputs{{"TRD", "CTFDATA", 0, Lifetime::Timeframe},
+            {{"ctfrep"}, "TRD", "CTFENCREP", 0, Lifetime::Timeframe}},
+    AlgorithmSpec{adaptFromTask<EntropyEncoderSpec>(selIR)},
+    Options{{"ctf-dict", VariantType::String, "ccdb", {"CTF dictionary: empty or ccdb=CCDB, none=no external dictionary otherwise: local filename"}},
+            {"irframe-margin-bwd", VariantType::UInt32, 0u, {"margin in BC to add to the IRFrame lower boundary when selection is requested"}},
+            {"irframe-margin-fwd", VariantType::UInt32, 0u, {"margin in BC to add to the IRFrame upper boundary when selection is requested"}},
+            {"mem-factor", VariantType::Float, 1.f, {"Memory allocation margin factor"}},
+            {"bogus-trigger-check", VariantType::Int, 10, {"max bogus triggers to report, all if < 0"}},
+            {"ans-version", VariantType::String, {"version of ans entropy coder implementation to use"}}}};
 }
 
 } // namespace trd

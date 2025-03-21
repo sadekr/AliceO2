@@ -12,7 +12,7 @@
 // \file ChipMappingMFT.cxx
 // \brief Automatically generated MFT chip <-> module mapping
 
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 #include "ITSMFTReconstruction/ChipMappingMFT.h"
 
 using namespace o2::itsmft;
@@ -1716,7 +1716,7 @@ ChipMappingMFT::ChipMappingMFT()
 
         if ((layer == iLayer) && ((zone + half * (NZonesPerLayer / 2)) == iZone)) {
           if ((ruType != ruInfo.ruType)) {
-            LOG(INFO) << "Wrong RU type for same layer and zone!"
+            LOG(info) << "Wrong RU type for same layer and zone!"
                       << "\n";
             continue;
           }

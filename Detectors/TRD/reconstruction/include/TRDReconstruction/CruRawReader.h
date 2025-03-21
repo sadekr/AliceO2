@@ -16,25 +16,21 @@
 #ifndef O2_TRD_CRURAWREADER
 #define O2_TRD_CRURAWREADER
 
-#include <fstream>
-#include <iostream>
 #include <string>
 #include <cstdint>
+#include <bitset>
+#include <set>
+#include <utility>
 #include <array>
-#include <vector>
 #include "Headers/RAWDataHeader.h"
 #include "Headers/RDHAny.h"
 #include "DetectorsRaw/RDHUtils.h"
 #include "DataFormatsTRD/RawData.h"
 #include "DataFormatsTRD/RawDataStats.h"
-#include "TRDReconstruction/DigitsParser.h"
-#include "TRDReconstruction/TrackletsParser.h"
 #include "DataFormatsTRD/Constants.h"
 #include "DataFormatsTRD/Digit.h"
 #include "CommonDataFormat/InteractionRecord.h"
 #include "TRDReconstruction/EventRecord.h"
-
-#include "TH2F.h"
 
 namespace o2::trd
 {
@@ -44,259 +40,170 @@ class Digit;
 
 class CruRawReader
 {
-
-  static constexpr bool debugparsing = true;
-  enum CRUSate { CRUStateHalfCRUHeader = 0,
-                 CRUStateHalfCRU };
-  enum Dataformats { TrackletsDataFormat = 0,
-                     DigitsDataFormat,
-                     TestPatternDataFormat,
-                     ConfigEventDataFormat };
-
  public:
   CruRawReader() = default;
   ~CruRawReader() = default;
 
-  bool run();
+  // both the tracklet and the digit parsing is implemented as a state machine
+  enum ParsingState { StateTrackletHCHeader,
+                      StateTrackletMCMHeader,
+                      StateTrackletMCMData,
+                      StateDigitMCMHeader,
+                      StateDigitADCMask,
+                      StateDigitMCMData,
+                      StateMoveToDigitMCMHeader,
+                      StateMoveToEndMarker,
+                      StateSecondEndmarker,
+                      StateFinished };
 
-  void checkSummary();
-  void resetCounters();
-  void configure(int tracklethcheader, int halfchamberwords, int halfchambermajor, std::bitset<16> options)
+  // top-level method, takes the full payload data of the DPL raw data message and delegates to processHBFs()
+  // probably this method can be removed and we can directly go to processHBFs()
+  void run();
+
+  // configure the raw reader, done once at the init() stage
+  void configure(int tracklethcheader, int halfchamberwords, int halfchambermajor, std::bitset<16> options);
+
+  // set number of time bins to fixed value instead of reading from DigitHCHeader
+  // (but still complain if DigitHCHeader is not consistent)
+  void setNumberOfTimeBins(int tb)
   {
-    mByteSwap = options[TRDByteSwapBit];
-    mVerbose = options[TRDVerboseBit];
-    mHeaderVerbose = options[TRDHeaderVerboseBit];
-    mDataVerbose = options[TRDDataVerboseBit];
-    mFixDigitEndCorruption = options[TRDFixDigitCorruptionBit];
-    mTrackletHCHeaderState = tracklethcheader;
-    mHalfChamberWords = halfchamberwords;
-    mHalfChamberMajor = halfchambermajor;
-    mRootOutput = options[TRDEnableRootOutputBit];
-    mEnableTimeInfo = options[TRDEnableTimeInfoBit];
-    mEnableStats = options[TRDEnableStatsBit];
-    mOptions = options;
+    mTimeBins = tb;
+    mTimeBinsFixed = true;
   }
 
+  // settings in order to avoid InfoLogger flooding
   void setMaxErrWarnPrinted(int nerr, int nwar)
   {
     mMaxErrsPrinted = nerr < 0 ? std::numeric_limits<int>::max() : nerr;
     mMaxWarnPrinted = nwar < 0 ? std::numeric_limits<int>::max() : nwar;
   }
-  void checkNoWarn();
+  void checkNoWarn(bool silently = true);
   void checkNoErr();
 
-  void setBlob(bool returnblob) { mReturnBlob = returnblob; }; //set class to produce blobs and not vectors. (compress vs pass through)`
-  void setDataBuffer(const char* val)
-  {
-    mDataBuffer = val;
-  };
-  void setDataBufferSize(long val)
-  {
-    if (mVerbose) {
-      LOG(info) << " Setting buffer size to : " << val;
-    }
-    mDataBufferSize = val;
-  };
-  void setVerbose(bool verbose) { mVerbose = verbose; }
-  void setDataVerbose(bool verbose) { mDataVerbose = verbose; }
-  void setHeaderVerbose(bool verbose) { mHeaderVerbose = verbose; }
-  inline uint32_t getDecoderByteCounter() const { return reinterpret_cast<const char*>(mDataPointer) - mDataBuffer; };
-  bool buildBlobOutput(char* outputbuffer); // should probably go into a writer object.
-  // benchmarks
-  double mIntegratedBytes = 0.;
-  double mIntegratedTime = 0.;
+  // set the input data buffer
+  void setDataBuffer(const char* val) { mDataBufferPtr = val; }
 
-  std::vector<Tracklet64>& getTracklets(InteractionRecord& ir) { return mEventRecords.getTracklets(ir); };
-  std::vector<Digit>& getDigits(InteractionRecord& ir) { return mEventRecords.getDigits(ir); };
-  //  std::vector<o2::trd::TriggerRecord> getIR() { return mEventTriggers; }
-  void getParsedObjects(std::vector<Tracklet64>& tracklets, std::vector<Digit>& cdigits, std::vector<TriggerRecord>& triggers);
-  void getParsedObjectsandClear(std::vector<Tracklet64>& tracklets, std::vector<Digit>& digits, std::vector<TriggerRecord>& triggers);
-  void buildDPLOutputs(o2::framework::ProcessingContext& outputs, bool displaytracklets = false);
-  int getDigitsFound() { return mTotalDigitsFound; }
-  int getTrackletsFound() { return mTotalTrackletsFound; }
-  int sumTrackletsFound() { return mEventRecords.sumTracklets(); }
-  int sumDigitsFound() { return mEventRecords.sumDigits(); }
-  int getWordsRead() { return mTotalDigitWordsRead; }
-  int getWordsRejected() { return mTotalDigitWordsRejected; }
+  // set the input data buffer size in bytes
+  void setDataBufferSize(long val) { mDataBufferSize = val; }
 
-  std::shared_ptr<EventStorage*> getEventStorage() { return std::make_shared<EventStorage*>(&mEventRecords); }
-  void clearall()
-  {
-    mEventRecords.clear();
-    clear();
-  }
-  void clear()
-  {
-    mTrackletsParser.clear();
-    mDigitsParser.clear();
-  }
-  void OutputHalfCruRawData();
-  // void setStats(o2::trd::TRDDataCountersPerTimeFrame* trdstats){mTimeFrameStats=trdstats;}
-  //void setHistos(std::array<TH2F*, 10> hist, std::array<TH2F*, constants::MAXPARSEERRORHISTOGRAMS> parsingerrors2d)
-  void setHistos(TList* hist, TList* parsingerrors2d)
-  {
-    mLinkErrors = hist;
-    mParsingErrors2d = parsingerrors2d;
-  };
+  // set the mapping from Link ID to HCID and vice versa
+  void setLinkMap(const LinkToHCIDMapping* map) { mLinkMap = map; }
 
-  void setTimeHistos(TH1F* timeframetime, TH1F* trackletparsingtime, TH1F* digitparsingtime,
-                     TH1F* crutime, TH1F* packagingtime, TH1F* versions, TH1F* versionsmajor,
-                     TH1F* parsingerrors)
-  {
-    mTimeFrameTime = timeframetime;
-    mTrackletTiming = trackletparsingtime;
-    mDigitTiming = digitparsingtime;
-    mCruTime = crutime;
-    mEventRecords.setHisto(packagingtime);
-    mDataVersions = versions;
-    mDataVersionsMajor = versionsmajor;
-    mParsingErrors = parsingerrors;
-    mTrackletsParser.setErrorHistos(parsingerrors, mParsingErrors2d);
-  };
+  // assemble output for full TF and send it out
+  void buildDPLOutputs(o2::framework::ProcessingContext& outputs);
 
- protected:
-  bool processHBFs(int datasizealreadyread = 0, bool verbose = false);
-  bool processHBFsa(int datasizealreadyread = 0, bool verbose = false);
-  bool buildCRUPayLoad();
-  int processHalfCRU(int cruhbfstartoffset);
-  bool processCRULink();
-  int parseDigitHCHeader();
-  int checkDigitHCHeader();
-  int checkTrackletHCHeader();
-  bool skipRDH();
-  void updateLinkErrorGraphs(int currentlinkindex, int supermodule_half, int stack_layer);
-  void increment2dHist(int hist, int sectorside, int stack, int layer)
-  {
-    if (mRootOutput) {
-      mParsingErrors->Fill(hist);
-      ((TH2F*)mParsingErrors2d->At(hist))->Fill(sectorside, stack * constants::NLAYER + layer);
-    }
-  }
+  int getDigitsFound() const { return mDigitsFound; }
+  int getTrackletsFound() const { return mTrackletsFound; }
 
-  inline void rewind()
-  {
-    if (mVerbose) {
-      LOG(info) << "rewinding crurawreader incoming data buffer";
-    }
-    mDataPointer = reinterpret_cast<const uint32_t*>(mDataBuffer);
-  };
+  int getWordsRejected() const { return mWordsRejected + mDigitWordsRejected + mTrackletWordsRejected; }
 
-  int mJumpRDH = 0;
-  bool mVerbose{false};
-  bool mHeaderVerbose{false};
-  bool mDataVerbose{false};
-  bool mByteSwap{false};
-  bool mFixDigitEndCorruption{false};
+  // reset the event storage and the counters
+  void reset();
+
+  // the parsing starts here, payload from all available RDHs is copied into mHBFPayload and afterwards processHalfCRU() is called
+  // returns the total number of bytes read, including RDH header
+  int processHBFs();
+
+  // process the data which is stored inside the mHBFPayload for the current half-CRU. The iteration corresponds to the trigger index inside the HBF
+  bool processHalfCRU(int iteration);
+
+  // parse the digit HC headers, possibly update settings as the number of time bins from the header word
+  bool parseDigitHCHeaders(int hcid);
+
+  // helper function to compare two consecutive RDHs
+  bool compareRDH(const o2::header::RDHAny* rdhPrev, const o2::header::RDHAny* rdhCurr);
+
+  // sanity check on individual RDH (can find unconfigured FLP or invalid data)
+  bool checkRDH(const o2::header::RDHAny* rdh);
+
+  // given the total link size and the hcid from the RDH
+  // parse the tracklet data. Overwrite hcid from TrackletHCHeader if mismatch is detected
+  // trackletWordsRejected:  count the number of words which were skipped (subset of words read)
+  // trackletWordsReadOK: count the number of words which could be read consecutively w/o errors
+  // numberOfTrackletsFound: count the number of tracklets found
+  // returns total number of words read (no matter if parsed successfully or not) or -1 in case of failure
+  int parseTrackletLinkData(int linkSize32, int& hcid, int& trackletWordsRejected, int& trackletWordsReadOK, int& numberOfTrackletsFound);
+
+  // the parsing begins after the DigitHCHeaders have been parsed already
+  // maxWords32 is the remaining number of words for the given link
+  // digitWordsRejected: count the number of words which were skipped (subset of words read)
+  // returns total number of words read (no matter if parsed successfully or not)
+  int parseDigitLinkData(int maxWords32, int hcid, int& digitWordsRejected);
+
+  // check validity of TrackletHCHeader (always once bit needs to be set and hcid needs to be consistent with what we expect from RDH)
+  // FIXME currently hcid can be overwritten from TrackletHCHeader
+  bool isTrackletHCHeaderOK(const TrackletHCHeader& header, int& hcid);
+
+  // helper function to create Tracklet64 from link data
+  Tracklet64 assembleTracklet64(int format, TrackletMCMHeader& mcmHeader, TrackletMCMData& mcmData, int cpu, int hcid) const;
+
+  // important function to keep track of all errors, if possible accounted to a certain link / half-chamber ID
+  // FIXME:
+  // - whenever we don't know the half-chamber, fill it for HCID == 1080 so that we can still disentangle errors from half-chamber 0?
+  // - probably enough to only pass the half-chamber ID, if we know it
+  // - or what about being more granular? dump ROB or MCM, if we know it?
+  void incrementErrors(int error, int hcid = -1, std::string message = "");
+
+  // helper function to dump the whole input payload including RDH headers
+  void dumpInputPayload() const;
+
+  // to check for which half-chambers we have seen correct headers and for which we have seen wrong ones
+  void printHalfChamberHeaderReport() const;
+
+ private:
+  // these variables are configured externally
   int mTrackletHCHeaderState{0};
   int mHalfChamberWords{0};
   int mHalfChamberMajor{0};
-  bool mRootOutput{0};
-  bool mEnableTimeInfo{0};
-  bool mEnableStats{0};
   std::bitset<16> mOptions;
-  const char* mDataBuffer = nullptr;
-  static const uint32_t mMaxHBFBufferSize = o2::trd::constants::HBFBUFFERMAX;
-  std::array<uint32_t, o2::trd::constants::HBFBUFFERMAX> mHBFPayload; //this holds the O2 payload held with in the HBFs to pass to parsing.
-  uint32_t mHalfCRUPayLoadRead{0};                                    // the words current read in for the currnt cru payload.
-  uint32_t mO2PayLoadRead{0};                                         // the words current read in for the currnt cru payload.
-  std::array<uint32_t, o2::trd::constants::HBFBUFFERMAX>::iterator mStartParse, mEndParse; // limits of parsing, start and end points for parsing.
-  std::array<uint16_t, constants::TIMEBINS> mADCValues{};
-  int mCurrentHalfCRULinkHeaderPoisition = 0;
-  // no need to waste time doing the copy  std::array<uint32_t,8> mCurrentCRUWord; // data for a cru comes in words of 256 bits.
-  uint32_t mCurrentLinkDataPosition256;    // count of data read for current link in units of 256 bits
-  uint32_t mCurrentLinkDataPosition;       // count of data read for current link in units of 256 bits
-  uint32_t mCurrentHalfCRUDataPosition256; //count of data read for this half cru.
-  uint32_t mTotalHalfCRUDataLength;
-  uint32_t mTotalHalfCRUDataLength256;
 
-  uint32_t mTotalTrackletsFound{0};
-  uint32_t mTotalDigitsFound{0};
+  std::array<uint32_t, constants::HBFBUFFERMAX> mHBFPayload; // the full input data payload excluding the RDH header(s)
 
+  // InfoLogger flood protection settings
   int mMaxErrsPrinted = 20;
   int mMaxWarnPrinted = 20;
 
-  long mDataBufferSize;
-  uint64_t mDataReadIn = 0;
-  const uint32_t* mDataPointer = nullptr; // pointer to the current position in the rdh
-  const uint32_t* mDataPointerMax = nullptr;
-  const uint32_t* mDataEndPointer = nullptr;
-  const uint32_t* mDataPointerNext = nullptr;
-  uint8_t mDataNextWord = 1;
-  uint8_t mDataNextWordStep = 2;
+  // helper pointers, counters for the input buffer
+  const char* mDataBufferPtr = nullptr; // pointer to the beginning of the whole payload data
+  long mDataBufferSize;                 // the total payload size of the raw data message from the FLP (typically a single HBF from one half-CRU)
+  const char* mCurrRdhPtr = nullptr;    // points inside the payload data at the current RDH position
+  uint32_t mTotalHBFPayLoad = 0;        // total data payload of the heart beat frame in question (up to wich array index mHBFPayload is filled with data)
+  uint32_t mHBFoffset32 = 0;            // points to the current position inside mHBFPayload we are currently reading
 
-  const o2::header::RDHAny* mDataRDH;
   HalfCRUHeader mCurrentHalfCRUHeader; // are we waiting for new header or currently parsing the payload of on
-  DigitHCHeader mDigitHCHeader;        // Digit HalfChamber header we are currently on.
-  DigitHCHeader1 mDigitHCHeader1;      // this and the next 2 are option are and variable in order, hence
-  DigitHCHeader2 mDigitHCHeader2;      // the individual seperation instead of an array.
-  DigitHCHeader3 mDigitHCHeader3;
-  TrackletHCHeader mTrackletHCHeader;  // Tracklet HalfChamber header we are currently on.
-  uint16_t mCurrentLink;               // current link within the halfcru we are parsing 0-14
-  uint16_t mCRUEndpoint;               // the upper or lower half of the currently parsed cru 0-14 or 15-29
-  uint16_t mCRUID;
-  uint16_t mHCID;
-  TRDFeeID mFEEID; // current Fee ID working on
-  // the store of the 3 ways we can determine this information, link,rdh,halfchamber
-  std::array<int, 3> mDetector;
-  std::array<int, 3> mSector;
-  std::array<int, 3> mStack;
-  std::array<int, 3> mLayer;
-  std::array<int, 3> mSide;
-  std::array<int, 3> mEndPoint;
-  std::array<int, 3> mHalfChamberSide;
-  int mWhichData; // index used into the above arrays once decided on which source is "correct"
+  HalfCRUHeader mPreviousHalfCRUHeader; // are we waiting for new header or currently parsing the payload of on
+  bool mPreviousHalfCRUHeaderSet;       // flag, whether we can use mPreviousHalfCRUHeader for additional sanity checks
+  DigitHCHeader mDigitHCHeader;         // Digit HalfChamber header we are currently on.
+  uint16_t mTimeBins{constants::TIMEBINS}; // the number of time bins to be read out (default 30, can be overwritten from digit HC header)
+  bool mTimeBinsFixed{false};              // flag, whether number of time bins different from default was configured
+  bool mHaveSeenDigitHCHeader3{false};     // flag, whether we can compare an incoming DigitHCHeader3 with a header we have seen before
+  uint32_t mPreviousDigitHCHeadersvnver;  // svn ver in the digithalfchamber header, used for validity checks
+  uint32_t mPreviousDigitHCHeadersvnrver; // svn release ver also used for validity checks
+  uint8_t mPreTriggerPhase = 0;           // Pre trigger phase of the adcs producing the digits, its comes from an optional DigitHCHeader
+                                          // It is stored here to carry it around after parsing it from the DigitHCHeader1 if it exists in the data.
+  uint16_t mCRUEndpoint; // the upper or lower half of the currently parsed cru 0-14 or 15-29
+  uint16_t mCRUID;       // CRU ID taken from the FEEID of the RDH
+  TRDFeeID mFEEID;       // current Fee ID working on
+
+  std::set<int> mHalfChamberHeaderOK;                   // keep track of the half chambers for which we have seen correct headers
+  std::set<std::pair<int, int>> mHalfChamberMismatches; // first element is HCID from RDH and second element is HCID from TrackletHCHeader
+
   o2::InteractionRecord mIR;
-  std::array<uint32_t, 15> mCurrentHalfCRULinkLengths;
-  std::array<uint32_t, 15> mCurrentHalfCRULinkErrorFlags;
-  uint32_t mCRUState; // the state of what we are expecting to read currently from the data stream, *not* what we have just read.
-  bool mError = false;
-  bool mFatal = false;
-  uint32_t mSaveBufferDataSize = 0;
-  uint32_t mSaveBufferDataLeft = 0;
-  uint32_t mcruFeeID = 0;
-  uint32_t mDatareadfromhbf;
-  uint32_t mTotalHBFPayLoad = 0; // total data payload of the heart beat frame in question.
-  uint32_t mHBFoffset32 = 0;     // total data payload of the heart beat frame in question.
-  uint64_t mDigitWordsRead = 0;
-  uint64_t mDigitWordsRejected = 0;
-  uint64_t mTotalDigitWordsRead = 0;
-  uint64_t mTotalDigitWordsRejected = 0;
-  uint64_t mTrackletWordsRead = 0;
-  uint64_t mTrackletWordsRejected = 0;
-  uint64_t mTotalTrackletWordsRejected = 0;
-  uint64_t mTotalTrackletWordsRead = 0;
-  //pointers to the data as we read them in, again no point in copying.
-  HalfCRUHeader* mhalfcruheader;
+  std::array<uint16_t, 15> mCurrentHalfCRULinkLengths;
+  std::array<uint8_t, 15> mCurrentHalfCRULinkErrorFlags;
 
-  bool checkerCheck();
-  void checkerCheckRDH();
-  int mState; // basic state machine for where we are in the parsing.
-  // we parse rdh to rdh but data is cru to cru.
-  //the relevant parsers. Not elegant but we need both so pointers to base classes and sending them in with templates or some other such mechanism seems impossible, or its just late and I cant think.
-  //TODO think of a more elegant way of incorporating the parsers.
-  TrackletsParser mTrackletsParser;
-  DigitsParser mDigitsParser;
-  //used to surround the outgoing data with a coherent rdh coming from the incoming stream.
-  o2::header::RDHAny* mOpenRDH;
-  o2::header::RDHAny* mCloseRDH;
+  const LinkToHCIDMapping* mLinkMap = nullptr; // to retrieve HCID from Link ID
 
-  uint32_t mEventCounter;
-  uint32_t mFatalCounter;
-  uint32_t mErrorCounter;
+  // these counters are reset after every TF
+  uint32_t mTrackletsFound{0};         // accumulated number of tracklets found
+  uint32_t mDigitsFound{0};            // accumulated number of digits found
+  uint32_t mDigitWordsRead = 0;        // number of words read by the digit parser
+  uint32_t mDigitWordsRejected = 0;    // number of words rejected by the digit parser
+  uint32_t mTrackletWordsRejected = 0; // number of words read by the tracklet parser
+  uint32_t mTrackletWordsRead = 0;     // number of words rejected by the tracklet parser
+  uint32_t mWordsRejected = 0;         // those words rejected before tracklet and digit parsing could start
 
-  EventStorage mEventRecords; // store data range indexes into the above vectors.
-  EventRecord* mCurrentEvent; // the current event we are looking at, info extracted from cru half chamber header.
-
-  bool mReturnBlob{0};        // whether to return blobs or vectors;
-  o2::trd::TRDDataCountersRunning mStatCountersRunning;
-  TList* mLinkErrors;
-  //std::array<TH2F*, constants::MAXLINKERRORHISTOGRAMS> mLinkErrors;
-  TH2F *hist7, *hist8;                                              // a hack !
-  TH1F *mTimeFrameTime, *mTrackletTiming, *mDigitTiming, *mCruTime; // a hack !
-  TH1F *mDataVersions, *mDataVersionsMajor;                         // a hack !
-  TH1F* mParsingErrors;                                             // a hack !
-  TList* mParsingErrors2d;
-  //std::array<TH2F*, constants::MAXPARSEERRORHISTOGRAMS> mParsingErrors2d;
+  EventRecordContainer mEventRecords; // store data range indexes into the above vectors.
 };
 
 } // namespace o2::trd

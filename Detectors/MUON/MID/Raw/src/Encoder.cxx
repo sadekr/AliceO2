@@ -18,7 +18,7 @@
 
 #include "DetectorsRaw/HBFUtils.h"
 #include "DetectorsRaw/RDHUtils.h"
-#include "MIDRaw/CrateMasks.h"
+#include "MIDRaw/GBTMapper.h"
 #include "MIDRaw/Utils.h"
 #include <fmt/format.h>
 
@@ -27,19 +27,22 @@ namespace o2
 namespace mid
 {
 
-void Encoder::init(std::string_view outDir, std::string_view fileFor, int verbosity, bool debugMode)
+void Encoder::init(std::string_view outDir, std::string_view fileFor, int verbosity, std::vector<ROBoardConfig> configurations)
 {
   /// Initializes links
 
-  CrateMasks masks;
   auto linkUniqueIds = mFEEIdConfig.getConfiguredLinkUniqueIDs();
 
   // Initialises the GBT link encoders
   for (auto& linkUniqueId : linkUniqueIds) {
     auto gbtUniqueId = mFEEIdConfig.getGBTUniqueId(linkUniqueId);
-    mGBTEncoders[gbtUniqueId].setGBTUniqueId(gbtUniqueId);
-    mGBTEncoders[gbtUniqueId].setMask(masks.getMask(gbtUniqueId));
-    mGBTIds[gbtUniqueId] = linkUniqueId;
+    std::vector<ROBoardConfig> gbtConfigs;
+    for (auto& cfg : configurations) {
+      if (gbtmapper::isBoardInGBT(cfg.boardId, gbtUniqueId)) {
+        gbtConfigs.emplace_back(cfg);
+      }
+    }
+    mGBTEncoders[gbtUniqueId].setConfig(gbtUniqueId, gbtConfigs);
   }
 
   // Initializes the output link
@@ -53,7 +56,7 @@ void Encoder::init(std::string_view outDir, std::string_view fileFor, int verbos
         outFileLink += "_alio2-cr1-flp159";
         if (fileFor != "flp") {
           outFileLink += fmt::format("_cru{}_{}", cruId, epId);
-          if (fileFor != "cru") {
+          if (fileFor != "cruendpoint") {
             outFileLink += fmt::format("_lnk{}_feeid{}", raw::sUserLogicLinkID, feeId);
             if (fileFor != "link") {
               throw std::runtime_error("invalid option provided for file grouping");
@@ -76,8 +79,6 @@ void Encoder::init(std::string_view outDir, std::string_view fileFor, int verbos
   }
 
   mRawWriter.setEmptyPageCallBack(this);
-
-  mConverter.setDebugMode(debugMode);
 }
 
 void Encoder::emptyHBFMethod(const o2::header::RDHAny* rdh, std::vector<char>& toAdd) const
@@ -100,7 +101,7 @@ void Encoder::completeWord(std::vector<char>& buffer)
 {
   /// Completes the buffer with zeros to reach the expected CRU word size
   size_t dataSize = buffer.size();
-  size_t cruWord = 2 * o2::raw::RDHUtils::GBTWord;
+  size_t cruWord = 2 * o2::raw::RDHUtils::GBTWord128;
   size_t modulo = dataSize % cruWord;
   if (modulo) {
     dataSize += cruWord - modulo;
@@ -108,22 +109,21 @@ void Encoder::completeWord(std::vector<char>& buffer)
   }
 }
 
-void Encoder::writePayload(uint16_t feeId, const InteractionRecord& ir)
+void Encoder::writePayload(uint16_t feeId, const InteractionRecord& ir, bool onlyNonEmpty)
 {
   /// Writes data
 
-  std::vector<char> buf;
+  std::vector<char> buf = mOrbitResponse[feeId];
   for (auto& gbtUniqueId : mFEEIdConfig.getGBTUniqueIdsInLink(feeId)) {
     if (!mGBTEncoders[gbtUniqueId].isEmpty()) {
       mGBTEncoders[gbtUniqueId].flush(buf, ir);
     }
   }
-  if (buf.empty()) {
+  if (onlyNonEmpty && buf.size() == mOrbitResponse[feeId].size()) {
     return;
   }
 
   // Add the orbit response
-  buf.insert(buf.begin(), mOrbitResponse[feeId].begin(), mOrbitResponse[feeId].end());
   completeWord(buf);
   mRawWriter.addData(feeId, feeId / 2, raw::sUserLogicLinkID, feeId % 2, ir, buf);
 }
@@ -131,39 +131,64 @@ void Encoder::writePayload(uint16_t feeId, const InteractionRecord& ir)
 void Encoder::finalize(bool closeFile)
 {
   /// Writes remaining data and closes the file
-  if (mLastIR.isDummy()) {
-    mLastIR.bc = 0;
-    mLastIR.orbit = mRawWriter.getHBFUtils().orbitFirst;
-  }
+  initIR();
   auto ir = getOrbitIR(mLastIR.orbit);
   auto nextIr = getOrbitIR(mLastIR.orbit + 1);
   for (uint16_t feeId = 0; feeId < 4; ++feeId) {
-    auto ir = getOrbitIR(mLastIR.orbit);
     // Write the last payload
-    writePayload(feeId, ir);
+    writePayload(feeId, ir, true);
     // Since the regional response comes after few clocks,
     // we might have the corresponding regional cards in the next orbit.
     // If this is the case, we flush all data of the next orbit
-    writePayload(feeId, nextIr);
+    writePayload(feeId, nextIr, true);
   }
   if (closeFile) {
     mRawWriter.close();
   }
 }
 
-void Encoder::process(gsl::span<const ColumnData> data, const InteractionRecord& ir, EventType eventType)
+void Encoder::process(gsl::span<const ColumnData> data, InteractionRecord ir, EventType eventType)
 {
   /// Encodes data
+
+  // The CTP trigger arrives to the electronics with a delay
+  if (ir.differenceInBC(mRawWriter.getHBFUtils().getFirstSampledTFIR()) < mElectronicsDelay.localToBC) {
+    // Due to the delay, these data would arrive in the TF before the first sampled one.
+    // We therefore reject them.
+    return;
+  }
+  applyElectronicsDelay(ir.orbit, ir.bc, -mElectronicsDelay.localToBC);
+
+  initIR();
+
   if (ir.orbit != mLastIR.orbit) {
     onOrbitChange(mLastIR.orbit);
   }
 
+  // Converts ColumnData to ROBoards
   mConverter.process(data);
 
-  for (auto& item : mConverter.getData()) {
+  mGBTMap.clear();
+
+  // Group local boards according to the GBT link they belong
+  for (auto& item : mConverter.getDataMap()) {
+    auto feeId = gbtmapper::getGBTIdFromUniqueLocId(item.first);
+    mGBTMap[feeId].emplace_back(item.second);
+  }
+
+  // Process the GBT links
+  for (auto& item : mGBTMap) {
     mGBTEncoders[item.first].process(item.second, ir);
   }
   mLastIR = ir;
 }
+
+void Encoder::initIR()
+{
+  if (mLastIR.isDummy()) {
+    mLastIR = mRawWriter.getHBFUtils().getFirstSampledTFIR();
+  }
+}
+
 } // namespace mid
 } // namespace o2

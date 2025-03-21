@@ -18,10 +18,12 @@
 #pragma link C++ class o2::emcal::CalibDB + ;
 #pragma link C++ class o2::emcal::BadChannelMap + ;
 #pragma link C++ class o2::emcal::TimeCalibrationParams + ;
+#pragma link C++ class o2::emcal::TimeCalibrationSlewingParams + ;
 #pragma link C++ class o2::emcal::TimeCalibParamL1Phase + ;
 #pragma link C++ class o2::emcal::TempCalibrationParams + ;
 #pragma link C++ class o2::emcal::TempCalibParamSM + ;
 #pragma link C++ class o2::emcal::GainCalibrationFactors + ;
+#pragma link C++ class o2::emcal::Pedestal + ;
 #pragma link C++ class o2::emcal::TriggerTRUDCS + ;
 #pragma link C++ class o2::emcal::TriggerSTUDCS + ;
 #pragma link C++ class o2::emcal::TriggerSTUErrorCounter + ;
@@ -29,6 +31,8 @@
 #pragma link C++ class o2::emcal::FeeDCS + ;
 #pragma link C++ class o2::emcal::ElmbData + ;
 #pragma link C++ class o2::emcal::ElmbMeasurement + ;
-#pragma link C++ class o2::emcal::EMCDCSProcessor + ;
+#pragma link C++ class o2::emcal::EMCALChannelScaleFactors + ;
+#pragma link C++ class o2::emcal::EnergyIntervals + ;
+#pragma link C++ class std::map < o2::emcal::EnergyIntervals, float> + ;
 
 #endif

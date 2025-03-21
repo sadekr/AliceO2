@@ -9,30 +9,66 @@
 # granted to it by virtue of its status as an Intergovernmental Organization
 # or submit itself to any jurisdiction.
 
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include)
+### Prepare the list of methods in FlagTypeFactory
+file(READ "etc/flagTypes.csv" CSV_FLAG_TYPES)
+# delete the CSV file header
+string(REPLACE \"id\",\"method\",\"name\",\"bad\",\"obsolete\" "" CSV_FLAG_TYPES ${CSV_FLAG_TYPES})
+# detects if there is obsolete flag '1' in the last column, adds [[deprecated]] if so and retains the rest of the string
+string(REGEX REPLACE \([0-9]+,\".[^\"]*.\",.[^\"]*.,[0-1]\),1
+        "[[deprecated]] \\1,1"
+        CSV_FLAG_TYPES
+        ${CSV_FLAG_TYPES})
+# replaces the flag reason entry with a c++ method to create it
+string(REGEX REPLACE \([0-9]+\),\"\(.[^\"]*.\)\",\(.[^\"]*.\),\([0-1]\),[0-1]
+        "static FlagType \\2\(\) { return { static_cast<uint16_t>\(\\1\), \\3, static_cast<bool>\(\\4\) }; }"
+        CSV_FLAG_TYPES
+        ${CSV_FLAG_TYPES})
+# put the method lists inside the template
+configure_file("include/DataFormatsQualityControl/FlagTypeFactory.h.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/include/DataFormatsQualityControl/FlagTypeFactory.h"
+        @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/DataFormatsQualityControl/FlagTypeFactory.h"
+        DESTINATION include/DataFormatsQualityControl)
+
 o2_add_library(DataFormatsQualityControl
-               SOURCES src/FlagReasons.cxx
-                       src/TimeRangeFlag.cxx
-                       src/TimeRangeFlagCollection.cxx
-  PUBLIC_LINK_LIBRARIES O2::Headers
-                        O2::FrameworkLogger
-                        O2::DetectorsCommonDataFormats)
+               SOURCES src/FlagType.cxx
+                       src/QualityControlFlag.cxx
+                       src/QualityControlFlagCollection.cxx
+  PUBLIC_LINK_LIBRARIES O2::FrameworkLogger
+                        O2::DetectorsCommonDataFormats
+  PUBLIC_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_BINARY_DIR}/include
+                             include
+        )
 
 o2_target_root_dictionary(DataFormatsQualityControl
-                          HEADERS include/DataFormatsQualityControl/FlagReasons.h
-                                  include/DataFormatsQualityControl/TimeRangeFlag.h
-                                  include/DataFormatsQualityControl/TimeRangeFlagCollection.h)
+                          HEADERS include/DataFormatsQualityControl/FlagType.h
+                                  include/DataFormatsQualityControl/QualityControlFlag.h
+                                  include/DataFormatsQualityControl/QualityControlFlagCollection.h)
 
-o2_add_test(FlagReasons
-  SOURCES test/testFlagReasons.cxx
+
+if(BUILD_TESTING)
+o2_add_test(FlagTypes
+  SOURCES test/testFlagTypes.cxx
   COMPONENT_NAME DataFormatsQualityControl
-  PUBLIC_LINK_LIBRARIES O2::DataFormatsQualityControl)
+  PUBLIC_LINK_LIBRARIES O2::DataFormatsQualityControl
+  TARGETVARNAME flagtypes)
 
-o2_add_test(TimeRangeFlag
-            SOURCES test/testTimeRangeFlag.cxx
-            COMPONENT_NAME DataFormatsQualityControl
-            PUBLIC_LINK_LIBRARIES O2::DataFormatsQualityControl)
+target_include_directories(${flagtypes} PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/include)
 
-o2_add_test(TimeRangeFlagCollection
-            SOURCES test/testTimeRangeFlagCollection.cxx
+o2_add_test(QualityControlFlag
+            SOURCES test/testQualityControlFlag.cxx
             COMPONENT_NAME DataFormatsQualityControl
-            PUBLIC_LINK_LIBRARIES O2::DataFormatsQualityControl)
+            PUBLIC_LINK_LIBRARIES O2::DataFormatsQualityControl
+            TARGETVARNAME qualitycontrolflag)
+
+target_include_directories(${qualitycontrolflag} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/include)
+
+o2_add_test(QualityControlFlagCollection
+            SOURCES test/testQualityControlFlagCollection.cxx
+            COMPONENT_NAME DataFormatsQualityControl
+            PUBLIC_LINK_LIBRARIES O2::DataFormatsQualityControl
+            TARGETVARNAME qualitycontrolflagcollection)
+
+target_include_directories(${qualitycontrolflagcollection} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/include)
+endif()

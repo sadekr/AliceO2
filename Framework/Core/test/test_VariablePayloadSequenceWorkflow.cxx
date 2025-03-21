@@ -25,7 +25,7 @@
 #include "Headers/DataHeader.h"
 #include "Headers/Stack.h"
 #include "MemoryResources/MemoryResources.h"
-#include "fairmq/FairMQDevice.h"
+#include <fairmq/Device.h>
 #include <memory>
 #include <random>
 
@@ -48,7 +48,7 @@ void customize(std::vector<o2::framework::CompletionPolicy>& policies)
 
 #define ASSERT_ERROR(condition)                                   \
   if ((condition) == false) {                                     \
-    LOG(FATAL) << R"(Test condition ")" #condition R"(" failed)"; \
+    LOG(fatal) << R"(Test condition ")" #condition R"(" failed)"; \
   }
 
 namespace test
@@ -56,7 +56,7 @@ namespace test
 // a header with the information expected in the payload
 // will be sent on the header stack
 struct SequenceDesc : public o2::header::BaseHeader {
-  //static data for this header type/version
+  // static data for this header type/version
   static constexpr uint32_t sVersion{1};
   static constexpr o2::header::HeaderType sHeaderType{o2::header::String2<uint64_t>("SequDesc")};
   static constexpr o2::header::SerializationMethod sSerializationMethod{o2::header::gSerializationMethodNone};
@@ -107,7 +107,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
     outputs.make<int>(OutputRef{"allocator", 0}) = counter;
 
     if (channelName.empty()) {
-      OutputSpec const query{"TST", "PAIR", 0};
+      OutputSpec const query{"TST", "SEQUENCE", 0};
       auto outputRoutes = rds.spec().outputs;
       for (auto& route : outputRoutes) {
         if (DataSpecUtils::match(route.matcher, query)) {
@@ -117,14 +117,14 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
       }
       ASSERT_ERROR(channelName.length() > 0);
     }
-    FairMQDevice& device = *(rds.device());
+    fair::mq::Device& device = *(rds.device());
     auto transport = device.GetChannel(channelName, 0).Transport();
     auto channelAlloc = o2::pmr::getTransportAllocator(transport);
 
     auto const* dph = DataRefUtils::getHeader<DataProcessingHeader*>(inputs.get("timer"));
     test::SequenceDesc sd{counter, 0, 0};
 
-    FairMQParts messages;
+    fair::mq::Parts messages;
     auto createSequence = [&dph, &sd, &attributes, &transport, &channelAlloc, &messages](size_t nPayloads, DataHeader dh) -> void {
       // one header with index set to the number of split parts indicates sequence
       // of payloads without additional headers
@@ -134,11 +134,11 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
       dh.splitPayloadParts = nPayloads;
       sd.nPayloads = nPayloads;
       sd.initialValue = attributes->distrib(attributes->gen);
-      FairMQMessagePtr header = o2::pmr::getMessage(Stack{channelAlloc, dh, *dph, sd});
+      fair::mq::MessagePtr header = o2::pmr::getMessage(Stack{channelAlloc, dh, *dph, sd});
       messages.AddPart(std::move(header));
 
       for (size_t i = 0; i < nPayloads; ++i) {
-        FairMQMessagePtr payload = transport->CreateMessage(dh.payloadSize);
+        fair::mq::MessagePtr payload = transport->CreateMessage(dh.payloadSize);
         *(reinterpret_cast<size_t*>(payload->GetData())) = sd.initialValue + i;
         messages.AddPart(std::move(payload));
       }
@@ -153,19 +153,19 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
       dh.splitPayloadParts = nPayloads;
       for (size_t i = 0; i < nPayloads; ++i) {
         dh.splitPayloadIndex = i;
-        FairMQMessagePtr header = o2::pmr::getMessage(Stack{channelAlloc, dh, *dph});
+        fair::mq::MessagePtr header = o2::pmr::getMessage(Stack{channelAlloc, dh, *dph});
         messages.AddPart(std::move(header));
-        FairMQMessagePtr payload = transport->CreateMessage(dh.payloadSize);
+        fair::mq::MessagePtr payload = transport->CreateMessage(dh.payloadSize);
         *(reinterpret_cast<size_t*>(payload->GetData())) = i;
         messages.AddPart(std::move(payload));
       }
     };
 
-    //createSequence(attributes->distrib(attributes->gen), DataHeader{"SEQUENCE", "TST", 0});
+    createSequence(attributes->distrib(attributes->gen), DataHeader{"SEQUENCE", "TST", 0});
     createPairs(counter + 1, DataHeader{"PAIR", "TST", 0});
 
     // using utility from ExternalFairMQDeviceProxy
-    sendOnChannel(device, messages, channelName);
+    sendOnChannel(device, messages, channelName, (size_t)-1);
 
     if (++(counter) >= nRolls) {
       // send the end of stream signal, this is transferred by the proxies
@@ -178,6 +178,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
   workflow.emplace_back(DataProcessorSpec{"producer",
                                           {InputSpec{"timer", "TST", "TIMER", 0, Lifetime::Timer}},
                                           {OutputSpec{{"pair"}, "TST", "PAIR", 0, Lifetime::Timeframe},
+                                           OutputSpec{{"sequence"}, "TST", "SEQUENCE", 0, Lifetime::Timeframe},
                                            OutputSpec{{"allocator"}, "TST", "ALLOCATOR", 0, Lifetime::Timeframe}},
                                           AlgorithmSpec{adaptStateless(producerCallback)},
                                           {ConfigParamSpec{"period-timer", VariantType::Int, 100000, {"period of timer"}}}});
@@ -216,7 +217,6 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
         ASSERT_ERROR(*reinterpret_cast<size_t const*>(ref.payload) == sd->initialValue + nSequencePayloads);
         ++nSequencePayloads;
       }
-      //LOG(INFO) << "input " << ref.spec->binding << " has data {" << dh->dataOrigin.as<std::string>() << "/" << dh->dataDescription.as<std::string>() << "/" << dh->subSpecification << "}: " << *reinterpret_cast<size_t const*>(ref.payload);
     }
     for (auto const& [channel, count] : active) {
       ++counters[channel];
@@ -238,7 +238,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
     bool sane = true;
     for (auto const& [channel, count] : *counters) {
       if (count != nRolls) {
-        LOG(FATAL) << "inconsistent event count on input '" << channel << "': " << count << ", expected " << nRolls;
+        LOG(fatal) << "inconsistent event count on input '" << channel << "': " << count << ", expected " << nRolls;
         sane = false;
       }
     }
@@ -250,10 +250,10 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
   //
   auto consumerInit = [createCounters, checkCounters, inputChecker](RawDeviceService& rds, CallbackService& callbacks) {
     auto counters = createCounters(rds);
-    callbacks.set(CallbackService::Id::Stop, [counters, checkCounters]() {
+    callbacks.set<CallbackService::Id::Stop>([counters, checkCounters]() {
       ASSERT_ERROR(checkCounters(counters));
     });
-    callbacks.set(CallbackService::Id::EndOfStream, [counters, checkCounters](EndOfStreamContext& context) {
+    callbacks.set<CallbackService::Id::EndOfStream>([counters, checkCounters](EndOfStreamContext& context) {
       ASSERT_ERROR(checkCounters(counters));
       context.services().get<ControlService>().readyToQuit(QuitRequest::Me);
     });
@@ -267,6 +267,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
 
   workflow.emplace_back(DataProcessorSpec{"consumer",
                                           {InputSpec{"pairin", "TST", "PAIR", 0, Lifetime::Timeframe},
+                                           InputSpec{"sequencein", "TST", "SEQUENCE", 0, Lifetime::Timeframe},
                                            InputSpec{"dpldefault", "TST", "ALLOCATOR", 0, Lifetime::Timeframe}},
                                           {},
                                           AlgorithmSpec{adaptStateful(consumerInit)}});
@@ -276,6 +277,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
   //
   workflow.emplace_back(DataProcessorSpec{"spectator",
                                           {InputSpec{"pairin", "TST", "PAIR", 0, Lifetime::Timeframe},
+                                           InputSpec{"sequencein", "TST", "SEQUENCE", 0, Lifetime::Timeframe},
                                            InputSpec{"dpldefault", "TST", "ALLOCATOR", 0, Lifetime::Timeframe}},
                                           {},
                                           AlgorithmSpec{adaptStateful(consumerInit)}});

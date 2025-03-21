@@ -19,9 +19,7 @@
 #include <vector>
 #include <memory>
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 
 class ThrustVolatileAsyncAllocator
@@ -38,16 +36,14 @@ class ThrustVolatileAsyncAllocator
   GPUReconstruction* mRec;
 };
 
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
+#ifndef __HIPCC__
 // Override synchronize call at end of thrust algorithm running on stream, just don't run cudaStreamSynchronize
-namespace thrust
-{
-namespace cuda_cub
+namespace thrust::cuda_cub
 {
 
-typedef thrust::cuda_cub::execution_policy<typeof(thrust::cuda::par(*(GPUCA_NAMESPACE::gpu::ThrustVolatileAsyncAllocator*)nullptr).on(*(cudaStream_t*)nullptr))> thrustStreamPolicy;
+typedef thrust::cuda_cub::execution_policy<typeof(thrust::cuda::par(*(o2::gpu::ThrustVolatileAsyncAllocator*)nullptr).on(*(cudaStream_t*)nullptr))> thrustStreamPolicy;
 template <>
 __host__ __device__ inline cudaError_t synchronize<thrustStreamPolicy>(thrustStreamPolicy& policy)
 {
@@ -59,7 +55,7 @@ __host__ __device__ inline cudaError_t synchronize<thrustStreamPolicy>(thrustStr
 #endif
 }
 
-} // namespace cuda_cub
-} // namespace thrust
+} // namespace thrust::cuda_cub
+#endif // __HIPCC__
 
-#endif
+#endif // GPU_CUDATHRUSTHELPERS_H

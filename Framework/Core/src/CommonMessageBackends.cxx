@@ -12,7 +12,6 @@
 #include "Framework/MessageContext.h"
 #include "Framework/ArrowContext.h"
 #include "Framework/StringContext.h"
-#include "Framework/RawBufferContext.h"
 #include "Framework/DataProcessor.h"
 #include "Framework/ServiceRegistry.h"
 #include "Framework/RawDeviceService.h"
@@ -27,33 +26,54 @@
 #include <Monitoring/Monitoring.h>
 #include <Headers/DataHeader.h>
 
-#include <options/FairMQProgOptions.h>
+#include <fairmq/ProgOptions.h>
+#include <fairmq/Device.h>
 
 #include <uv.h>
 #include <boost/program_options/variables_map.hpp>
 #include <csignal>
 
-// This is to allow C++20 aggregate initialisation
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-
 namespace o2::framework
 {
 
-struct EndOfStreamContext;
-struct ProcessingContext;
+class EndOfStreamContext;
+class ProcessingContext;
+
+o2::framework::ServiceSpec CommonMessageBackends::fairMQDeviceProxy()
+{
+  return ServiceSpec{
+    .name = "fairmq-device-proxy",
+    .init = [](ServiceRegistryRef, DeviceState&, fair::mq::ProgOptions& options) -> ServiceHandle {
+      auto* proxy = new FairMQDeviceProxy();
+      return ServiceHandle{.hash = TypeIdHelpers::uniqueId<FairMQDeviceProxy>(), .instance = proxy, .kind = ServiceKind::Serial};
+    },
+    .start = [](ServiceRegistryRef services, void* instance) {
+      auto* proxy = static_cast<FairMQDeviceProxy*>(instance);
+      auto& outputs = services.get<DeviceSpec const>().outputs;
+      auto& inputs = services.get<DeviceSpec const>().inputs;
+      auto& forwards = services.get<DeviceSpec const>().forwards;
+      auto* device = services.get<RawDeviceService>().device();
+      /// Notice that we do it here (and not in the init) because
+      /// some of the channels are added only later on to the party,
+      /// (e.g. by ECS) and Init might not be late enough to
+      /// account for them.
+      proxy->bind(outputs, inputs, forwards, *device); },
+  };
+}
 
 o2::framework::ServiceSpec CommonMessageBackends::fairMQBackendSpec()
 {
   return ServiceSpec{
     .name = "fairmq-backend",
-    .init = [](ServiceRegistry& services, DeviceState&, fair::mq::ProgOptions&) -> ServiceHandle {
-      auto& device = services.get<RawDeviceService>();
-      auto context = new MessageContext(FairMQDeviceProxy{device.device()});
+    .uniqueId = CommonServices::simpleServiceId<MessageContext>(),
+    .init = [](ServiceRegistryRef services, DeviceState&, fair::mq::ProgOptions&) -> ServiceHandle {
+      auto& proxy = services.get<FairMQDeviceProxy>();
+      auto context = new MessageContext(proxy);
       auto& spec = services.get<DeviceSpec const>();
+      auto& dataSender = services.get<DataSender>();
 
-      auto dispatcher = [&device](FairMQParts&& parts, std::string const& channel, unsigned int index) {
-        DataProcessor::doSend(*device.device(), std::move(parts), channel.c_str(), index);
+      auto dispatcher = [&dataSender](fair::mq::Parts&& parts, ChannelIndex channelIndex, unsigned int) {
+        dataSender.send(parts, channelIndex);
       };
 
       auto matcher = [policy = spec.dispatchPolicy](o2::header::DataHeader const& header) {
@@ -66,42 +86,28 @@ o2::framework::ServiceSpec CommonMessageBackends::fairMQBackendSpec()
       if (spec.dispatchPolicy.action == DispatchPolicy::DispatchOp::WhenReady) {
         context->init(DispatchControl{dispatcher, matcher});
       }
-      return ServiceHandle{TypeIdHelpers::uniqueId<MessageContext>(), context};
+      return ServiceHandle{.hash = TypeIdHelpers::uniqueId<MessageContext>(), .instance = context, .kind = ServiceKind::Stream};
     },
     .configure = CommonServices::noConfiguration(),
     .preProcessing = CommonMessageBackendsHelpers<MessageContext>::clearContext(),
     .postProcessing = CommonMessageBackendsHelpers<MessageContext>::sendCallback(),
     .preEOS = CommonMessageBackendsHelpers<MessageContext>::clearContextEOS(),
     .postEOS = CommonMessageBackendsHelpers<MessageContext>::sendCallbackEOS(),
-    .kind = ServiceKind::Serial};
+    .kind = ServiceKind::Stream};
 }
 
 o2::framework::ServiceSpec CommonMessageBackends::stringBackendSpec()
 {
   return ServiceSpec{
     .name = "string-backend",
+    .uniqueId = CommonServices::simpleServiceId<StringContext>(),
     .init = CommonMessageBackendsHelpers<StringContext>::createCallback(),
     .configure = CommonServices::noConfiguration(),
     .preProcessing = CommonMessageBackendsHelpers<StringContext>::clearContext(),
     .postProcessing = CommonMessageBackendsHelpers<StringContext>::sendCallback(),
     .preEOS = CommonMessageBackendsHelpers<StringContext>::clearContextEOS(),
     .postEOS = CommonMessageBackendsHelpers<StringContext>::sendCallbackEOS(),
-    .kind = ServiceKind::Serial};
-}
-
-o2::framework::ServiceSpec CommonMessageBackends::rawBufferBackendSpec()
-{
-  return ServiceSpec{
-    .name = "raw-backend",
-    .init = CommonMessageBackendsHelpers<RawBufferContext>::createCallback(),
-    .configure = CommonServices::noConfiguration(),
-    .preProcessing = CommonMessageBackendsHelpers<RawBufferContext>::clearContext(),
-    .postProcessing = CommonMessageBackendsHelpers<RawBufferContext>::sendCallback(),
-    .preEOS = CommonMessageBackendsHelpers<RawBufferContext>::clearContextEOS(),
-    .postEOS = CommonMessageBackendsHelpers<RawBufferContext>::sendCallbackEOS(),
-    .kind = ServiceKind::Serial};
+    .kind = ServiceKind::Stream};
 }
 
 } // namespace o2::framework
-
-#pragma GCC diagnostic pop

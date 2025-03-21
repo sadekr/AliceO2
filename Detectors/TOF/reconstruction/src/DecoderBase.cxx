@@ -21,8 +21,10 @@
 #include <cstring>
 #include <iostream>
 
-//#define DECODER_PARANOID
-//#define DECODER_VERBOSE
+// o2::ctf::CTFIOSize iosize;
+#define ENCODER_PARANOID
+// o2::ctf::CTFIOSize iosize;
+#define ENCODER_VERBOSE
 
 #ifdef DECODER_PARANOID
 #warning "Building code with DecoderParanoid option. This may limit the speed."
@@ -276,6 +278,7 @@ bool DecoderBaseT<RDH>::processDRM()
 
 template class DecoderBaseT<o2::header::RAWDataHeaderV4>;
 template class DecoderBaseT<o2::header::RAWDataHeaderV6>;
+template class DecoderBaseT<o2::header::RAWDataHeaderV7>;
 
 } // namespace compressed
 } // namespace tof

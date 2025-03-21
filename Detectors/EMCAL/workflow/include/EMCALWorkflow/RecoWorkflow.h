@@ -48,20 +48,27 @@ enum struct OutputType { Digits,          ///< EMCAL digits
 /// \param propagateMC If true MC labels are propagated to the output files
 /// \param askDISTSTF If true the Raw->Cell converter subscribes to FLP/DISTSUBTIMEFRAME
 /// \param enableDigitsPrinter If true then the simple digits printer is added as dummy task
-/// \param subspecification Subspecification in case of running on different FLPs
+/// \param subspecificationIn Subspecification of input in case of running on different FLPs
+/// \param subspecificationOut Subspecification if output in case of running on different FLPs
 /// \param cfgInput Input objects processed in the workflow
 /// \param cfgOutput Output objects created in the workflow
+/// \param disableRootInput Disable reading from ROOT file (raw mode)
+/// \param disableRootOutput Disable writing ROOT files (sync reco)
+/// \param disableDecodingErrors Diable streaming raw decoding errors (async reco)
+/// \param disableTriggerReconstruction Disable trigger reconstrction
 /// \return EMCAL reconstruction workflow for the configuration provided
 /// \ingroup EMCALwokflow
 framework::WorkflowSpec getWorkflow(bool propagateMC = true,
                                     bool askDISTSTF = true,
                                     bool enableDigitsPrinter = false,
-                                    int subspecification = 0,
+                                    int subspecificationIn = 0,
+                                    int subspecificationOut = 0,
                                     std::string const& cfgInput = "digits",
                                     std::string const& cfgOutput = "clusters",
                                     bool disableRootInput = false,
                                     bool disableRootOutput = false,
-                                    bool disableDecodingErrors = false);
+                                    bool disableDecodingErrors = false,
+                                    bool disableTriggerReconstruction = false);
 } // namespace reco_workflow
 
 } // namespace emcal

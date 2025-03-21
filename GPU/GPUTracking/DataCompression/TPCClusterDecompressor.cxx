@@ -16,14 +16,18 @@
 #include "GPUO2DataTypes.h"
 #include "GPUParam.h"
 #include "GPUTPCCompressionTrackModel.h"
+#include "GPULogging.h"
 #include <algorithm>
 #include <cstring>
 #include <atomic>
+#include "TPCClusterDecompressionCore.inc"
 
-using namespace GPUCA_NAMESPACE::gpu;
+#include <oneapi/tbb.h>
+
+using namespace o2::gpu;
 using namespace o2::tpc;
 
-int TPCClusterDecompressor::decompress(const CompressedClustersFlat* clustersCompressed, o2::tpc::ClusterNativeAccess& clustersNative, std::function<o2::tpc::ClusterNative*(size_t)> allocator, const GPUParam& param)
+int32_t TPCClusterDecompressor::decompress(const CompressedClustersFlat* clustersCompressed, o2::tpc::ClusterNativeAccess& clustersNative, std::function<o2::tpc::ClusterNative*(size_t)> allocator, const GPUParam& param, bool deterministicRec)
 {
   CompressedClusters c;
   const CompressedClusters* p;
@@ -33,126 +37,80 @@ int TPCClusterDecompressor::decompress(const CompressedClustersFlat* clustersCom
     c = *clustersCompressed;
     p = &c;
   }
-  return decompress(p, clustersNative, allocator, param);
+  return decompress(p, clustersNative, allocator, param, deterministicRec);
 }
 
-int TPCClusterDecompressor::decompress(const CompressedClusters* clustersCompressed, o2::tpc::ClusterNativeAccess& clustersNative, std::function<o2::tpc::ClusterNative*(size_t)> allocator, const GPUParam& param)
+int32_t TPCClusterDecompressor::decompress(const CompressedClusters* clustersCompressed, o2::tpc::ClusterNativeAccess& clustersNative, std::function<o2::tpc::ClusterNative*(size_t)> allocator, const GPUParam& param, bool deterministicRec)
 {
-  std::vector<ClusterNative> clusters[NSLICES][GPUCA_ROW_COUNT];
-  std::atomic_flag locks[NSLICES][GPUCA_ROW_COUNT];
-  for (unsigned int i = 0; i < NSLICES * GPUCA_ROW_COUNT; i++) {
+  if (clustersCompressed->nTracks && clustersCompressed->solenoidBz != -1e6f && clustersCompressed->solenoidBz != param.bzkG) {
+    throw std::runtime_error("Configured solenoid Bz does not match value used for track model encoding");
+  }
+  if (clustersCompressed->nTracks && clustersCompressed->maxTimeBin != -1e6 && clustersCompressed->maxTimeBin != param.continuousMaxTimeBin) {
+    throw std::runtime_error("Configured max time bin does not match value used for track model encoding");
+  }
+  std::vector<ClusterNative> clusters[NSECTORS][GPUCA_ROW_COUNT];
+  std::atomic_flag locks[NSECTORS][GPUCA_ROW_COUNT];
+  for (uint32_t i = 0; i < NSECTORS * GPUCA_ROW_COUNT; i++) {
     (&locks[0][0])[i].clear();
   }
-  unsigned int offset = 0, lasti = 0;
-  GPUCA_OPENMP(parallel for firstprivate(offset, lasti))
-  for (unsigned int i = 0; i < clustersCompressed->nTracks; i++) {
-    while (lasti < i) {
-      offset += clustersCompressed->nTrackClusters[lasti++];
+  const uint32_t maxTime = param.continuousMaxTimeBin > 0 ? ((param.continuousMaxTimeBin + 1) * ClusterNative::scaleTimePacked - 1) : TPC_MAX_TIME_BIN_TRIGGERED;
+  tbb::parallel_for(tbb::blocked_range<uint32_t>(0, clustersCompressed->nTracks), [&](const tbb::blocked_range<uint32_t>& range) {
+    uint32_t offset = 0, lasti = 0;
+    for (uint32_t i = range.begin(); i < range.end(); i++) {
+      if (i < lasti) {
+        offset = lasti = 0; // dynamic scheduling order, need to reinitialize offset
+      }
+      while (lasti < i) {
+        offset += clustersCompressed->nTrackClusters[lasti++];
+      }
+      lasti++;
+      TPCClusterDecompressionCore::decompressTrack(*clustersCompressed, param, maxTime, i, offset, clusters, locks);
     }
-    lasti++;
-    float zOffset = 0;
-    unsigned int slice = clustersCompressed->sliceA[i];
-    unsigned int row = clustersCompressed->rowA[i];
-    GPUTPCCompressionTrackModel track;
-    unsigned int j;
-    for (j = 0; j < clustersCompressed->nTrackClusters[i]; j++) {
-      unsigned int pad = 0, time = 0;
-      if (j) {
-        unsigned char tmpSlice = clustersCompressed->sliceLegDiffA[offset - i - 1];
-        bool changeLeg = (tmpSlice >= NSLICES);
-        if (changeLeg) {
-          tmpSlice -= NSLICES;
-        }
-        if (clustersCompressed->nComppressionModes & GPUSettings::CompressionDifferences) {
-          slice += tmpSlice;
-          if (slice >= NSLICES) {
-            slice -= NSLICES;
-          }
-          row += clustersCompressed->rowDiffA[offset - i - 1];
-          if (row >= GPUCA_ROW_COUNT) {
-            row -= GPUCA_ROW_COUNT;
-          }
-        } else {
-          slice = tmpSlice;
-          row = clustersCompressed->rowDiffA[offset - i - 1];
-        }
-        if (changeLeg && track.Mirror()) {
-          break;
-        }
-        if (track.Propagate(param.tpcGeometry.Row2X(row), param.SliceParam[slice].Alpha)) {
-          break;
-        }
-        unsigned int timeTmp = clustersCompressed->timeResA[offset - i - 1];
-        if (timeTmp & 800000) {
-          timeTmp |= 0xFF000000;
-        }
-        time = timeTmp + ClusterNative::packTime(CAMath::Max(0.f, param.tpcGeometry.LinearZ2Time(slice, track.Z() + zOffset)));
-        float tmpPad = CAMath::Max(0.f, CAMath::Min((float)param.tpcGeometry.NPads(GPUCA_ROW_COUNT - 1), param.tpcGeometry.LinearY2Pad(slice, row, track.Y())));
-        pad = clustersCompressed->padResA[offset - i - 1] + ClusterNative::packPad(tmpPad);
-      } else {
-        time = clustersCompressed->timeA[i];
-        pad = clustersCompressed->padA[i];
-      }
-      std::vector<ClusterNative>& clusterVector = clusters[slice][row];
-      auto& lock = locks[slice][row];
-      while (lock.test_and_set(std::memory_order_acquire)) {
-      }
-      clusterVector.emplace_back(time, clustersCompressed->flagsA[offset], pad, clustersCompressed->sigmaTimeA[offset], clustersCompressed->sigmaPadA[offset], clustersCompressed->qMaxA[offset], clustersCompressed->qTotA[offset]);
-      auto& cluster = clusterVector.back();
-      float y = param.tpcGeometry.LinearPad2Y(slice, row, cluster.getPad());
-      float z = param.tpcGeometry.LinearTime2Z(slice, cluster.getTime());
-      lock.clear(std::memory_order_release);
-      if (j == 0) {
-        zOffset = z;
-        track.Init(param.tpcGeometry.Row2X(row), y, z - zOffset, param.SliceParam[slice].Alpha, clustersCompressed->qPtA[i], param);
-      }
-      if (j + 1 < clustersCompressed->nTrackClusters[i] && track.Filter(y, z - zOffset, row)) {
-        break;
-      }
-      offset++;
-    }
-    offset += clustersCompressed->nTrackClusters[i] - j;
-  }
-  ClusterNative* clusterBuffer = allocator(clustersCompressed->nAttachedClusters + clustersCompressed->nUnattachedClusters);
-  unsigned int offsets[NSLICES][GPUCA_ROW_COUNT];
-  offset = 0;
-  for (unsigned int i = 0; i < NSLICES; i++) {
-    for (unsigned int j = 0; j < GPUCA_ROW_COUNT; j++) {
-      clustersNative.nClusters[i][j] = clusters[i][j].size() + clustersCompressed->nSliceRowClusters[i * GPUCA_ROW_COUNT + j];
+  });
+  size_t nTotalClusters = clustersCompressed->nAttachedClusters + clustersCompressed->nUnattachedClusters;
+  ClusterNative* clusterBuffer = allocator(nTotalClusters);
+  uint32_t offsets[NSECTORS][GPUCA_ROW_COUNT];
+  uint32_t offset = 0;
+  uint32_t decodedAttachedClusters = 0;
+  for (uint32_t i = 0; i < NSECTORS; i++) {
+    for (uint32_t j = 0; j < GPUCA_ROW_COUNT; j++) {
+      clustersNative.nClusters[i][j] = clusters[i][j].size() + ((i * GPUCA_ROW_COUNT + j >= clustersCompressed->nSliceRows) ? 0 : clustersCompressed->nSliceRowClusters[i * GPUCA_ROW_COUNT + j]);
       offsets[i][j] = offset;
-      offset += clustersCompressed->nSliceRowClusters[i * GPUCA_ROW_COUNT + j];
+      offset += (i * GPUCA_ROW_COUNT + j >= clustersCompressed->nSliceRows) ? 0 : clustersCompressed->nSliceRowClusters[i * GPUCA_ROW_COUNT + j];
+      decodedAttachedClusters += clusters[i][j].size();
     }
+  }
+  if (decodedAttachedClusters != clustersCompressed->nAttachedClusters) {
+    GPUWarning("%u / %u clusters failed track model decoding (%f %%)", clustersCompressed->nAttachedClusters - decodedAttachedClusters, clustersCompressed->nAttachedClusters, 100.f * (float)(clustersCompressed->nAttachedClusters - decodedAttachedClusters) / (float)clustersCompressed->nAttachedClusters);
   }
   clustersNative.clustersLinear = clusterBuffer;
   clustersNative.setOffsetPtrs();
-  GPUCA_OPENMP(parallel for)
-  for (unsigned int i = 0; i < NSLICES; i++) {
-    for (unsigned int j = 0; j < GPUCA_ROW_COUNT; j++) {
+  tbb::parallel_for<uint32_t>(0, NSECTORS, [&](auto i) {
+    for (uint32_t j = 0; j < GPUCA_ROW_COUNT; j++) {
       ClusterNative* buffer = &clusterBuffer[clustersNative.clusterOffset[i][j]];
       if (clusters[i][j].size()) {
         memcpy((void*)buffer, (const void*)clusters[i][j].data(), clusters[i][j].size() * sizeof(clusterBuffer[0]));
       }
-      unsigned int time = 0;
-      unsigned short pad = 0;
-      ClusterNative* cl = buffer + clusters[i][j].size();
-      unsigned int end = offsets[i][j] + clustersCompressed->nSliceRowClusters[i * GPUCA_ROW_COUNT + j];
-      for (unsigned int k = offsets[i][j]; k < end; k++) {
-        if (clustersCompressed->nComppressionModes & GPUSettings::CompressionDifferences) {
-          unsigned int timeTmp = clustersCompressed->timeDiffU[k];
-          if (timeTmp & 800000) {
-            timeTmp |= 0xFF000000;
+      ClusterNative* clout = buffer + clusters[i][j].size();
+      uint32_t end = offsets[i][j] + ((i * GPUCA_ROW_COUNT + j >= clustersCompressed->nSliceRows) ? 0 : clustersCompressed->nSliceRowClusters[i * GPUCA_ROW_COUNT + j]);
+      TPCClusterDecompressionCore::decompressHits(*clustersCompressed, offsets[i][j], end, clout);
+      if (param.rec.tpc.clustersShiftTimebins != 0.f) {
+        for (uint32_t k = 0; k < clustersNative.nClusters[i][j]; k++) {
+          auto& cl = buffer[k];
+          float t = cl.getTime() + param.rec.tpc.clustersShiftTimebins;
+          if (t < 0) {
+            t = 0;
           }
-          time += timeTmp;
-          pad += clustersCompressed->padDiffU[k];
-        } else {
-          time = clustersCompressed->timeDiffU[k];
-          pad = clustersCompressed->padDiffU[k];
+          if (param.continuousMaxTimeBin > 0 && t > param.continuousMaxTimeBin) {
+            t = param.continuousMaxTimeBin;
+          }
+          cl.setTime(t);
         }
-        *(cl++) = ClusterNative(time, clustersCompressed->flagsU[k], pad, clustersCompressed->sigmaTimeU[k], clustersCompressed->sigmaPadU[k], clustersCompressed->qMaxU[k], clustersCompressed->qTotU[k]);
       }
-      std::sort(buffer, buffer + clustersNative.nClusters[i][j]);
-    }
-  }
-
+      if (deterministicRec) {
+        std::sort(buffer, buffer + clustersNative.nClusters[i][j]);
+      }
+    } // clang-format off
+  }, tbb::simple_partitioner()); // clang-format on
   return 0;
 }

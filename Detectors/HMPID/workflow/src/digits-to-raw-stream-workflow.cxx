@@ -27,14 +27,6 @@
 #include "Framework/Variant.h"
 #include "CommonUtils/ConfigurableParam.h"
 
-// customize the completion policy
-void customize(std::vector<o2::framework::CompletionPolicy>& policies)
-{
-  using o2::framework::CompletionPolicy;
-  using o2::framework::CompletionPolicyHelpers;
-  policies.push_back(CompletionPolicyHelpers::defineByName("digit-hmpid-write", CompletionPolicy::CompletionOp::Consume));
-}
-
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 {
@@ -43,7 +35,7 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 }
 
 #include "Framework/runDataProcessing.h"
-#include "../include/HMPIDWorkflow/WriteRawFileSpec.h"
+#include "HMPIDWorkflow/WriteRawFileSpec.h"
 
 using namespace o2;
 using namespace o2::framework;

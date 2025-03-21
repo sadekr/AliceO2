@@ -15,9 +15,7 @@
 #include "Framework/Lifetime.h"
 #include "Headers/Stack.h"
 
-namespace o2
-{
-namespace framework
+namespace o2::framework
 {
 
 /// A concrete description of the output to be created
@@ -30,7 +28,6 @@ struct Output {
   header::DataOrigin origin;
   header::DataDescription description;
   header::DataHeader::SubSpecificationType subSpec = 0;
-  enum Lifetime lifetime = Lifetime::Timeframe;
   header::Stack metaHeader = {};
 
   Output(header::DataOrigin o, header::DataDescription d) : origin(o), description(d) {}
@@ -40,14 +37,8 @@ struct Output {
   {
   }
 
-  Output(header::DataOrigin o, header::DataDescription d, header::DataHeader::SubSpecificationType s, Lifetime l)
-    : origin(o), description(d), subSpec(s), lifetime(l)
-  {
-  }
-
-  Output(header::DataOrigin o, header::DataDescription d, header::DataHeader::SubSpecificationType s, Lifetime l,
-         header::Stack&& stack)
-    : origin(o), description(d), subSpec(s), lifetime(l), metaHeader(std::move(stack))
+  Output(header::DataOrigin o, header::DataDescription d, header::DataHeader::SubSpecificationType s, header::Stack&& stack)
+    : origin(o), description(d), subSpec(s), metaHeader(std::move(stack))
   {
   }
 
@@ -62,7 +53,6 @@ struct Output {
     : origin(rhs.origin),
       description(rhs.description),
       subSpec(rhs.subSpec),
-      lifetime(rhs.lifetime),
       metaHeader(std::move(rhs.metaHeader))
   {
   }
@@ -74,18 +64,15 @@ struct Output {
     origin = rhs.origin;
     description = rhs.description;
     subSpec = rhs.subSpec;
-    lifetime = rhs.lifetime;
     metaHeader = std::move(rhs.metaHeader);
     return *this;
   }
 
   bool operator==(const Output& that) const
   {
-    return origin == that.origin && description == that.description && subSpec == that.subSpec &&
-           lifetime == that.lifetime;
-  };
+    return origin == that.origin && description == that.description && subSpec == that.subSpec;
+  }
 };
 
-} // namespace framework
 } // namespace o2
 #endif

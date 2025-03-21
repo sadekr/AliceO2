@@ -49,7 +49,7 @@ class Ray
   GPUd() Ray() : mP{0.f}, mD{0.f}, mDistXY2(0.f), mDistXY2i(0.f), mDistXYZ(0.f), mXDxPlusYDy(0.f), mXDxPlusYDyRed(0.f), mXDxPlusYDy2(0.f), mR02(0.f), mR12(0.f)
   {
   }
-  GPUdDefault() ~Ray() CON_DEFAULT;
+  GPUdDefault() ~Ray() = default;
 
 #ifndef GPUCA_ALIGPUCODE // this part is unvisible on GPU version
   Ray(const math_utils::Point3D<float> point0, const math_utils::Point3D<float> point1);
@@ -74,8 +74,8 @@ class Ray
   GPUd() float getDist() const { return mDistXYZ; }
   GPUd() float getDist(float deltaT) const { return mDistXYZ * (deltaT > 0 ? deltaT : -deltaT); }
 
-  // for debud only
-  float getPos(float t, int i) const { return mP[i] + t * mD[i]; }
+  // for debug only
+  GPUd() float getPos(float t, int i) const { return mP[i] + t * mD[i]; }
 
   GPUd() float getPhi(float t) const
   {

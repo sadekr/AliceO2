@@ -27,13 +27,12 @@
 
 #include <vector>
 #include <array>
+#include <atomic>
 #include "DataFormatsTPC/Constants.h"
 #include "SimulationDataFormat/ConstMCTruthContainer.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 
 struct GPUTPCDigitsMCInput {
@@ -44,12 +43,16 @@ struct GPUTPCClusterMCInterim {
   std::vector<o2::MCCompLabel> labels;
 };
 
+struct GPUTPCClusterMCInterimArray {
+  std::vector<GPUTPCClusterMCInterim> data;
+  std::atomic_flag lock = ATOMIC_FLAG_INIT;
+};
+
 struct GPUTPCLinearLabels {
   std::vector<o2::dataformats::MCTruthHeaderElement> header;
   std::vector<o2::MCCompLabel> data;
 };
 
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

@@ -24,7 +24,7 @@ namespace dataformats
 class CalibInfoTOF
 {
  public:
-  CalibInfoTOF(int indexTOFCh, int timestamp, float DeltaTimePi, float tot, int flags = 0) : mTOFChIndex(indexTOFCh), mTimestamp(timestamp), mDeltaTimePi(DeltaTimePi), mTot(tot), mFlags(flags){};
+  CalibInfoTOF(int indexTOFCh, int timestamp, float DeltaTimePi, float tot, int mask, int flags = 0) : mTOFChIndex(indexTOFCh), mTimestamp(timestamp), mDeltaTimePi(DeltaTimePi), mTot(tot), mMask(mask), mFlags(flags){};
   CalibInfoTOF() = default;
   ~CalibInfoTOF() = default;
 
@@ -40,8 +40,30 @@ class CalibInfoTOF
   void setTot(float tot) { mTot = tot; }
   float getTot() const { return mTot; }
 
-  void setFlags(int flags) { mFlags = flags; }
-  float getFlags() const { return mFlags; }
+  void setFlags(unsigned char flags) { mFlags = flags; }
+  unsigned char getFlags() const { return mFlags; }
+
+  int getMask() const { return mMask; }
+
+  // for event time maker
+  float tofSignal() const { return mDeltaTimePi; }
+  float tofExpSignalPi() const { return 0.0; }
+  float tofExpSignalKa() const { return 0.0; }
+  float tofExpSignalPr() const { return 0.0; }
+  float tofExpSigmaPi() const { return 500.0; }
+  float tofExpSigmaKa() const { return 500.0; }
+  float tofExpSigmaPr() const { return 500.0; }
+
+  enum Flags {
+    kTPC = BIT(0),
+    kITSTPC = BIT(1),
+    kTPCTRD = BIT(2),
+    kITSTPCTRD = BIT(3),
+    kBelow = BIT(4),   // < 0.5 GeV/c
+    kAbove = BIT(5),   // > 1.5 GeV/c
+    kNoBC = BIT(6),    // no BC in the range
+    kMultiHit = BIT(7) // multi hit cluster
+  };
 
  private:
   int mTOFChIndex;      // index of the TOF channel
@@ -49,8 +71,8 @@ class CalibInfoTOF
   float mDeltaTimePi;   // raw tof time - expected time for pi hypotesis
   float mTot;           // time-over-threshold
   unsigned char mFlags; // bit mask with quality flags (to be defined)
-
-  ClassDefNV(CalibInfoTOF, 1);
+  int mMask;            // mask for int BC used
+  ClassDefNV(CalibInfoTOF, 2);
 };
 } // namespace dataformats
 } // namespace o2

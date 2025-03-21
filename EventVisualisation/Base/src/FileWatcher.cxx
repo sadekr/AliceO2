@@ -14,58 +14,58 @@
 /// \author julian.myrcha@cern.ch
 
 #include "EventVisualisationBase/FileWatcher.h"
-#include "FairLogger.h"
+#include "EventVisualisationBase/DirectoryLoader.h"
+#include <fairlogger/Logger.h>
 
 #include <list>
 #include <filesystem>
 #include <algorithm>
 #include <sys/stat.h>
-using namespace std;
 
-namespace o2
-{
-namespace event_visualisation
-{
+using namespace std;
+using namespace o2::event_visualisation;
 
 const char* FileWatcher::mLowGuard = " 0"; /// start guard
 const char* FileWatcher::mEndGuard = "~0"; /// stop guard
 
-deque<string> FileWatcher::load(string path)
+FileWatcher::FileWatcher(const std::vector<string>& path, const std::vector<std::string>& ext) : mExt(ext)
 {
-  //LOG(INFO) << "FileWatcher::load(" << path << ")";
-  deque<string> result;
-  for (const auto& entry : std::filesystem::directory_iterator(path)) {
-    if (entry.path().extension() == ".json") {
-      result.push_back(entry.path().filename());
-    }
-  }
-  //LOG(INFO) << result.size();
-  return result;
-}
-
-FileWatcher::FileWatcher(const string& path)
-{
-  //LOG(INFO) << "FileWatcher::FileWatcher(" << path << ")";
-  this->mDataFolder = path;
+  //LOG(info) << "FileWatcher::FileWatcher(" << path << ")";
+  this->mDataFolders = path;
   this->mCurrentFile = mEndGuard;
   this->mFiles.clear();
   this->mFiles.push_front(mLowGuard);
   this->mFiles.push_back(mEndGuard);
-  //LOG(INFO) << "FileWatcher" << this->getSize();
 }
 
 void FileWatcher::changeFolder(const string& path)
 {
-  if (this->mDataFolder == path) {
+  if (this->mDataFolders.size() == 1 && this->mDataFolders[0] == path) {
     return; // the same folder - no action
   }
-  this->mDataFolder = path;
+  this->mDataFolders.clear();
+  this->mDataFolders.push_back(path);
   this->mCurrentFile = mEndGuard;
   this->mFiles.clear();
   this->mFiles.push_front(mLowGuard);
   this->mFiles.push_back(mEndGuard);
   this->refresh();
-  //LOG(INFO) << "FileWatcher" << this->getSize();
+  // LOG(info) << "FileWatcher" << this->getSize();
+}
+
+void FileWatcher::changeFolder(const std::vector<string>& paths)
+{
+  if (this->mDataFolders == paths) {
+    return; // the same folders - no action
+  }
+  this->mDataFolders.clear();
+  this->mDataFolders = paths;
+  this->mCurrentFile = mEndGuard;
+  this->mFiles.clear();
+  this->mFiles.push_front(mLowGuard);
+  this->mFiles.push_back(mEndGuard);
+  this->refresh();
+  //LOG(info) << "FileWatcher" << this->getSize();
 }
 
 string FileWatcher::nextItem(const string& item) const
@@ -96,6 +96,18 @@ string FileWatcher::currentItem() const
     return *(this->mFiles.end() - 2);
   }
   return this->mCurrentFile;
+}
+
+void FileWatcher::rollToNext()
+{
+  if (this->mFiles.size() == 2) { // only guards on the list
+    return;                       // nothing to do
+  }
+  this->setNext();
+  if (this->mCurrentFile == mEndGuard) {
+    this->setFirst();
+    this->setNext();
+  }
 }
 
 void FileWatcher::setFirst()
@@ -131,11 +143,10 @@ int FileWatcher::getPos() const
 bool FileWatcher::refresh()
 {
   string previous = this->currentItem();
-  LOG(INFO) << "previous:" << previous;
-  LOG(INFO) << "currentFile:" << this->mCurrentFile;
+  LOGF(info, "previous:", previous);
+  LOGF(info, "currentFile:", this->mCurrentFile);
 
-  this->mFiles = load(this->mDataFolder);
-  std::sort(this->mFiles.begin(), this->mFiles.end());
+  this->mFiles = DirectoryLoader::load(this->mDataFolders, "_", this->mExt); // already sorted according part staring with marker
   if (this->mCurrentFile != mEndGuard) {
     if (this->mFiles.empty()) {
       this->mCurrentFile = mEndGuard; // list empty - stick to last element
@@ -149,27 +160,36 @@ bool FileWatcher::refresh()
     }
   }
   //for (auto it = this->mFiles.begin(); it != this->mFiles.end(); ++it) {
-  //  LOG(INFO) << *it;
+  //  LOG(info) << *it;
   //}
   this->mFiles.push_front(mLowGuard);
   this->mFiles.push_back(mEndGuard);
 
-  LOG(INFO) << "this->mFiles.size() = " << this->mFiles.size();
-  LOG(INFO) << "this->mCurrentFile = " << this->mCurrentFile;
-  LOG(INFO) << "current:" << this->currentItem();
+  LOGF(info, "this->mFiles.size() = ", this->mFiles.size());
+  LOGF(info, "this->mCurrentFile = ", this->mCurrentFile);
+  LOGF(info, "current:", this->currentItem());
   return previous != this->currentItem();
 }
 
 void FileWatcher::setCurrentItem(int no)
 {
   this->mCurrentFile = this->mFiles[no];
-  LOG(INFO) << "this->setCurrentItem(" << no << ")";
-  LOG(INFO) << "this->mCurrentFile = " << this->mCurrentFile;
+  LOGF(info, "this->setCurrentItem(", no, ")");
+  LOGF(info, "this->mCurrentFile = ", this->mCurrentFile);
 }
 
 std::string FileWatcher::currentFilePath() const
 {
-  return this->mDataFolder + "/" + this->currentItem();
+  if (this->mDataFolders.size() > 1) {
+    for (std::string dataFolder : mDataFolders) {
+      struct stat buffer;
+      std::string path = dataFolder + "/" + this->currentItem();
+      if (stat(path.c_str(), &buffer) == 0) {
+        return dataFolder + "/" + this->currentItem();
+      }
+    }
+  }
+  return this->mDataFolders[0] + "/" + this->currentItem();
 }
 
 bool FileWatcher::currentFileExist()
@@ -183,8 +203,10 @@ void FileWatcher::saveCurrentFileToFolder(const string& destinationFolder)
   if (!std::filesystem::exists(destinationFolder)) {
     return; // do not specified, where to save
   }
-  if (this->mDataFolder == destinationFolder) {
-    return; // could not save to yourself
+  for (const auto& folder : this->mDataFolders) {
+    if (folder == destinationFolder) {
+      return; // could not save to yourself
+    }
   }
   if (this->currentFileExist()) {
     std::filesystem::path source = this->currentFilePath();
@@ -193,6 +215,3 @@ void FileWatcher::saveCurrentFileToFolder(const string& destinationFolder)
     std::filesystem::copy_file(source, destination);
   }
 }
-
-} // namespace event_visualisation
-} // namespace o2

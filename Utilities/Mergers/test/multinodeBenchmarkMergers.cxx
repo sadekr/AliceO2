@@ -44,7 +44,7 @@ void customize(std::vector<ConfigParamSpec>& options)
 
 #include "Framework/runDataProcessing.h"
 #include "Framework/ExternalFairMQDeviceProxy.h"
-#include <fairmq/FairMQLogger.h>
+#include "Framework/Logger.h"
 #include <TH1.h>
 
 #include "Mergers/MergerInfrastructureBuilder.h"
@@ -67,6 +67,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     {{{"histo"}, {"TST", "HISTO"}}},
     inputChannelConfig.c_str(),
     dplModelAdaptor())));
+  specs.back().labels.emplace_back(DataProcessorLabel{"input-proxy"});
 
   MergerInfrastructureBuilder mergersBuilder;
   mergersBuilder.setInfrastructureName("histos");
@@ -74,7 +75,8 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
   mergersBuilder.setOutputSpec({{"main"}, "TST", "FULLHISTO", 0});
   MergerConfig mergerConfig;
   mergerConfig.inputObjectTimespan = {mergersOwnershipMode};
-  mergerConfig.publicationDecision = {mergersPublicationDecision, mergersPublicationDecision == PublicationDecision::EachNSeconds ? mergersPublicationInterval : 1.0};
+  std::vector<std::pair<size_t, size_t>> param = {{mergersPublicationInterval, 1}};
+  mergerConfig.publicationDecision = {mergersPublicationDecision, param};
   mergerConfig.mergedObjectTimespan = {MergedObjectTimespan::FullHistory};
   mergerConfig.topologySize = {TopologySize::NumberOfLayers, mergersLayers};
   mergersBuilder.setConfig(mergerConfig);
@@ -87,13 +89,13 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
       for (int i = 1; i <= histo->GetNbinsX(); i++) {
         bins += " " + std::to_string((int)histo->GetBinContent(i));
         if (i >= 100) {
-          LOG(INFO) << "Trimming the output to 100 entries, total is: " << histo->GetNbinsX();
+          LOG(info) << "Trimming the output to 100 entries, total is: " << histo->GetNbinsX();
           break;
         }
       }
-      LOG(INFO) << bins;
+      LOG(info) << bins;
     } else {
-      LOG(INFO) << "they asked me to print a nullptr";
+      LOG(info) << "they asked me to print a nullptr";
     }
   };
 
@@ -112,7 +114,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
           if (auto histo = dynamic_cast<const TH1F*>(tobject.get())) {
             printHisto(histo);
           } else if (auto collection = dynamic_cast<TCollection*>(tobject.get())) {
-            LOG(INFO) << "Received a collection, printing the first and the last histogram, total is: " << std::to_string(collection->GetEntries());
+            LOG(info) << "Received a collection, printing the first and the last histogram, total is: " << std::to_string(collection->GetEntries());
             printHisto(dynamic_cast<TH1*>(collection->begin()()));
             printHisto(dynamic_cast<TH1*>(collection->FindObject(std::to_string(collection->GetEntries() - 1).c_str())));
             collection->SetOwner(true);

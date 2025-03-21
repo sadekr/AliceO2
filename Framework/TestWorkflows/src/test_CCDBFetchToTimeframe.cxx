@@ -20,7 +20,7 @@
 using namespace o2::framework;
 
 // Set a start value which might correspond to a real timestamp of an object in CCDB, for example:
-// o2-testworkflows-ccdb-fetch-to-timeframe --condition-backend http://ccdb-test.cern.ch:8080 --start-value-enumeration 1575985965925000
+// o2-testworkflows-ccdb-fetch-to-timeframe --condition-backend http://alice-ccdb.cern.ch --start-value-enumeration 1575985965925000
 WorkflowSpec defineDataProcessing(ConfigContext const&)
 {
   return WorkflowSpec{
@@ -34,7 +34,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const&)
           DataRef condition = inputs.get("somecondition");
           auto payloadSize = DataRefUtils::getPayloadSize(condition);
           if (payloadSize != 2048) {
-            LOGP(ERROR, "Wrong size for condition payload (expected {}, found {})", 2048, payloadSize);
+            LOGP(error, "Wrong size for condition payload (expected {}, found {})", 2048, payloadSize);
           }
           control.readyToQuit(QuitRequest::All);
         })},

@@ -1,3 +1,14 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
 #if !defined(__CLING__) || defined(__ROOTCLING__)
 // ROOT header
 #include <TChain.h>
@@ -15,7 +26,7 @@
 #include "GPUTRDGeometry.h"
 
 // O2 header
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "CommonConstants/LHCConstants.h"
 #include "DetectorsBase/GeometryManager.h"
 #include "DetectorsBase/Propagator.h"
@@ -24,12 +35,12 @@
 #include "DataFormatsTRD/Tracklet64.h"
 #include "DataFormatsTRD/TriggerRecord.h"
 #include "TPCBase/ParameterElectronics.h"
+#include "TPCBase/ParameterDetector.h"
 #include "TPCBase/ParameterGas.h"
 
 #endif
 
-using namespace GPUCA_NAMESPACE::gpu;
-
+using namespace o2::gpu;
 
 void run_trd_tracker(std::string path = "./",
                      std::string inputTracks = "o2match_itstpc.root",
@@ -37,7 +48,7 @@ void run_trd_tracker(std::string path = "./",
 {
   //-------- debug time information from tracks and tracklets
   std::vector<float> trdTriggerTimes;
-  std::vector<int> trdTriggerIndices;
+  std::vector<int32_t> trdTriggerIndices;
 
   //-------- init geometry and field --------//
   o2::base::GeometryManager::loadGeometry();
@@ -80,9 +91,12 @@ void run_trd_tracker(std::string path = "./",
 
   auto& elParam = o2::tpc::ParameterElectronics::Instance();
   auto& gasParam = o2::tpc::ParameterGas::Instance();
+  auto& detParam = o2::tpc::ParameterDetector::Instance();
   auto tpcTBinMUS = elParam.ZbinWidth;
   auto tpcVdrift = gasParam.DriftV;
+  auto tpcTOffset = detpar.DriftTimeOffset;
   tracker->SetTPCVdrift(tpcVdrift);
+  tracker->SetTPCTDriftOffset(tpcTOffset);
 
   // configure the tracker
   //tracker->EnableDebugOutput();
@@ -98,7 +112,7 @@ void run_trd_tracker(std::string path = "./",
   printf("Attached ITS-TPC tracks branch with %lli entries\n", (tracksItsTpc.GetBranch("TPCITS"))->GetEntries());
 
   tracksItsTpc.GetEntry(0);
-  unsigned int nTracks = tracksInArrayPtr->size();
+  uint32_t nTracks = tracksInArrayPtr->size();
   printf("There are %u tracks in total\n", nTracks);
 
   // and load input tracklets
@@ -110,14 +124,14 @@ void run_trd_tracker(std::string path = "./",
   std::vector<o2::trd::Tracklet64>* trackletsInArrayPtr = nullptr;
   trdTracklets.SetBranchAddress("Tracklet", &trackletsInArrayPtr);
   trdTracklets.GetEntry(0);
-  int nCollisions = triggerRecordsInArrayPtr->size();
-  int nTracklets = trackletsInArrayPtr->size();
+  int32_t nCollisions = triggerRecordsInArrayPtr->size();
+  int32_t nTracklets = trackletsInArrayPtr->size();
   printf("There are %i tracklets in total from %i trigger records\n", nTracklets, nCollisions);
 
-  for (int iEv = 0; iEv < nCollisions; ++iEv) {
+  for (int32_t iEv = 0; iEv < nCollisions; ++iEv) {
     o2::trd::TriggerRecord& trg = triggerRecordsInArrayPtr->at(iEv);
-    int nTrackletsCurrent = trg.getNumberOfTracklets();
-    int iFirstTracklet = trg.getFirstTracklet();
+    int32_t nTrackletsCurrent = trg.getNumberOfTracklets();
+    int32_t iFirstTracklet = trg.getFirstTracklet();
     int64_t evTime = trg.getBCData().toLong() * o2::constants::lhc::LHCBunchSpacingNS; // event time in ns
     trdTriggerTimes.push_back(evTime / 1000.);
     trdTriggerIndices.push_back(iFirstTracklet);
@@ -138,7 +152,7 @@ void run_trd_tracker(std::string path = "./",
 
   printf("Start loading input tracks into TRD tracker\n");
   // load everything into the tracker
-  for (unsigned int iTrk = 0; iTrk < nTracks; ++iTrk) {
+  for (uint32_t iTrk = 0; iTrk < nTracks; ++iTrk) {
     const auto& trkITSTPC = tracksInArrayPtr->at(iTrk);
     GPUTRDTracker::HelperTrackAttributes trkAttribs;
     trkAttribs.mTime = trkITSTPC.getTimeMUS().getTimeStamp();

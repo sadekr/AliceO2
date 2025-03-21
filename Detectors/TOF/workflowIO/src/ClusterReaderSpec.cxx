@@ -17,7 +17,9 @@
 #include "Framework/ConfigParamRegistry.h"
 #include "TOFWorkflowIO/ClusterReaderSpec.h"
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
+#include "DetectorsBase/GRPGeomHelper.h"
+#include "TOFBase/Geo.h"
 
 using namespace o2::framework;
 using namespace o2::tof;
@@ -29,7 +31,7 @@ namespace tof
 
 void ClusterReader::init(InitContext& ic)
 {
-  LOG(DEBUG) << "Init Cluster reader!";
+  LOG(debug) << "Init Cluster reader!";
   mFileName = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")),
                                             ic.options().get<std::string>("tof-cluster-infile"));
   connectTree(mFileName);
@@ -40,11 +42,12 @@ void ClusterReader::run(ProcessingContext& pc)
   auto ent = mTree->GetReadEntry() + 1;
   assert(ent < mTree->GetEntries()); // this should not happen
   mTree->GetEntry(ent);
-  LOG(DEBUG) << "Pushing " << mClustersPtr->size() << " TOF clusters at entry " << ent;
+  LOG(debug) << "Pushing " << mClustersPtr->size() << " TOF clusters at entry " << ent;
 
-  pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CLUSTERS", 0, Lifetime::Timeframe}, mClusters);
+  pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CLUSTERS", 0}, mClusters);
+  pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CLUSTERSMULT", 0}, mClustersMult);
   if (mUseMC) {
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CLUSTERSMCTR", 0, Lifetime::Timeframe}, mLabels);
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CLUSTERSMCTR", 0}, mLabels);
   }
 
   if (mTree->GetReadEntry() + 1 >= mTree->GetEntries()) {
@@ -61,16 +64,24 @@ void ClusterReader::connectTree(const std::string& filename)
   mTree.reset((TTree*)mFile->Get("o2sim"));
   assert(mTree);
   mTree->SetBranchAddress("TOFCluster", &mClustersPtr);
+
+  if (mTree->GetBranch("TOFClusterMult")) {
+    mTree->SetBranchAddress("TOFClusterMult", &mClustersMultPtr);
+  } else {
+    mClustersMult.resize(o2::base::GRPGeomHelper::instance().getNHBFPerTF() * o2::constants::lhc::LHCMaxBunches);
+  }
+
   if (mUseMC) {
     mTree->SetBranchAddress("TOFClusterMCTruth", &mLabelsPtr);
   }
-  LOG(DEBUG) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
+  LOG(debug) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
 }
 
 DataProcessorSpec getClusterReaderSpec(bool useMC)
 {
   std::vector<OutputSpec> outputs;
   outputs.emplace_back(o2::header::gDataOriginTOF, "CLUSTERS", 0, Lifetime::Timeframe);
+  outputs.emplace_back(o2::header::gDataOriginTOF, "CLUSTERSMULT", 0, Lifetime::Timeframe);
   if (useMC) {
     outputs.emplace_back(o2::header::gDataOriginTOF, "CLUSTERSMCTR", 0, Lifetime::Timeframe);
   }

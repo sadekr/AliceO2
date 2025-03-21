@@ -19,6 +19,7 @@
 #endif
 
 #include "TPCFastTransform.h"
+#include "GPUCommonLogger.h"
 
 #if !defined(GPUCA_GPUCODE)
 #include <iostream>
@@ -29,10 +30,14 @@
 #include "GPUCommonLogger.h"
 #endif
 
-using namespace GPUCA_NAMESPACE::gpu;
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
+#include "TPCSpaceCharge/SpaceCharge.h"
+#endif
+
+using namespace o2::gpu;
 
 TPCFastTransform::TPCFastTransform()
-  : FlatObject(), mTimeStamp(0), mCorrection(), mApplyCorrection(1), mT0(0.f), mVdrift(0.f), mVdriftCorrY(0.f), mLdriftCorr(0.f), mTOFcorr(0.f), mPrimVtxZ(0.f)
+  : FlatObject(), mTimeStamp(0), mCorrection(), mApplyCorrection(1), mT0(0.f), mVdrift(0.f), mVdriftCorrY(0.f), mLdriftCorr(0.f), mTOFcorr(0.f), mPrimVtxZ(0.f), mLumi(0.f), mLumiError(0.f), mLumiScaleFactor(1.0f)
 {
   // Default Constructor: creates an empty uninitialized object
 }
@@ -53,7 +58,9 @@ void TPCFastTransform::cloneFromObject(const TPCFastTransform& obj, char* newFla
   mLdriftCorr = obj.mLdriftCorr;
   mTOFcorr = obj.mTOFcorr;
   mPrimVtxZ = obj.mPrimVtxZ;
-
+  mLumi = obj.mLumi;
+  mLumiError = obj.mLumiError;
+  mLumiScaleFactor = obj.mLumiScaleFactor;
   // variable-size data
 
   char* distBuffer = FlatObject::relocatePointer(oldFlatBufferPtr, mFlatBufferPtr, obj.mCorrection.getFlatBufferPtr());
@@ -101,13 +108,16 @@ void TPCFastTransform::startConstruction(const TPCFastSpaceChargeCorrection& cor
   mLdriftCorr = 0.f;
   mTOFcorr = 0.f;
   mPrimVtxZ = 0.f;
+  mLumi = 0.f;
+  mLumiError = 0.f;
+  mLumiScaleFactor = 1.f;
 
   // variable-size data
 
   mCorrection.cloneFromObject(correction, nullptr);
 }
 
-void TPCFastTransform::setCalibration(long int timeStamp, float t0, float vDrift, float vDriftCorrY, float lDriftCorr, float tofCorr, float primVtxZ)
+void TPCFastTransform::setCalibration(int64_t timeStamp, float t0, float vDrift, float vDriftCorrY, float lDriftCorr, float tofCorr, float primVtxZ)
 {
   /// Sets all drift calibration parameters and the time stamp
   ///
@@ -139,22 +149,25 @@ void TPCFastTransform::finishConstruction()
 void TPCFastTransform::print() const
 {
 #if !defined(GPUCA_GPUCODE)
-  std::cout << "TPC Fast Transformation: " << std::endl;
-  std::cout << "mTimeStamp = " << mTimeStamp << std::endl;
-  std::cout << "mApplyCorrection = " << mApplyCorrection << std::endl;
-  std::cout << "mT0 = " << mT0 << std::endl;
-  std::cout << "mVdrift = " << mVdrift << std::endl;
-  std::cout << "mVdriftCorrY = " << mVdriftCorrY << std::endl;
-  std::cout << "mLdriftCorr = " << mLdriftCorr << std::endl;
-  std::cout << "mTOFcorr = " << mTOFcorr << std::endl;
-  std::cout << "mPrimVtxZ = " << mPrimVtxZ << std::endl;
+  LOG(info) << "TPC Fast Transformation: ";
+  LOG(info) << "mTimeStamp = " << mTimeStamp;
+  LOG(info) << "mApplyCorrection = " << mApplyCorrection;
+  LOG(info) << "mT0 = " << mT0;
+  LOG(info) << "mVdrift = " << mVdrift;
+  LOG(info) << "mVdriftCorrY = " << mVdriftCorrY;
+  LOG(info) << "mLdriftCorr = " << mLdriftCorr;
+  LOG(info) << "mTOFcorr = " << mTOFcorr;
+  LOG(info) << "mPrimVtxZ = " << mPrimVtxZ;
+  LOG(info) << "mLumi = " << mLumi;
+  LOG(info) << "mLumiError = " << mLumiError;
+  LOG(info) << "mLumiScaleFactor = " << mLumiScaleFactor;
   mCorrection.print();
 #endif
 }
 
-#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE) && !defined(GPUCA_ALIROOT_LIB)
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
 
-int TPCFastTransform::writeToFile(std::string outFName, std::string name)
+int32_t TPCFastTransform::writeToFile(std::string outFName, std::string name)
 {
   /// store to file
   assert(isConstructed());
@@ -167,7 +180,7 @@ int TPCFastTransform::writeToFile(std::string outFName, std::string name)
   }
   TFile outf(outFName.data(), "recreate");
   if (outf.IsZombie()) {
-    LOG(ERROR) << "Failed to open output file " << outFName;
+    LOG(error) << "Failed to open output file " << outFName;
     return -1;
   }
 
@@ -183,6 +196,11 @@ int TPCFastTransform::writeToFile(std::string outFName, std::string name)
   return 0;
 }
 
+void TPCFastTransform::rectifyAfterReadingFromFile()
+{
+  setActualBufferAddress(mFlatBufferContainer);
+}
+
 TPCFastTransform* TPCFastTransform::loadFromFile(std::string inpFName, std::string name)
 {
   /// load from file
@@ -195,20 +213,41 @@ TPCFastTransform* TPCFastTransform::loadFromFile(std::string inpFName, std::stri
   }
   TFile inpf(inpFName.data());
   if (inpf.IsZombie()) {
-    LOG(ERROR) << "Failed to open input file " << inpFName;
+    LOG(error) << "Failed to open input file " << inpFName;
     return nullptr;
   }
   TPCFastTransform* transform = reinterpret_cast<TPCFastTransform*>(inpf.GetObjectChecked(name.data(), TPCFastTransform::Class()));
   if (!transform) {
-    LOG(ERROR) << "Failed to load " << name << " from " << inpFName;
+    LOG(error) << "Failed to load " << name << " from " << inpFName;
     return nullptr;
   }
   if (transform->mFlatBufferSize > 0 && transform->mFlatBufferContainer == nullptr) {
-    LOG(ERROR) << "Failed to load " << name << " from " << inpFName << ": empty flat buffer container";
+    LOG(error) << "Failed to load " << name << " from " << inpFName << ": empty flat buffer container";
     return nullptr;
   }
-  transform->setActualBufferAddress(transform->mFlatBufferContainer);
+  transform->rectifyAfterReadingFromFile(); // ==   transform->setActualBufferAddress(transform->mFlatBufferContainer);
   return transform;
 }
 
+#endif
+
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
+TPCSlowSpaceChargeCorrection::~TPCSlowSpaceChargeCorrection()
+{
+  delete mCorr;
+}
+
+void TPCSlowSpaceChargeCorrection::getCorrections(const float gx, const float gy, const float gz, const int32_t slice, float& gdxC, float& gdyC, float& gdzC) const
+{
+  const o2::tpc::Side side = (slice < o2::tpc::SECTORSPERSIDE) ? o2::tpc::Side::A : o2::tpc::Side::C;
+  mCorr->getCorrections(gx, gy, gz, side, gdxC, gdyC, gdzC);
+}
+
+void TPCFastTransform::setSlowTPCSCCorrection(TFile& inpf)
+{
+  mCorrectionSlow = new TPCSlowSpaceChargeCorrection;
+  mCorrectionSlow->mCorr = new o2::tpc::SpaceCharge<float>();
+  mCorrectionSlow->mCorr->setGlobalCorrectionsFromFile<float>(inpf, o2::tpc::Side::A);
+  mCorrectionSlow->mCorr->setGlobalCorrectionsFromFile<float>(inpf, o2::tpc::Side::C);
+}
 #endif

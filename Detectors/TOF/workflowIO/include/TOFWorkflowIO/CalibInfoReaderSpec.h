@@ -19,6 +19,7 @@
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/Task.h"
 #include "DataFormatsTOF/CalibInfoTOF.h"
+#include "DataFormatsTOF/Diagnostic.h"
 #include <string>
 
 class TTree;
@@ -49,6 +50,8 @@ class CalibInfoReader : public Task
   int mCurrentEntry = 0;
   int mGlobalEntry = 0;
   std::vector<o2::dataformats::CalibInfoTOF> mVect, *mPvect = &mVect;
+  o2::tof::Diagnostic mDia, *mPdia = &mDia;
+  std::vector<std::pair<int, unsigned long>> mIndices;
 };
 
 /// create a processor spec

@@ -17,11 +17,11 @@
 #include "Framework/Task.h"
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/ConfigParamRegistry.h"
+#include "Framework/CCDBParamSpec.h"
 #include "CommonUtils/StringUtils.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "DetectorsCommonDataFormats/DetectorNameConf.h"
 #include "ITSMFTBase/DPLAlpideParam.h"
 #include "SimulationDataFormat/MCCompLabel.h"
-#include "SimulationDataFormat/DigitizationContext.h"
 #include "DataFormatsMFT/TrackMFT.h"
 #include "DataFormatsITSMFT/Cluster.h"
 #include "DataFormatsITSMFT/ROFRecord.h"
@@ -31,6 +31,11 @@
 #include "GlobalTracking/MatchGlobalFwd.h"
 #include "GlobalTrackingWorkflow/GlobalFwdMatchingSpec.h"
 #include "ITSMFTReconstruction/ClustererParam.h"
+#include "DetectorsBase/Propagator.h"
+#include "TGeoGlobalMagField.h"
+#include "Field/MagneticField.h"
+#include "DetectorsBase/GRPGeomHelper.h"
+#include "MCHTracking/TrackExtrap.h"
 
 using namespace o2::framework;
 using MCLabelsTr = gsl::span<const o2::MCCompLabel>;
@@ -44,17 +49,21 @@ namespace globaltracking
 class GlobalFwdMatchingDPL : public Task
 {
  public:
-  GlobalFwdMatchingDPL(std::shared_ptr<DataRequest> dr, bool useMC)
-    : mDataRequest(dr), mUseMC(useMC) {}
+  GlobalFwdMatchingDPL(std::shared_ptr<DataRequest> dr, std::shared_ptr<o2::base::GRPGeomRequest> gr, bool useMC, bool MatchRootOutput)
+    : mDataRequest(dr), mGGCCDBRequest(gr), mUseMC(useMC), mMatchRootOutput(MatchRootOutput) {}
   ~GlobalFwdMatchingDPL() override = default;
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
-  void endOfStream(framework::EndOfStreamContext& ec) final;
+  void endOfStream(EndOfStreamContext& ec) final;
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
+  void updateTimeDependentParams(ProcessingContext& pc);
   std::shared_ptr<DataRequest> mDataRequest;
-  o2::globaltracking::MatchGlobalFwd mMatching; // Forward matching engine
-  o2::itsmft::TopologyDictionary mMFTDict;      // cluster patterns dictionary
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
+  bool mMatchRootOutput = false;
+  o2::globaltracking::MatchGlobalFwd mMatching;             // Forward matching engine
+  const o2::itsmft::TopologyDictionary* mMFTDict = nullptr; // cluster patterns dictionary
 
   bool mUseMC = true;
   TStopwatch mTimer;
@@ -62,66 +71,107 @@ class GlobalFwdMatchingDPL : public Task
 
 void GlobalFwdMatchingDPL::init(InitContext& ic)
 {
-  //-------- init geometry and field --------//
-  o2::base::GeometryManager::loadGeometry();
-  std::unique_ptr<o2::parameters::GRPObject> grp{o2::parameters::GRPObject::loadFrom()};
-  mMatching.setMFTTriggered(!grp->isDetContinuousReadOut(o2::detectors::DetID::MFT));
-  const auto& alpParams = o2::itsmft::DPLAlpideParam<o2::detectors::DetID::MFT>::Instance();
-  if (mMatching.isMFTTriggered()) {
-    mMatching.setMFTROFrameLengthMUS(alpParams.roFrameLengthTrig / 1.e3); // MFT ROFrame duration in \mus
-  } else {
-    mMatching.setMFTROFrameLengthInBC(alpParams.roFrameLengthInBC); // MFT ROFrame duration in \mus
-  }
+  o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
   mMatching.setMCTruthOn(mUseMC);
 
-  // set bunch filling. Eventually, this should come from CCDB
-  const auto* digctx = o2::steer::DigitizationContext::loadFromFile();
-  const auto& bcfill = digctx->getBunchFilling();
-  mMatching.setBunchFilling(bcfill);
-
-  std::string dictPath = o2::itsmft::ClustererParam<o2::detectors::DetID::MFT>::Instance().dictFilePath;
-  std::string dictFile = o2::base::NameConf::getAlpideClusterDictionaryFileName(o2::detectors::DetID::MFT, dictPath, "bin");
-  if (o2::utils::Str::pathExists(dictFile)) {
-    mMFTDict.readBinaryFile(dictFile);
-    LOG(INFO) << "Forward track-matching is running with a provided MFT dictionary: " << dictFile;
-  } else {
-    LOG(INFO) << "Dictionary " << dictFile << " is absent, Matching expects MFT cluster patterns";
+  const auto& matchingParam = GlobalFwdMatchingParam::Instance();
+  if (matchingParam.isMatchUpstream() && mMatchRootOutput) {
+    LOG(fatal) << "Invalid MFTMCH matching configuration: matchUpstream and enable-match-output";
   }
-  mMatching.setMFTDictionary(&mMFTDict);
-  float matchPlaneZ = ic.options().get<float>("matchPlaneZ");
-  mMatching.setMatchingPlaneZ(matchPlaneZ);
-  std::string matchFcn = ic.options().get<std::string>("matchFcn");
-  std::string cutFcn = ic.options().get<std::string>("cutFcn");
-
-  mMatching.init(matchFcn, cutFcn);
 }
 
 void GlobalFwdMatchingDPL::run(ProcessingContext& pc)
 {
-  const auto* dh = o2::header::get<o2::header::DataHeader*>(pc.inputs().getFirstValid(true).header);
-  LOG(INFO) << " startOrbit: " << dh->firstTForbit;
   mTimer.Start(false);
-
   RecoContainer recoData;
   recoData.collectData(pc, *mDataRequest.get());
+  updateTimeDependentParams(pc); // Make sure this is called after recoData.collectData, which may load some conditions
 
   mMatching.run(recoData);
 
-  pc.outputs().snapshot(Output{"GLO", "GLFWD", 0, Lifetime::Timeframe}, mMatching.getMatchedFwdTracks());
+  const auto& matchingParam = GlobalFwdMatchingParam::Instance();
+
+  if (matchingParam.saveMode == kSaveTrainingData) {
+    pc.outputs().snapshot(Output{"GLO", "GLFWDMFT", 0}, mMatching.getMFTMatchingPlaneParams());
+    pc.outputs().snapshot(Output{"GLO", "GLFWDMCH", 0}, mMatching.getMCHMatchingPlaneParams());
+    pc.outputs().snapshot(Output{"GLO", "GLFWDINF", 0}, mMatching.getMFTMCHMatchInfo());
+  } else {
+    pc.outputs().snapshot(Output{"GLO", "GLFWD", 0}, mMatching.getMatchedFwdTracks());
+  }
+
   if (mUseMC) {
-    pc.outputs().snapshot(Output{"GLO", "GLFWD_MC", 0, Lifetime::Timeframe}, mMatching.getMatchLabels());
+    pc.outputs().snapshot(Output{"GLO", "GLFWD_MC", 0}, mMatching.getMatchLabels());
+  }
+  if (mMatchRootOutput) {
+    pc.outputs().snapshot(Output{"GLO", "MTC_MFTMCH", 0}, mMatching.getMFTMCHMatchInfo());
   }
   mTimer.Stop();
 }
 
 void GlobalFwdMatchingDPL::endOfStream(EndOfStreamContext& ec)
 {
-  LOGF(INFO, "Forward matcher total timing: Cpu: %.3e Real: %.3e s in %d slots",
+  LOGF(info, "Forward matcher total timing: Cpu: %.3e Real: %.3e s in %d slots",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
 }
 
-DataProcessorSpec getGlobalFwdMatchingSpec(bool useMC)
+void GlobalFwdMatchingDPL::finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
 {
+  if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+    if (matcher == ConcreteDataMatcher("GLO", "GRPMAGFIELD", 0)) {
+      o2::mch::TrackExtrap::setField();
+    }
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("MFT", "CLUSDICT", 0)) {
+    LOG(info) << "cluster dictionary updated";
+    mMatching.setMFTDictionary((const o2::itsmft::TopologyDictionary*)obj);
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("MFT", "ALPIDEPARAM", 0)) {
+    LOG(info) << "MFT Alpide param updated";
+    return;
+  }
+}
+
+void GlobalFwdMatchingDPL::updateTimeDependentParams(ProcessingContext& pc)
+{
+  o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+  static bool initOnceDone = false;
+  if (!initOnceDone) { // this params need to be queried only once
+    initOnceDone = true;
+
+    auto field = static_cast<o2::field::MagneticField*>(TGeoGlobalMagField::Instance()->GetField());
+    double centerMFT[3] = {0, 0, -61.4}; // Field at center of MFT
+    auto Bz = field->getBz(centerMFT);
+    LOG(info) << "Setting Global forward matching Bz = " << Bz;
+    mMatching.setBz(Bz);
+    mMatching.setMFTTriggered(!o2::base::GRPGeomHelper::instance().getGRPECS()->isDetContinuousReadOut(o2::detectors::DetID::MFT));
+    if (o2::base::GRPGeomHelper::instance().getGRPECS()->getRunType() != o2::parameters::GRPECSObject::RunType::COSMICS) {
+      mMatching.setBunchFilling(o2::base::GRPGeomHelper::instance().getGRPLHCIF()->getBunchFilling());
+    }
+
+    // apply needed settings
+    const auto& alpParams = o2::itsmft::DPLAlpideParam<o2::detectors::DetID::MFT>::Instance();
+    if (mMatching.isMFTTriggered()) {
+      mMatching.setMFTROFrameLengthMUS(alpParams.roFrameLengthTrig / 1.e3); // MFT ROFrame duration in \mus
+    } else {
+      mMatching.setMFTROFrameLengthInBC(alpParams.roFrameLengthInBC); // MFT ROFrame duration in \mus
+    }
+    if (alpParams.roFrameBiasInBC != 0) {
+      mMatching.setMFTROFrameBiasInBC(alpParams.roFrameBiasInBC); // MFT ROFrame bias in BCs wrt orbit start
+      LOG(info) << "Setting MFT ROF bias to " << alpParams.roFrameBiasInBC << " BCs";
+    }
+
+    mMatching.init();
+  }
+  // we may have other params which need to be queried regularly
+}
+
+DataProcessorSpec getGlobalFwdMatchingSpec(bool useMC, bool matchRootOutput)
+{
+
+  const auto& matchingParam = GlobalFwdMatchingParam::Instance();
+
   std::vector<OutputSpec> outputs;
   auto dataRequest = std::make_shared<DataRequest>();
 
@@ -130,21 +180,44 @@ DataProcessorSpec getGlobalFwdMatchingSpec(bool useMC)
   dataRequest->requestMFTClusters(false); // MFT clusters labels are not used
   dataRequest->requestTracks(src, useMC);
 
-  outputs.emplace_back("GLO", "GLFWD", 0, Lifetime::Timeframe);
+  if (matchingParam.isMatchUpstream()) {
+    dataRequest->requestMFTMCHMatches(useMC); // Request MFTMCH Matches
+  }
+
+  if (matchingParam.useMIDMatch) {
+    dataRequest->requestMCHMIDMatches(false); // Request MCHMID Matches. Labels are not used
+  }
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                             // orbitResetTime
+                                                              true,                              // GRPECS=true
+                                                              true,                              // GRPLHCIF
+                                                              true,                              // GRPMagField
+                                                              false,                             // askMatLUT
+                                                              o2::base::GRPGeomRequest::Aligned, // geometry
+                                                              dataRequest->inputs,
+                                                              true); // query only once all objects except mag.field
+
+  if (matchingParam.saveMode == kSaveTrainingData) {
+    outputs.emplace_back("GLO", "GLFWDMFT", 0, Lifetime::Timeframe);
+    outputs.emplace_back("GLO", "GLFWDMCH", 0, Lifetime::Timeframe);
+    outputs.emplace_back("GLO", "GLFWDINF", 0, Lifetime::Timeframe);
+  } else {
+    outputs.emplace_back("GLO", "GLFWD", 0, Lifetime::Timeframe);
+  }
 
   if (useMC) {
     outputs.emplace_back("GLO", "GLFWD_MC", 0, Lifetime::Timeframe);
+  }
+
+  if (matchRootOutput) {
+    outputs.emplace_back("GLO", "MTC_MFTMCH", 0, Lifetime::Timeframe);
   }
 
   return DataProcessorSpec{
     "globalfwd-track-matcher",
     dataRequest->inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<GlobalFwdMatchingDPL>(dataRequest, useMC)},
-    Options{
-      {"matchFcn", VariantType::String, "matchALL", {"Matching function (matchALL, ...)"}},
-      {"cutFcn", VariantType::String, "cutDisabled", {"matching candicate cut"}},
-      {"matchPlaneZ", o2::framework::VariantType::Float, -77.5f, {"Matching plane z position [-77.5]"}}}};
+    AlgorithmSpec{adaptFromTask<GlobalFwdMatchingDPL>(dataRequest, ggRequest, useMC, matchRootOutput)},
+    Options{}};
 }
 
 } // namespace globaltracking

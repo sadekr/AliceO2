@@ -36,7 +36,7 @@ There are multiple options :
                                         input Trapsim digits file, empty string to have no digits.
 - -t [ --input-file-tracklets ] default of trdtracklets.root
                                         input Trapsim tracklets file
--   -l [ --fileper ] how to distrbute the data into raw files.
+-   -l [ --file-per ] how to distrbute the data into raw files.
     - all : 1 raw file
     - halfcru : 1 file per cru end point, so 2 files per cru.
     - cru : one file per cru
@@ -80,4 +80,4 @@ A        B
 ```
 In this example, we consider a trigger at `t=A`. The second signal contributes with `(B-C)*samplingRate` bins from its head onto the tail of the first signal. A third signal arrives at `t=E`, with `E>A+BUSY_TIME`, which can trigger the detector and be readout. The third signal will have `(D-E)*samplingRate` from the tail of the second signal onto its head. So, the requirement for a signal to be too old, and be dropped, is:
 - new trigger arrives, and
-- the time difference between the first time bin of the previous signal and the new trigger is greater than `READOUT_TIME`.
+- the time difference between the first time bin of the previous signal and the new trigger is greater than `TRDSimParams.readoutTimeNS`.

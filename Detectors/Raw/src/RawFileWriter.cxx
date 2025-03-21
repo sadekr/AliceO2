@@ -18,7 +18,7 @@
 #include <sstream>
 #include <functional>
 #include <cassert>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DetectorsRaw/RawFileWriter.h"
 #include "DetectorsRaw/HBFUtils.h"
 #include "CommonConstants/Triggers.h"
@@ -64,13 +64,13 @@ void RawFileWriter::close()
   //
   // close all files
   for (auto& flh : mFName2File) {
-    LOG(INFO) << "Closing output file " << flh.first;
+    LOG(info) << "Closing output file " << flh.first;
     fclose(flh.second.handler);
     flh.second.handler = nullptr;
   }
   mFName2File.clear();
   if (mDetLazyCheck.completeCount) {
-    LOG(WARNING) << "RawFileWriter forced " << mDetLazyCheck.completeCount << " dummy addData calls in "
+    LOG(warning) << "RawFileWriter forced " << mDetLazyCheck.completeCount << " dummy addData calls in "
                  << mDetLazyCheck.irSeen << " IRs for links which did not receive data";
   }
   mTimer.Stop();
@@ -80,7 +80,7 @@ void RawFileWriter::close()
 //_____________________________________________________________________
 void RawFileWriter::fillFromCache()
 {
-  LOG(INFO) << "Filling links from cached trees";
+  LOG(info) << "Filling links from cached trees";
   mCachingStage = false;
   for (const auto& cache : mCacheMap) {
     for (const auto& entry : cache.second) {
@@ -142,22 +142,25 @@ RawFileWriter::LinkData& RawFileWriter::registerLink(uint16_t fee, uint16_t cru,
   auto& file = mFName2File[std::string(outFileName)];
   if (!file.handler) {
     if (!(file.handler = fopen(outFileName.c_str(), "wb"))) { // if file does not exist, create it
-      LOG(ERROR) << "Failed to open output file " << outFileName;
+      LOG(error) << "Failed to open output file " << outFileName;
       throw std::runtime_error(std::string("cannot open link output file ") + outFileName);
     }
   }
   if (!linkData.fileName.empty()) { // this link was already declared and associated with a file
     if (linkData.fileName == outFileName) {
-      LOGF(INFO, "Link 0x%ux was already declared with same output, do nothing", sspec);
+      LOGF(info, "Link 0x%ux was already declared with same output, do nothing", sspec);
       return linkData;
     } else {
-      LOGF(ERROR, "Link 0x%ux was already connected to different output file %s", sspec, linkData.fileName);
+      LOGF(error, "Link 0x%ux was already connected to different output file %s", sspec, linkData.fileName);
       throw std::runtime_error("redifinition of the link output file");
     }
   }
   linkData.fileName = outFileName;
   linkData.subspec = sspec;
   RDHUtils::setVersion(linkData.rdhCopy, mUseRDHVersion);
+  if (mUseRDHVersion > 6) {
+    RDHUtils::setDataFormat(linkData.rdhCopy, mUseRDHDataFormat);
+  }
   RDHUtils::setFEEID(linkData.rdhCopy, fee);
   RDHUtils::setCRUID(linkData.rdhCopy, cru);
   RDHUtils::setLinkID(linkData.rdhCopy, link);
@@ -166,10 +169,10 @@ RawFileWriter::LinkData& RawFileWriter::registerLink(uint16_t fee, uint16_t cru,
     RDHUtils::setSourceID(linkData.rdhCopy, o2::header::DAQID::O2toDAQ(mOrigin));
   }
   linkData.writer = this;
-  linkData.updateIR = mHBFUtils.getFirstIR();
+  linkData.updateIR = mHBFUtils.obligatorySOR ? mHBFUtils.getFirstIR() : mHBFUtils.getFirstSampledTFIR();
   linkData.buffer.reserve(mSuperPageSize);
   RDHUtils::printRDH(linkData.rdhCopy);
-  LOGF(INFO, "Registered %s with output to %s", linkData.describe(), outFileName);
+  LOGF(info, "Registered %s with output to %s", linkData.describe(), outFileName);
   return linkData;
 }
 
@@ -180,20 +183,20 @@ void RawFileWriter::addData(uint16_t feeid, uint16_t cru, uint8_t lnk, uint8_t e
   auto sspec = RDHUtils::getSubSpec(cru, lnk, endpoint, feeid);
   auto& link = getLinkWithSubSpec(sspec);
   if (mVerbosity > 10) {
-    LOGP(INFO, "addData for {}  on IR BCid:{} Orbit: {}, payload: {}, preformatted: {}, trigger: {}, detField: {}", link.describe(), ir.bc, ir.orbit, data.size(), preformatted, trigger, detField);
+    LOGP(info, "addData for {}  on IR BCid:{} Orbit: {}, payload: {}, preformatted: {}, trigger: {}, detField: {}", link.describe(), ir.bc, ir.orbit, data.size(), preformatted, trigger, detField);
   }
-  if (isCRUDetector() && (data.size() % RDHUtils::GBTWord)) {
-    LOG(ERROR) << "provided payload size " << data.size() << " is not multiple of GBT word size";
+  if (isCRUDetector() && mUseRDHDataFormat == 0 && (data.size() % RDHUtils::GBTWord128)) {
+    LOG(error) << "provided payload size " << data.size() << " is not multiple of GBT word size";
     throw std::runtime_error("payload size is not mutiple of GBT word size");
   }
-  if (ir < mHBFUtils.getFirstIR()) {
-    LOG(WARNING) << "provided " << ir << " precedes first TF " << mHBFUtils.getFirstIR() << " | discarding data for " << link.describe();
+  if (ir < mHBFUtils.getFirstSampledTFIR()) {
+    LOG(warning) << "provided " << ir << " precedes first sampled TF " << mHBFUtils.getFirstSampledTFIR() << " | discarding data for " << link.describe();
     return;
   }
   if (link.discardData || ir.orbit - mHBFUtils.orbitFirst >= mHBFUtils.maxNOrbits) {
     if (!link.discardData) {
       link.discardData = true;
-      LOG(INFO) << "Orbit " << ir.orbit << ": max. allowed orbit " << mHBFUtils.orbitFirst + mHBFUtils.maxNOrbits - 1 << " exceeded, " << link.describe() << " will discard further data";
+      LOG(info) << "Orbit " << ir.orbit << ": max. allowed orbit " << mHBFUtils.orbitFirst + mHBFUtils.maxNOrbits - 1 << " exceeded, " << link.describe() << " will discard further data";
     }
     return;
   }
@@ -233,7 +236,7 @@ RawFileWriter::LinkData& RawFileWriter::getLinkWithSubSpec(LinkSubSpec_t ss)
 {
   auto lnkIt = mSSpec2Link.find(ss);
   if (lnkIt == mSSpec2Link.end()) {
-    LOGF(ERROR, "The link for SubSpec=0x%u was not registered", ss);
+    LOGF(error, "The link for SubSpec=0x%u was not registered", ss);
     throw std::runtime_error("data for non-registered GBT link supplied");
   }
   return lnkIt->second;
@@ -274,7 +277,7 @@ void RawFileWriter::useCaching()
   }
   auto cachename = o2::utils::Str::concat_string("_rawWriter_cache_", mOrigin.str, ::getpid(), ".root");
   mCacheFile.reset(TFile::Open(cachename.c_str(), "recreate"));
-  LOG(INFO) << "Switched caching ON";
+  LOG(info) << "Switched caching ON";
 }
 
 //===================================================================================
@@ -313,10 +316,13 @@ void RawFileWriter::LinkData::addData(const IR& ir, const gsl::span<char> data, 
 void RawFileWriter::LinkData::addDataInternal(const IR& ir, const gsl::span<char> data, bool preformatted, uint32_t trigger, uint32_t detField, bool checkEmpty)
 {
   // add payload corresponding to IR
-  LOG(DEBUG) << "Adding " << data.size() << " bytes in IR " << ir << " to " << describe() << " checkEmpty=" << checkEmpty;
+  LOG(debug) << "Adding " << data.size() << " bytes in IR " << ir << " to " << describe() << " checkEmpty=" << checkEmpty;
   if (writer->mCachingStage) {
     cacheData(ir, data, preformatted, trigger, detField);
     return;
+  }
+  if (startOfRun && ((writer->mHBFUtils.getFirstIRofTF(ir) > writer->mHBFUtils.getFirstIR()) && !writer->mHBFUtils.obligatorySOR)) {
+    startOfRun = false;
   }
 
   if (startOfRun && writer->isRORCDetector()) { // in RORC mode we write separate RDH with SOX in the very beginning of the run
@@ -374,7 +380,7 @@ void RawFileWriter::LinkData::addDataInternal(const IR& ir, const gsl::span<char
       }
 
       // for sure after the carryOver we have space on the CRU page, no need to check
-      LOG(DEBUG) << "Adding carryOverHeader " << carryOverHeader.size()
+      LOG(debug) << "Adding carryOverHeader " << carryOverHeader.size()
                  << " bytes in IR " << ir << " to " << describe();
       pushBack(carryOverHeader.data(), carryOverHeader.size());
       carryOverHeader.clear();
@@ -383,7 +389,7 @@ void RawFileWriter::LinkData::addDataInternal(const IR& ir, const gsl::span<char
     int sizeLeftSupPage = writer->mSuperPageSize - buffer.size();
     int sizeLeftCRUPage = RDHUtils::MAXCRUPage - (int(buffer.size()) - lastRDHoffset);
     int sizeLeft = sizeLeftCRUPage < sizeLeftSupPage ? sizeLeftCRUPage : sizeLeftSupPage;
-    if (!sizeLeft) { // this page is just over, open a new one
+    if (!sizeLeft || (sizeLeft < writer->mAlignmentSize)) { // this page is just over, open a new one
       addHBFPage();  // start new CRU page, if needed, the completed superpage is flushed
       if (writer->newRDHFunc) {
         std::vector<char> newPageHeader;
@@ -404,7 +410,7 @@ void RawFileWriter::LinkData::addDataInternal(const IR& ir, const gsl::span<char
     }
 
     if (!carryOver) { // add all remaining data
-      LOG(DEBUG) << "Adding payload " << dataSize << " bytes in IR " << ir << " (carryover=" << carryOver << " ) to " << describe();
+      LOG(debug) << "Adding payload " << dataSize << " bytes in IR " << ir << " (carryover=" << carryOver << " ) to " << describe();
       pushBack(ptr, dataSize);
       dataSize = 0;
     } else { // need to carryOver payload, determine 1st wsize bytes to write starting from ptr
@@ -416,7 +422,7 @@ void RawFileWriter::LinkData::addDataInternal(const IR& ir, const gsl::span<char
       if (writer->carryOverFunc) {
         sizeActual = writer->carryOverFunc(&rdhCopy, data, ptr, sizeLeft, splitID++, carryOverTrailer, carryOverHeader);
       }
-      LOG(DEBUG) << "Adding carry-over " << splitID - 1 << " fitted payload " << sizeActual << " bytes in IR " << ir << " to " << describe();
+      LOG(debug) << "Adding carry-over " << splitID - 1 << " fitted payload " << sizeActual << " bytes in IR " << ir << " to " << describe();
       if (sizeActual < 0 || (!lastSplitPart && (sizeActual + carryOverTrailer.size() > sizeLeft))) {
         throw std::runtime_error(std::string("wrong carry-over data size provided by carryOverMethod") + std::to_string(sizeActual));
       }
@@ -431,7 +437,7 @@ void RawFileWriter::LinkData::addDataInternal(const IR& ir, const gsl::span<char
       pushBack(ptr, sizeActual - trailerOffset); // write payload fitting to this page
       dataSize -= sizeActual;
       ptr += sizeActual;
-      LOG(DEBUG) << "Adding carryOverTrailer " << carryOverTrailer.size() << " bytes in IR " << ir << " to " << describe();
+      LOG(debug) << "Adding carryOverTrailer " << carryOverTrailer.size() << " bytes in IR " << ir << " to " << describe();
       pushBack(carryOverTrailer.data(), carryOverTrailer.size());
     }
   }
@@ -448,7 +454,7 @@ void RawFileWriter::LinkData::addPreformattedCRUPage(const gsl::span<char> data)
     flushSuperPage(true);              // flush all but the last added RDH
   }
   if (data.size() > RDHUtils::MAXCRUPage - sizeof(RDHAny)) {
-    LOG(ERROR) << "Preformatted payload size of " << data.size() << " bytes for " << describe()
+    LOG(error) << "Preformatted payload size of " << data.size() << " bytes for " << describe()
                << " exceeds max. size " << RDHUtils::MAXCRUPage - sizeof(RDHAny);
     throw std::runtime_error("preformatted payload exceeds max size");
   }
@@ -469,6 +475,12 @@ void RawFileWriter::LinkData::addHBFPage(bool stop)
   // finalize last RDH
   auto& lastRDH = *getLastRDH();
   int psize = getCurrentPageSize(); // set the size for the previous header RDH
+
+  if (writer->mAlignmentSize && psize % writer->mAlignmentSize != 0) { // need to pad to align to needed size
+    std::vector<char> padding(writer->mAlignmentSize - psize % writer->mAlignmentSize, writer->mAlignmentPaddingFiller);
+    pushBack(padding.data(), padding.size());
+    psize += padding.size();
+  }
   RDHUtils::setOffsetToNext(lastRDH, psize);
   RDHUtils::setMemorySize(lastRDH, psize);
 
@@ -484,7 +496,7 @@ void RawFileWriter::LinkData::addHBFPage(bool stop)
     RDHUtils::printRDH(lastRDH);
   }
   if (add) { // if we are in stopping HBF and new page is needed, add it
-    // check if the superpage reached the size where it hase to be flushed
+    // check if the superpage reached the size where it has to be flushed
     int left = writer->mSuperPageSize - buffer.size();
     if (left <= MarginToFlush) {
       flushSuperPage();
@@ -494,9 +506,15 @@ void RawFileWriter::LinkData::addHBFPage(bool stop)
     RDHUtils::setStop(rdhCopy, stop);
     std::vector<char> userData;
     int sz = sizeof(RDHAny);
-    if (stop && writer->newRDHFunc) { // detector may want to write something in closing page
-      writer->newRDHFunc(&rdhCopy, psize == sizeof(RDHAny), userData);
-      sz += userData.size();
+    if (stop) {
+      if (writer->newRDHFunc) { // detector may want to write something in closing page
+        writer->newRDHFunc(&rdhCopy, psize == sizeof(RDHAny), userData);
+        sz += userData.size();
+      }
+      if (writer->mAlignmentSize && sz % writer->mAlignmentSize != 0) { // need to pad to align to needed size
+        sz += writer->mAlignmentSize - sz % writer->mAlignmentSize;
+        userData.resize(sz - sizeof(RDHAny), writer->mAlignmentPaddingFiller);
+      }
     }
     RDHUtils::setOffsetToNext(rdhCopy, sz);
     RDHUtils::setMemorySize(rdhCopy, sz);
@@ -533,7 +551,7 @@ void RawFileWriter::LinkData::closeHBFPage()
     writer->emptyHBFFunc(rdh, emtyHBFFiller);
     if (!emtyHBFFiller.empty()) {
       auto ir = RDHUtils::getTriggerIR(rdh);
-      LOG(DEBUG) << "Adding empty HBF filler of size " << emtyHBFFiller.size() << " for " << describe();
+      LOG(debug) << "Adding empty HBF filler of size " << emtyHBFFiller.size() << " for " << describe();
       addDataInternal(ir, emtyHBFFiller, false, 0, 0, false); // add filler w/o new check for empty HBF
     }
   }
@@ -547,9 +565,10 @@ void RawFileWriter::LinkData::openHBFPage(const RDHAny& rdhn, uint32_t trigger)
   bool forceNewPage = false;
   // for RORC detectors the TF flag is absent, instead the 1st trigger after the start of TF will define the 1st be interpreted as 1st TF
   if ((RDHUtils::getTriggerType(rdhn) & o2::trigger::TF) ||
-      (writer->isRORCDetector() && writer->mHBFUtils.getTF(updateIR - 1) < writer->mHBFUtils.getTF(RDHUtils::getTriggerIR(rdhn)))) {
+      (writer->isRORCDetector() &&
+       (updateIR == writer->mHBFUtils.getFirstIR() || writer->mHBFUtils.getTF(updateIR - 1) < writer->mHBFUtils.getTF(RDHUtils::getTriggerIR(rdhn))))) {
     if (writer->mVerbosity > -10) {
-      LOGF(INFO, "Starting new TF for link FEEId 0x%04x", RDHUtils::getFEEID(rdhn));
+      LOGF(info, "Starting new TF for link FEEId 0x%04x", RDHUtils::getFEEID(rdhn));
     }
     if (writer->mStartTFOnNewSPage && nTFWritten) { // don't flush if 1st TF
       forceNewPage = true;
@@ -581,7 +600,7 @@ void RawFileWriter::LinkData::flushSuperPage(bool keepLastPage)
   // write link superpage data to file (if requested, only up to the last page)
   size_t pgSize = (lastRDHoffset < 0 || !keepLastPage) ? buffer.size() : lastRDHoffset;
   if (writer->mVerbosity) {
-    LOGF(INFO, "Flushing super page of %u bytes for %s", pgSize, describe());
+    LOGF(info, "Flushing super page of %u bytes for %s", pgSize, describe());
   }
   writer->mFName2File.find(fileName)->second.write(buffer.data(), pgSize);
   auto toMove = buffer.size() - pgSize;
@@ -636,7 +655,7 @@ void RawFileWriter::LinkData::fillEmptyHBHs(const IR& ir, bool dataAdded)
         continue;
       }
       if (writer->mVerbosity > 2) {
-        LOG(INFO) << "Adding HBF " << irdummy << " for " << describe();
+        LOG(info) << "Adding HBF " << irdummy << " for " << describe();
       }
       closeHBFPage();                                                                 // close current HBF: add RDH with stop and update counters
       RDHUtils::setTriggerType(rdhCopy, 0);                                           // reset to avoid any detector specific flags in the dummy HBFs
@@ -646,7 +665,7 @@ void RawFileWriter::LinkData::fillEmptyHBHs(const IR& ir, bool dataAdded)
     updateIR = irw.back() + o2::constants::lhc::LHCMaxBunches; //  new HBF will be generated at >= this IR
   } else {                                                     // RORC detector
     if (writer->mVerbosity > 2) {
-      LOG(INFO) << "Adding HBF " << ir << " for " << describe();
+      LOG(info) << "Adding HBF " << ir << " for " << describe();
     }
     closeHBFPage();                                          // close current HBF: add RDH with stop and update counters
     RDHUtils::setTriggerType(rdhCopy, 0);                    // reset to avoid any detector specific flags in the dummy HBFs
@@ -669,7 +688,7 @@ std::string RawFileWriter::LinkData::describe() const
 //____________________________________________
 void RawFileWriter::LinkData::print() const
 {
-  LOGF(INFO, "Summary for %s : NTF: %u NRDH: %u Nbytes: %u", describe(), nTFWritten, nRDHWritten, nBytesWritten);
+  LOGF(info, "Summary for %s : NTF: %u NRDH: %u Nbytes: %u", describe(), nTFWritten, nRDHWritten, nBytesWritten);
 }
 
 //____________________________________________
@@ -720,7 +739,7 @@ void RawFileWriter::DetLazinessCheck::completeLinks(RawFileWriter* wr, const IR&
     auto res = linksDone.find(it.first);
     if (res == linksDone.end()) {
       if (wr->mVerbosity > 10) {
-        LOGP(INFO, "Complete {} for IR BCid:{} Orbit: {}", it.second.describe(), ir.bc, ir.orbit);
+        LOGP(info, "Complete {} for IR BCid:{} Orbit: {}", it.second.describe(), ir.bc, ir.orbit);
       }
       completeCount++;
       it.second.addData(ir, gsl::span<char>{}, preformatted, trigger, detField);
@@ -739,11 +758,11 @@ void o2::raw::assertOutputDirectory(std::string_view outDirName)
     // return value at all but using a second call to `exists`
     std::filesystem::create_directories(outDirName);
     if (!std::filesystem::exists(outDirName)) {
-      LOG(FATAL) << "could not create output directory " << outDirName;
+      LOG(fatal) << "could not create output directory " << outDirName;
     }
 #else
     if (!std::filesystem::create_directories(outDirName)) {
-      LOG(FATAL) << "could not create output directory " << outDirName;
+      LOG(fatal) << "could not create output directory " << outDirName;
     }
 #endif
   }

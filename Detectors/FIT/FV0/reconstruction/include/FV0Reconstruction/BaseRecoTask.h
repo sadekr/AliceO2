@@ -14,18 +14,11 @@
 #ifndef ALICEO2_FV0_BASERECOTASK_H
 #define ALICEO2_FV0_BASERECOTASK_H
 
-#include "DataFormatsFV0/BCData.h"
+#include "DataFormatsFV0/Digit.h"
 #include "DataFormatsFV0/ChannelData.h"
 #include "DataFormatsFV0/RecPoints.h"
-#include "CommonDataFormat/InteractionRecord.h"
-#include "CommonDataFormat/TimeStamp.h"
-#include "FV0Calibration/FV0ChannelTimeCalibrationObject.h"
-#include "FV0Base/Constants.h"
+#include "DataFormatsFV0/FV0ChannelTimeCalibrationObject.h"
 #include <gsl/span>
-#include <bitset>
-#include <vector>
-#include <array>
-#include <TGraph.h>
 
 namespace o2
 {
@@ -38,15 +31,15 @@ class BaseRecoTask
  public:
   BaseRecoTask() = default;
   ~BaseRecoTask() = default;
-  o2::fv0::RecPoints process(o2::fv0::BCData const& bcd,
+  o2::fv0::RecPoints process(o2::fv0::Digit const& bcd,
                              gsl::span<const o2::fv0::ChannelData> inChData,
                              gsl::span<o2::fv0::ChannelDataFloat> outChData);
   void FinishTask();
-  void setChannelOffset(o2::fv0::FV0ChannelTimeCalibrationObject* caliboffsets) { mCalibOffset = caliboffsets; };
-  int getChannelOffset(int channel);
+  void SetChannelOffset(o2::fv0::FV0ChannelTimeCalibrationObject const* caliboffsets) { mCalibOffset = caliboffsets; };
+  int getOffset(int channel);
 
  private:
-  o2::fv0::FV0ChannelTimeCalibrationObject* mCalibOffset;
+  o2::fv0::FV0ChannelTimeCalibrationObject const* mCalibOffset = nullptr;
 
   ClassDefNV(BaseRecoTask, 3);
 };

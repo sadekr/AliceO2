@@ -10,8 +10,7 @@
 // or submit itself to any jurisdiction.
 
 /// @file   AlignableDetectorTPC.h
-/// @author ruben.shahoyan@cern.ch, michael.lettrich@cern.ch
-/// @since  2021-02-01
+/// @author ruben.shahoyan@cern.ch
 /// @brief  TPC detector wrapper
 
 #ifndef ALIGNABLEDETECTORTPC_H
@@ -24,23 +23,47 @@ namespace o2
 namespace align
 {
 
-class AlignableDetectorTPC : public AlignableDetector
+class AlignableDetectorTPC final : public AlignableDetector
 {
  public:
-  AlignableDetectorTPC(const char* title = "");
-  virtual ~AlignableDetectorTPC();
   //
-  virtual void defineVolumes();
+  AlignableDetectorTPC() = default;
+  AlignableDetectorTPC(Controller* ctr);
+  ~AlignableDetectorTPC() final = default;
+  void defineVolumes() final;
+  void Print(const Option_t* opt = "") const final;
   //
-  bool AcceptTrack(const AliESDtrack* trc, int trtype) const;
-  //
+  int processPoints(GIndex gid, int npntCut, bool inv) final;
+
+  void setTrackTimeStamp(float t) { mTrackTimeStamp = t; }
+  float getTrackTimeStamp() const { return mTrackTimeStamp; }
+
+  int getStack(int padrow) const
+  {
+    for (int i = 0; i < 4; i++) {
+      if (padrow <= mStackMinMaxRow[i].second) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  int getDistanceToStackEdge(int padrow) const
+  {
+    // distance to the stack min or max padrow
+    auto st = getStack(padrow);
+    if (st < 0) {
+      return -999;
+    }
+    return std::min(padrow - mStackMinMaxRow[st].first, mStackMinMaxRow[st].second - padrow);
+  }
+
  protected:
   //
-  // -------- dummies --------
-  AlignableDetectorTPC(const AlignableDetectorTPC&);
-  AlignableDetectorTPC& operator=(const AlignableDetectorTPC&);
-  //
- protected:
+  float mTrackTimeStamp = 0.f; // use track timestamp in \mus
+  static constexpr int NSTACKS = 4;
+  const std::array<std::pair<int, int>, NSTACKS> mStackMinMaxRow = {std::pair<int, int>{0, 62}, std::pair<int, int>{63, 96}, std::pair<int, int>{97, 126}, std::pair<int, int>{127, 151}};
+
   ClassDef(AlignableDetectorTPC, 1);
 };
 } // namespace align

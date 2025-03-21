@@ -17,26 +17,34 @@
 #ifndef AliceO2_TPC_CalibPadGainTracks_H
 #define AliceO2_TPC_CalibPadGainTracks_H
 
-//o2 includes
+// o2 includes
 #include "DataFormatsTPC/TrackTPC.h"
-#include "DataFormatsTPC/ClusterNative.h"
 #include "TPCBase/CalDet.h"
-#include "TPCBase/ROC.h"
-#include "TPCBase/PadPos.h"
-#include "TPCBase/Mapper.h"
-#include "TPCCalibration/FastHisto.h"
-
-//root includes
-#include "TFile.h"
-#include "TTree.h"
+#include "TPCCalibration/CalibPadGainTracksBase.h"
+#include "CalibdEdxTrackTopologyPol.h"
+#include "TPCFastTransform.h"
 
 #include <vector>
+#include <gsl/span>
 #include <tuple>
+
+class TCanvas;
 
 namespace o2
 {
+
+namespace gpu
+{
+class GPUO2InterfaceRefit;
+class CorrectionMapsHelper;
+}
+
 namespace tpc
 {
+
+class ClusterNativeAccess;
+class ClusterNative;
+class VDriftCorrFact;
 
 /// \brief Gain calibration class
 ///
@@ -58,158 +66,223 @@ namespace tpc
 /// cGain.init(20, 0, 3, 1, 1); // set the binning which will be used: 20 bins, minimum x=0, maximum x=10, use underflow and overflow bin
 /// start loop over the data
 /// cGain.setMembers(tpcTracks, tpcTrackClIdxVecInput, clusterIndex); // set the member variables: TrackTPC, TPCClRefElem, o2::tpc::ClusterNativeAccess
-/// cGain.processTracks(false, 3, 8); // dont write the histograms to TTree, set minimum and maximum momentum range of the tracks 3<p<8
+/// cGain.setMomentumRange(.1, 3);
+/// cGain.processTracks();
 /// after looping of the data (filling the histograms) is done
 /// cGain.fillgainMap(); // fill the gainmap with the truncated mean from each histogram
 /// cGain.dumpGainMap(); // write the gainmap to file
-///
-/// see also: extractGainMap.C macro
 
-class CalibPadGainTracks
+class CalibPadGainTracks : public CalibPadGainTracksBase
 {
 
  public:
   /// mode of normalizing qmax
-  enum dEdxType : unsigned char {
-    DedxTrack, ///< normalize qMax using the truncated mean from the track
-    DedxBB     ///< normalize qMax by evaluating a Bethe Bloch fit. THIS is yet not implemented and shouldnt be used.
+  enum DEdxType : unsigned char {
+    dedxTrack,    ///< normalize qMax using the truncated mean from the track
+    dedxTracking, ///< normalize qMax using the dEdx which was calculated during the tracking
+    dedxBB        ///< normalize qMax by evaluating a Bethe Bloch fit. THIS is yet not implemented and shouldnt be used.
+  };
+
+  enum DEdxRegion : unsigned char {
+    chamber, ///< use the dE/dx from IROC and OROC
+    stack,   ///< use the dE/dx from IROC, OROC1, OROC2, OROC3
+    sector   ///< use the dE/dx from the whole sector
   };
 
   /// default constructor
-  /// the member variables have to be set manually with setMembers()
-  CalibPadGainTracks() = default;
-
-  /// constructor
-  /// \param vTPCTracksArrayInp vector of tpc tracks
-  /// \param tpcTrackClIdxVecInput the TPCClRefElem of the track
-  /// \param clIndex clusternative access object
-  CalibPadGainTracks(std::vector<o2::tpc::TrackTPC>* vTPCTracksArrayInp, std::vector<o2::tpc::TPCClRefElem>* tpcTrackClIdxVecInput, const o2::tpc::ClusterNativeAccess& clIndex)
-    : mTracks(vTPCTracksArrayInp), mTPCTrackClIdxVecInput(tpcTrackClIdxVecInput), mClusterIndex(&clIndex)
-  {
-    initDefault();
-  };
-
-  /// constructor
-  /// \param vTPCTracksArrayInp vector of tpc tracks
-  /// \param tpcTrackClIdxVecInput the TPCClRefElem of the track
-  /// \param clIndex clusternative access object
-  /// \param nBins number of bins used in the histograms
-  /// \param xmin minimum value in histogram
-  /// \param xmax maximum value in histogram
-  /// \param useUnderflow set usage of underflow bin
-  /// \param useOverflow set usage of overflow bin
-  CalibPadGainTracks(std::vector<o2::tpc::TrackTPC>* vTPCTracksArrayInp, std::vector<o2::tpc::TPCClRefElem>* tpcTrackClIdxVecInput, const o2::tpc::ClusterNativeAccess& clIndex,
-                     const unsigned int nBins, const float xmin, const float xmax, const bool useUnderflow, const bool useOverflow)
-    : mTracks(vTPCTracksArrayInp), mTPCTrackClIdxVecInput(tpcTrackClIdxVecInput), mClusterIndex(&clIndex)
-  {
-    init(nBins, xmin, xmax, useUnderflow, useOverflow);
-  };
+  /// \param initCalPad initialisation of the calpad for the gain map (if the gainmap is not extracted it can be false to save some memory)
+  CalibPadGainTracks(const bool initCalPad = true) : CalibPadGainTracksBase(initCalPad) { reserveMemory(); }
 
   /// default destructor
   ~CalibPadGainTracks() = default;
 
   /// processes input tracks and filling the histograms with self calibrated probe qMax/dEdx
-  /// \param writeTree write tree for debugging
-  /// \param momMin minimum momentum which is required by tracks
-  /// \param momMax maximum momentum which is required by tracks
-  void processTracks(const bool writeTree = false, const float momMin = 0, const float momMax = 100);
+  /// \param nMaxTracks max number of tracks to process (-1 to process all tracks)
+  void processTracks(const int nMaxTracks = -1);
 
   /// set the member variables
   /// \param vTPCTracksArrayInp vector of tpc tracks
   /// \param tpcTrackClIdxVecInput set the TPCClRefElem member variable
   /// \param clIndex set the ClusterNativeAccess member variable
-  void setMembers(std::vector<o2::tpc::TrackTPC>* vTPCTracksArrayInp, std::vector<o2::tpc::TPCClRefElem>* tpcTrackClIdxVecInput, const o2::tpc::ClusterNativeAccess& clIndex)
-  {
-    mTracks = vTPCTracksArrayInp;
-    mTPCTrackClIdxVecInput = tpcTrackClIdxVecInput;
-    mClusterIndex = &clIndex;
-  }
+  void setMembers(gsl::span<const o2::tpc::TrackTPC>* vTPCTracksArrayInp, gsl::span<const o2::tpc::TPCClRefElem>* tpcTrackClIdxVecInput, const o2::tpc::ClusterNativeAccess& clIndex, gsl::span<const unsigned char> TPCRefitterShMap, gsl::span<const unsigned int> TPCRefitterOccMap);
 
   /// this function sets the mode of the class.
   /// e.g. mode=0 -> use the truncated mean from the track for normalizing the dedx
   ///      mode=1 -> use the value from the BB-fit for normalizing the dedx. NOT implemented yet
-  void setMode(dEdxType iMode)
-  {
-    mMode = iMode;
-  }
+  void setMode(DEdxType iMode) { mMode = iMode; }
 
-  /// initialize the histograms with default parameters
-  void initDefault()
-  {
-    mPadHistosDet = std::make_unique<o2::tpc::CalDet<o2::tpc::FastHisto<float>>>("Histo");
-  }
+  /// \param momMin minimum accpeted momentum of the tracks
+  /// \param momMax maximum accpeted momentum of the tracks
+  void setMomentumRange(const float momMin, const float momMax);
 
-  /// initialize the histograms with custom parameters
-  /// \param nBins number of bins used in the histograms
-  /// \param xmin minimum value in histogram
-  /// \param xmax maximum value in histogram
-  /// \param useUnderflow set usage of underflow bin
-  /// \param useOverflow set usage of overflow bin
-  void init(const unsigned int nBins, const float xmin, const float xmax, const bool useUnderflow, const bool useOverflow)
-  {
-    o2::tpc::FastHisto<float> hist(nBins, xmin, xmax, useUnderflow, useOverflow);
-    initDefault();
-    for (auto& calArray : mPadHistosDet->getData()) {
-      for (auto& tHist : calArray.getData()) {
-        tHist = hist;
-      }
-    }
-  }
+  /// \param eta maximum accpeted eta of the tracks
+  void setMaxEta(const float eta) { mEtaMax = eta; }
 
-  /// dump the gain map to disk
-  void dumpGainMap();
+  /// \param mindedx minimmum accepted dE/dx
+  void setdEdxMin(const float mindedx) { mDedxMin = mindedx; }
 
-  /// get the truncated mean for each histogram and fill the extracted gainvalues in a CalPad object
-  void fillgainMap();
+  /// \param mDedxMax maximum accepted dE/dx
+  void setdEdxMax(const float maxdEdx) { mDedxMax = maxdEdx; }
 
-  /// \return returns the gainmap object
-  CalPad getPadGainMap() const
-  {
-    return mGainMap;
-  }
+  /// \param mDoNotNormCharge minimmum do not normalize the cluster charge to the dE/dx
+  void doNotNomalize(const bool doNotNormCharge) { mDoNotNormCharge = doNotNormCharge; }
+
+  /// \param nCl minimum number of clusters required of the tracks
+  void setMinNClusters(const int nCl) { mMinClusters = nCl; }
+
+  /// \param propagate propagate the tracks to extract the track parameters instead of performing a refit
+  void setPropagateTrack(const bool propagate) { mPropagateTrack = propagate; }
+
+  /// \param field magnetic field in kG, used for track propagation
+  void setFieldNominalGPUBz(const float field) { mFieldNominalGPUBz = field; }
+
+  /// \param chargeType type of charge which is used for the dE/dx and the pad-by-pad histograms
+  void setChargeType(const ChargeType chargeType) { mChargeType = chargeType; }
+
+  /// setting a reference gain map from a file which is used to correct the cluster charge
+  /// \param inpFile input file containing some caldet
+  /// \param mapName name of the caldet
+  void setRefGainMap(const char* inpFile, const char* mapName);
+
+  /// setting a gain map
+  /// \param gainmap CalDet containing the gain map
+  void setRefGainMap(const CalPad& gainmap) { mGainMapRef = std::make_unique<CalPad>(gainmap); }
+
+  /// set how the dedx is calculated which is used for normalizing the cluster charge
+  void setdEdxRegion(const DEdxRegion dedx);
+
+  /// \return returns minimum momentum of accepted tracks
+  float getMomMin() const { return mMomMin; }
+
+  /// \return returns maximum momentum of accepted tracks
+  float getMomMax() const { return mMomMax; }
+
+  /// \return returns maximum eta of accepted tracks
+  float getEtaMax() const { return mEtaMax; }
+
+  /// \return returns minimmum accepted dE/dx
+  float getdEdxMin() const { return mDedxMin; }
+
+  /// \return returns minimmum accepted dE/dx
+  float getdEdxMax() const { return mDedxMax; }
+
+  /// \return returns whether the charge will be normalized to the dE/dx dE/dx
+  bool getdoNotNomalize() const { return mDoNotNormCharge; }
+
+  /// \return returns minimum number of clusters required of the tracks
+  float getMinNClusters() const { return mMinClusters; }
+
+  /// \return returns whether the track will be propagated instead of refitted
+  bool getPropagateTrack() const { return mPropagateTrack; }
+
+  /// \return returns magnetic field which is used for propagation of track parameters
+  float getFieldNominalGPUBz() const { return mFieldNominalGPUBz; };
+
+  /// dump object to disc
+  /// \param outFileName name of the output file
+  /// \param outName name of the object in the output file
+  void dumpToFile(const char* outFileName = "calPadGainTracks.root", const char* outName = "calPadGain") const;
+
+  /// loading the track topology correction from a file
+  /// \param fileName name of the file containing the object
+  void loadPolTopologyCorrectionFromFile(std::string_view fileName);
+
+  /// setting the track topology correction
+  /// \param polynomials polynomials which will be set
+  void setPolTopologyCorrectionFromContainer(const CalibdEdxTrackTopologyPolContainer& polynomials);
+
+  /// draw reference gain map sector
+  /// \param sector sector which will be drawn
+  /// \param filename name of the output file. If empty the canvas is drawn
+  /// \param minZ min z value for drawing (if minZ > maxZ automatic z axis)
+  /// \param maxZ max z value for drawing (if minZ > maxZ automatic z axis)
+  void drawReferenceGainMapSector(const int sector, const std::string filename = "GainMapSector.pdf", const float minZ = 0, const float maxZ = -1) const { drawRefGainMapHelper(false, sector, filename, minZ, maxZ); }
+
+  /// draw reference gain map side
+  /// \param side side of the TPC which will be drawn
+  /// \param filename name of the output file. If empty the canvas is drawn
+  /// \param minZ min z value for drawing (if minZ > maxZ automatic z axis)
+  /// \param maxZ max z value for drawing (if minZ > maxZ automatic z axis)
+  void drawReferenceGainMapSide(const o2::tpc::Side side, const std::string filename = "GainMapSide.pdf", const float minZ = 0, const float maxZ = -1) const { drawRefGainMapHelper(true, side == Side::A ? Sector(0) : Sector(Sector::MAXSECTOR - 1), filename, minZ, maxZ); }
+
+  /// dump the extracted residual multiplied with the applied reference gain map to disc
+  /// \param outFileName name of the output file
+  /// \param outName name of the object in the output file
+  void dumpReferenceExtractedGainMap(const char* outFileName = "GainMapRefExtracted.root", const char* outName = "GainMap") const;
+
+  /// set VDrift correction
+  void setTPCVDrift(const o2::tpc::VDriftCorrFact& v);
+
+  /// set cluster correction maps helper
+  void setTPCCorrMaps(o2::gpu::CorrectionMapsHelper* maph);
 
  private:
-  std::vector<o2::tpc::TrackTPC>* mTracks{nullptr};           ///< vector containing the tpc tracks which will be processed. Cant be const due to the propagate function
-  std::vector<TPCClRefElem>* mTPCTrackClIdxVecInput{nullptr}; ///< input vector with TPC tracks cluster indicies
-  const o2::tpc::ClusterNativeAccess* mClusterIndex{nullptr}; ///< needed to access clusternative with tpctracks
-  dEdxType mMode = DedxTrack;                                 ///< normalization type: type=DedxTrack use truncated mean, type=DedxBB use value from BB fit
-
-  inline static auto& mapper = Mapper::instance();     ///< initialize mapper object
-  static constexpr unsigned int NROWS = 152;           ///< number of padrows used TODO change to mapper
-  static constexpr unsigned int NROWSIROC = 63;        ///< number of padrows used TODO change to mapper
-  static constexpr unsigned int NROWSOROC = 89;        ///< number of padrows used TODO change to mapper
-  static constexpr unsigned int NSECTORS = 36;         ///< number of sectors TODO change to mapper
-  static constexpr unsigned int NPADSINSECTOR = 14560; ///< number of total pads in sector TODO change to mapper
-
-  std::unique_ptr<CalDet<o2::tpc::FastHisto<float>>> mPadHistosDet; ///< Calibration object containing for each pad a histogram with normalized charge
-  CalPad mGainMap{"GainMap"};                                       ///< Gain map object
+  gsl::span<const TrackTPC>* mTracks{nullptr};                                        ///<! vector containing the tpc tracks which will be processed. Cant be const due to the propagate function
+  gsl::span<const TPCClRefElem>* mTPCTrackClIdxVecInput{nullptr};                     ///<! input vector with TPC tracks cluster indicies
+  const o2::tpc::ClusterNativeAccess* mClusterIndex{nullptr};                         ///<! needed to access clusternative with tpctracks
+  gsl::span<const unsigned char> mTPCRefitterShMap;                                   ///<! externally set TPC clusters sharing map
+  gsl::span<const unsigned int> mTPCRefitterOccMap;                                   ///<! externally set TPC clusters occupancy map
+  std::vector<unsigned char> mBufVec;                                                 ///<! buffer for filling shared cluster map
+  DEdxType mMode = dedxTrack;                                                         ///< normalization type: type=DedxTrack use truncated mean, type=DedxBB use value from BB fit
+  DEdxRegion mDedxRegion = stack;                                                     ///<  using the dE/dx per chamber, stack or per sector
+  float mFieldNominalGPUBz{-5};                                                       ///< Magnetic field in kG, used for track propagation
+  float mMomMin{0.1f};                                                                ///< minimum momentum which is required by tracks
+  float mMomMax{5.f};                                                                 ///< maximum momentum which is required by tracks
+  float mDedxMin{0.f};                                                                ///< minimum accepted dE/dx
+  float mDedxMax{-1.f};                                                               ///< maximum accepted dE/dx
+  float mEtaMax{1.f};                                                                 ///< maximum accpeted eta of tracks
+  float mTPCVDriftRef = -1.;                                                          ///< TPC nominal drift speed in cm/microseconds
+  float mTPCVDriftCorrFact = 1.;                                                      ///< TPC nominal correction factort (wrt ref)
+  float mTPCVDrift = -1.;                                                             ///< TPC drift speed in cm/microseconds
+  float mTPCDriftTimeOffset = 0.;                                                     ///< drift time offset in mus
+  int mMinClusters{50};                                                               ///< minimum number of clusters the tracks require
+  bool mPropagateTrack{false};                                                        ///< propagating the track instead of performing a refit
+  bool mDoNotNormCharge{false};                                                       ///< do not normalize the cluster charge to the dE/dx
+  ChargeType mChargeType{ChargeType::Max};                                            ///< charge type which is used for calculating the dE/dx and filling the pad-by-pad histograms
+  o2::gpu::CorrectionMapsHelper* mTPCCorrMapsHelper = nullptr;                        ///< cluster corrections map helper
+  std::vector<std::vector<float>> mDEdxBuffer{};                                      ///<! memory for dE/dx
+  std::vector<std::tuple<unsigned char, unsigned char, unsigned char, float>> mClTrk; ///<! memory for cluster informations
+  std::vector<float> mDedxTmp{};                                                      ///<! memory for dE/dx calculation
+  std::unique_ptr<CalPad> mGainMapRef;                                                ///<! static Gain map object used for correcting the cluster charge
+  std::unique_ptr<CalibdEdxTrackTopologyPol> mCalibTrackTopologyPol;                  ///<! calibration container for the cluster charge
 
   /// calculate truncated mean for track
   /// \param track input track which will be processed
-  /// \param momMin minimum momentum required by the track
-  /// \param momMax maximum momentum required by the track
-  void processTrack(o2::tpc::TrackTPC track, float momMin, float momMax);
+  void processTrack(TrackTPC track, o2::gpu::GPUO2InterfaceRefit* refit);
 
-  /// get the index for given pad which is needed for the filling of the CalDet object
+  /// get the index (padnumber in ROC) for given pad which is needed for the filling of the CalDet object
   /// \param padSub pad subset type
   /// \param padSubsetNumber index of the pad subset
   /// \param row corresponding pad row
   /// \param pad pad in row
-  static int getIndex(o2::tpc::PadSubset padSub, int padSubsetNumber, const int row, const int pad)
-  {
-    return mapper.getPadNumber(padSub, padSubsetNumber, row, pad);
-  }
+  static int getIndex(o2::tpc::PadSubset padSub, int padSubsetNumber, const int row, const int pad);
 
-  float getTrackTopologyCorrection(o2::tpc::TrackTPC& track, int iCl);
+  /// \return returns simple analytical topology correction
+  float getTrackTopologyCorrection(const o2::tpc::TrackTPC& track, const unsigned int region) const;
 
-  ///get the truncated mean for input vector and the truncation range low*nCl<nCl<high*nCl
-  /// \param vCharge vector containing all qmax values of the track
+  /// \return returns topology correction from polynomials
+  float getTrackTopologyCorrectionPol(const o2::tpc::TrackTPC& track, const o2::tpc::ClusterNative& cl, const unsigned int region, const float charge) const;
+
+  /// get the truncated mean for input vector and the truncation range low*nCl<nCl<high*nCl
   /// \param low lower cluster cut of  0.05*nCluster
   /// \param high higher cluster cut of  0.6*nCluster
-  float getTruncMean(std::vector<float> vCharge, float low = 0.05f, float high = 0.6f) const;
+  void getTruncMean(float low = 0.05f, float high = 0.6f);
 
-  /// write the relevant variables used by this class to file
-  void writeTree() const;
+  /// Helper function for drawing the reference gain map
+  void drawRefGainMapHelper(const bool type, const Sector sector, const std::string filename, const float minZ, const float maxZ) const;
+
+  /// reserve memory for members
+  void reserveMemory();
+
+  void resizedEdxBuffer();
+
+  int getdEdxBufferIndex(const int region) const;
+
+  float getdEdxIROC(const dEdxInfo& dedx) const { return (mChargeType == ChargeType::Max) ? dedx.dEdxMaxIROC : dedx.dEdxTotIROC; }
+  float getdEdxOROC1(const dEdxInfo& dedx) const { return (mChargeType == ChargeType::Max) ? dedx.dEdxMaxOROC1 : dedx.dEdxTotOROC1; }
+  float getdEdxOROC2(const dEdxInfo& dedx) const { return (mChargeType == ChargeType::Max) ? dedx.dEdxMaxOROC2 : dedx.dEdxTotOROC2; }
+  float getdEdxOROC3(const dEdxInfo& dedx) const { return (mChargeType == ChargeType::Max) ? dedx.dEdxMaxOROC3 : dedx.dEdxTotOROC3; }
+  float getdEdxTPC(const dEdxInfo& dedx) const { return (mChargeType == ChargeType::Max) ? dedx.dEdxMaxTPC : dedx.dEdxTotTPC; }
 };
 
 } // namespace tpc

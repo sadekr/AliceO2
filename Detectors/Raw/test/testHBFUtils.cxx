@@ -15,11 +15,11 @@
 #include <algorithm>
 #include <bitset>
 #include <boost/test/unit_test.hpp>
-#include "Steer/InteractionSampler.h"
+#include "SimulationDataFormat/InteractionSampler.h"
 #include "DetectorsRaw/HBFUtils.h"
 #include "Headers/RAWDataHeader.h"
 #include <TRandom.h>
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 
 // @brief test and demo for HBF sampling for simulated IRs
 // @author ruben.shahoyan@cern.ch
@@ -45,7 +45,7 @@ BOOST_AUTO_TEST_CASE(HBFUtils)
   std::vector<o2::InteractionTimeRecord> irs(nIRs);
   irSampler.generateCollisionTimes(irs);
 
-  LOG(INFO) << "Emulate RDHs for raw data between IRs " << irs.front() << " and " << irs.back();
+  LOG(info) << "Emulate RDHs for raw data between IRs " << irs.front() << " and " << irs.back();
 
   uint8_t packetCounter = 0;
   std::vector<o2::InteractionRecord> HBIRVec;

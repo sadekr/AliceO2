@@ -17,12 +17,14 @@
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/Lifetime.h"
 #include "Steer/HitProcessingManager.h"
-#include "Steer/InteractionSampler.h"
+#include "SimulationDataFormat/InteractionSampler.h"
 #include "CommonDataFormat/InteractionRecord.h"
+#include "CommonUtils/NameConf.h"
 #include "DataFormatsTPC/TPCSectorHeader.h"
+#include <DataFormatsParameters/GRPLHCIFData.h>
 #include "DetectorsRaw/HBFUtils.h"
-#include <FairMQLogger.h>
-#include <TMessage.h> // object serialization
+#include <CCDB/BasicCCDBManager.h>
+#include <fairlogger/Logger.h>
 #include <memory>     // std::unique_ptr
 #include <cstring>    // memcpy
 #include <string>     // std::string
@@ -30,6 +32,8 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <filesystem>
+#include <boost/interprocess/sync/named_semaphore.hpp>
 
 using namespace o2::framework;
 namespace o2lhc = o2::constants::lhc;
@@ -39,17 +43,30 @@ namespace o2
 {
 namespace steer
 {
-DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::string>& simprefixes, const std::vector<int>& tpcsectors)
+
+std::vector<o2::ctp::CTPDigit>* ctptrigger = nullptr;
+float gIntRate = -1.;
+
+DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::string>& simprefixes, const std::vector<int>& tpcsectors, bool withTrigger)
 {
   uint64_t activeSectors = 0;
   for (const auto& tpcsector : tpcsectors) {
     activeSectors |= (uint64_t)0x1 << tpcsector;
   }
 
-  auto doit = [range, tpcsectors, activeSectors](ProcessingContext& pc) {
+  auto doit = [range, tpcsectors, activeSectors, withTrigger](ProcessingContext& pc) {
     auto& mgr = steer::HitProcessingManager::instance();
-    auto eventrecords = mgr.getDigitizationContext().getEventRecords();
-    const auto& context = mgr.getDigitizationContext();
+    auto& context = mgr.getDigitizationContext();
+    auto eventrecords = context.getEventRecords();
+
+    if (withTrigger) {
+      // fetch the digits and transport them as part of the context
+      LOG(info) << "Setting CTP trigger object to " << ctptrigger;
+      context.setCTPDigits(ctptrigger);
+    }
+
+    // inject the global interaction rate information
+    context.setDigitizerInteractionRate(gIntRate);
 
     for (auto const& sector : tpcsectors) {
       // Note: the TPC sector header was serving the sector to lane mapping before
@@ -69,12 +86,12 @@ DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::st
     // the first 36 channel numbers are reserved for the TPC, now publish the remaining
     // channels
     for (int subchannel = range.min; subchannel < range.max; ++subchannel) {
-      LOG(INFO) << "SENDING SOMETHING TO OTHERS";
+      LOG(info) << "SENDING SOMETHING TO OTHERS";
       pc.outputs().snapshot(
         OutputRef{"collisioncontext", static_cast<SubSpecificationType>(subchannel)},
         context);
     }
-
+    pc.outputs().snapshot(OutputRef{"bunchFilling"}, mgr.getInteractionSampler().getBunchFilling());
     // digitizer workflow runs only once
     // send endOfData control event and mark the reader as ready to finish
     pc.services().get<ControlService>().endOfStream();
@@ -82,52 +99,80 @@ DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::st
   };
 
   // init function return a lambda taking a ProcessingContext
-  auto initIt = [simprefixes, doit](InitContext& ctx) {
+  auto initIt = [simprefixes, doit, withTrigger](InitContext& ctx) {
     // initialize fundamental objects
     auto& mgr = steer::HitProcessingManager::instance();
 
-    // init gRandom to random start
-    // TODO: offer option to set seed
-    gRandom->SetSeed(0);
+    if (withTrigger) {
+      // fetch the ctp trigger/digit information from the CTP file
+      auto triggerf = TFile(ctx.options().get<std::string>("triggerfile").c_str(), "OPEN");
+      auto tr = (TTree*)triggerf.Get("o2sim");
+      if (!tr) {
+        LOG(fatal) << "Did not find CTP TTree";
+      }
+      auto br = tr->GetBranch("CTPDigits");
+      if (!br) {
+        LOG(fatal) << "Did not find CTPDigit branch";
+      }
+      br->SetAddress(&ctptrigger);
+      br->GetEntry(0);
+      LOG(info) << " Read " << ctptrigger->size() << " CTP digits ";
+    }
+
+    // init gRandom
+    gRandom->SetSeed(ctx.options().get<int>("seed"));
 
     if (simprefixes.size() == 0) {
-      LOG(ERROR) << "No simulation prefix available";
+      LOG(error) << "No simulation prefix available";
     } else {
-      LOG(INFO) << "adding " << simprefixes[0] << "\n";
+      LOG(info) << "adding " << simprefixes[0] << "\n";
       mgr.addInputFile(simprefixes[0]);
       for (int part = 1; part < simprefixes.size(); ++part) {
         mgr.addInputSignalFile(simprefixes[part]);
       }
     }
 
+    gIntRate = ctx.options().get<float>("interactionRate"); // is interaction rate requested?
+    if (gIntRate < 1.f) {
+      gIntRate = 1.f;
+    }
     // do we start from an existing context
     auto incontextstring = ctx.options().get<std::string>("incontext");
-    LOG(INFO) << "INCONTEXTSTRING " << incontextstring;
+    LOG(info) << "INCONTEXTSTRING " << incontextstring;
     if (incontextstring.size() > 0) {
       auto success = mgr.setupRunFromExistingContext(incontextstring.c_str());
       if (!success) {
-        LOG(FATAL) << "Could not read collision context from " << incontextstring;
+        LOG(fatal) << "Could not read collision context from " << incontextstring;
       }
     } else {
-
-      auto intRate = ctx.options().get<float>("interactionRate"); // is interaction rate requested?
-      if (intRate < 1.f) {
-        intRate = 1.f;
-      }
-      LOG(INFO) << "Imposing hadronic interaction rate " << intRate << "Hz";
-      mgr.getInteractionSampler().setInteractionRate(intRate);
+      LOG(info) << "Imposing hadronic interaction rate " << gIntRate << "Hz";
+      mgr.getInteractionSampler().setInteractionRate(gIntRate);
       o2::raw::HBFUtils::Instance().print();
       o2::raw::HBFUtils::Instance().checkConsistency();
       mgr.getInteractionSampler().setFirstIR({0, o2::raw::HBFUtils::Instance().orbitFirstSampled});
       mgr.getDigitizationContext().setFirstOrbitForSampling(o2::raw::HBFUtils::Instance().orbitFirstSampled);
 
+      auto setBCFillingHelper = [](auto& sampler, auto& bcPatternString) {
+        if (bcPatternString == "ccdb") {
+          LOG(info) << "Fetch bcPattern information from CCDB";
+          // fetch the GRP Object
+          auto& ccdb = o2::ccdb::BasicCCDBManager::instance();
+          auto grpLHC = ccdb.get<o2::parameters::GRPLHCIFData>("GLO/Config/GRPLHCIF");
+          LOG(info) << "Fetched injection scheme " << grpLHC->getInjectionScheme() << " from CCDB";
+          sampler.setBunchFilling(grpLHC->getBunchFilling());
+        } else {
+          sampler.setBunchFilling(bcPatternString);
+        }
+      };
+
       auto bcPatternFile = ctx.options().get<std::string>("bcPatternFile");
       if (!bcPatternFile.empty()) {
-        mgr.getInteractionSampler().setBunchFilling(bcPatternFile);
+        setBCFillingHelper(mgr.getInteractionSampler(), bcPatternFile);
       }
 
       mgr.getInteractionSampler().init();
       mgr.getInteractionSampler().print();
+
       // doing a random event selection/subsampling?
       mgr.setRandomEventSequence(ctx.options().get<int>("randomsample") > 0);
 
@@ -145,7 +190,7 @@ DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::st
       if (qedprefix.size() > 0) {
         o2::steer::InteractionSampler qedInteractionSampler;
         if (!bcPatternFile.empty()) {
-          qedInteractionSampler.setBunchFilling(bcPatternFile);
+          setBCFillingHelper(qedInteractionSampler, bcPatternFile);
         }
 
         // get first and last "hadronic" interaction records and let
@@ -162,28 +207,28 @@ DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::st
         }
         const float hadronicrate = ctx.options().get<float>("interactionRate");
         const float qedrate = ratio * hadronicrate;
-        LOG(INFO) << "QED RATE " << qedrate;
+        LOG(info) << "QED RATE " << qedrate;
         qedInteractionSampler.setInteractionRate(qedrate);
         qedInteractionSampler.setFirstIR(first);
         qedInteractionSampler.init();
         qedInteractionSampler.print();
         std::vector<o2::InteractionTimeRecord> qedinteractionrecords;
         o2::InteractionTimeRecord t;
-        LOG(INFO) << "GENERATING COL TIMES";
+        LOG(info) << "GENERATING COL TIMES";
         t = qedInteractionSampler.generateCollisionTime();
         while ((t = qedInteractionSampler.generateCollisionTime()) < last) {
           qedinteractionrecords.push_back(t);
         }
-        LOG(INFO) << "DONE GENERATING COL TIMES";
+        LOG(info) << "DONE GENERATING COL TIMES";
 
         // get digitization context and add QED stuff
         mgr.getDigitizationContext().fillQED(qedprefix, qedinteractionrecords);
-        mgr.getDigitizationContext().printCollisionSummary(true);
+        mgr.getDigitizationContext().printCollisionSummary(true, 2000); // print with QED but truncate output
       }
       // --- end addition of QED contributions
 
-      LOG(INFO) << "Initializing Spec ... have " << mgr.getDigitizationContext().getEventRecords().size() << " times ";
-      LOG(INFO) << "Serializing Context for later reuse";
+      LOG(info) << "Initializing Spec ... have " << mgr.getDigitizationContext().getEventRecords().size() << " times ";
+      LOG(info) << "Serializing Context for later reuse";
       mgr.writeDigitizationContext(ctx.options().get<std::string>("outcontext").c_str());
     }
 
@@ -200,6 +245,8 @@ DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::st
       OutputSpec{{"collisioncontext"}, "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(subchannel), Lifetime::Timeframe});
   }
 
+  outputs.emplace_back(OutputSpec{{"bunchFilling"}, "SIM", "BUNCHFILLING", 0, Lifetime::Timeframe});
+
   return DataProcessorSpec{
     /*ID*/ "SimReader",
     /*INPUT CHANNELS*/ Inputs{}, outputs,
@@ -213,6 +260,8 @@ DataProcessorSpec getSimReaderSpec(SubspecRange range, const std::vector<std::st
       {"qed-x-section-ratio", VariantType::Float, -1.f, {"Ratio of cross sections QED/hadronic events. Determines QED interaction rate from hadronic interaction rate."}},
       {"outcontext", VariantType::String, "collisioncontext.root", {"Output file for collision context"}},
       {"incontext", VariantType::String, "", {"Take collision context from this file"}},
+      {"triggerfile", VariantType::String, "ctpdigits.root", {"Name of the CTP trigger/digit file to use"}},
+      {"seed", VariantType::Int, 0, {"Random seed for collision context generation"}},
       {"ncollisions,n",
        VariantType::Int,
        0,

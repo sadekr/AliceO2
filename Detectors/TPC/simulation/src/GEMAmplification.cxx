@@ -19,7 +19,7 @@
 #include <TFile.h>
 #include "TPCBase/CDBInterface.h"
 #include <fstream>
-#include "FairLogger.h"
+#include "Framework/Logger.h"
 #include <filesystem>
 
 using namespace o2::tpc;
@@ -43,10 +43,10 @@ GEMAmplification::GEMAmplification()
   TFile* outfile;
   auto cacheexists = std::filesystem::exists(polyaFileName);
   if (cacheexists) {
-    LOG(INFO) << "TPC: GEM setup from existing cache";
+    LOG(info) << "TPC: GEM setup from existing cache";
     outfile = TFile::Open(polyaFileName);
   } else {
-    LOG(INFO) << "TPC: GEM setup - initialization from scratch";
+    LOG(info) << "TPC: GEM setup - initialization from scratch";
     outfile = TFile::Open(polyaFileName, "CREATE");
   }
 
@@ -99,7 +99,7 @@ GEMAmplification::GEMAmplification()
     outfile->Close();
   }
   watch.Stop();
-  LOG(INFO) << "TPC: GEM setup (polya) took " << watch.CpuTime();
+  LOG(info) << "TPC: GEM setup (polya) took " << watch.CpuTime();
 }
 
 void GEMAmplification::updateParameters()
@@ -161,7 +161,7 @@ int GEMAmplification::getGEMMultiplication(int nElectrons, int GEM)
     return 0;
   } else if (nElectrons > 500) {
     /// For this condition the central limit theorem holds and we can approximate the amplification fluctuations by
-    ///a Gaussian for all electrons
+    /// a Gaussian for all electrons
     /// The mean is given by nElectrons * G_abs and the width by sqrt(nElectrons) * Sigma/Mu (Polya) * G_abs
     return ((mRandomGaus.getNextValue() * std::sqrt(static_cast<float>(nElectrons)) *
              mGasParam->SigmaOverMu) +

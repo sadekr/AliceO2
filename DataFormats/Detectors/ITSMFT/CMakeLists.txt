@@ -12,6 +12,3 @@
 add_subdirectory(common)
 add_subdirectory(ITS)
 add_subdirectory(MFT)
-if(ENABLE_UPGRADES)
-  add_subdirectory(IT3)
-endif()

@@ -11,11 +11,10 @@
 #ifndef o2_framework_DataOutputDirector_H_INCLUDED
 #define o2_framework_DataOutputDirector_H_INCLUDED
 
-#include "Framework/DataDescriptorQueryBuilder.h"
+#include "TFile.h"
+
 #include "Framework/DataDescriptorMatcher.h"
-#include "Framework/DataSpecUtils.h"
 #include "Framework/InputSpec.h"
-#include "Framework/DataInputDirector.h"
 
 #include "rapidjson/fwd.h"
 
@@ -25,13 +24,19 @@ namespace o2::framework
 {
 using namespace rapidjson;
 
+struct FileAndFolder {
+  TFile* file = nullptr;
+  std::string folderName = "";
+};
+
 struct DataOutputDescriptor {
   /// Holds information concerning the writing of aod tables.
   /// The information includes the table specification, treename,
   /// columns to save, and the file name
 
-  std::string tablename = "";
-  std::string treename = "";
+  std::string tablename;
+  std::string treename;
+  std::string version;
   std::vector<std::string> colnames;
   std::unique_ptr<data_matcher::DataDescriptorMatcher> matcher;
 
@@ -46,8 +51,6 @@ struct DataOutputDescriptor {
  private:
   std::string mfilenameBase;
   std::string* mfilenameBasePtr = nullptr;
-
-  std::string remove_ws(const std::string& s);
 };
 
 struct DataOutputDirector {
@@ -67,8 +70,8 @@ struct DataOutputDirector {
   void readSpecs(std::vector<InputSpec> inputs);
 
   // fill the DataOutputDirector with information from a json file
-  std::tuple<std::string, std::string, int> readJson(std::string const& fnjson);
-  std::tuple<std::string, std::string, int> readJsonString(std::string const& stjson);
+  std::tuple<std::string, std::string, std::string, float, int> readJson(std::string const& fnjson);
+  std::tuple<std::string, std::string, std::string, float, int> readJsonString(std::string const& stjson);
 
   // read/write private members
   int getNumberTimeFramesToMerge() { return mnumberTimeFramesToMerge; }
@@ -81,27 +84,37 @@ struct DataOutputDirector {
   std::vector<DataOutputDescriptor*> getDataOutputDescriptors(InputSpec spec);
 
   // get the matching TFile
-  FileAndFolder getFileFolder(DataOutputDescriptor* dodesc, uint64_t folderNumber);
+  FileAndFolder getFileFolder(DataOutputDescriptor* dodesc, uint64_t folderNumber, std::string parentFileName, int compression);
 
+  // check file sizes
+  bool checkFileSizes();
+  // close all files
   void closeDataFiles();
 
+  // setters
+  void setResultDir(std::string resDir);
   void setFilenameBase(std::string dfn);
+  void setMaximumFileSize(float maxfs);
 
   void printOut();
 
  private:
+  std::string mresultDirectory{"."};
   std::string mfilenameBase;
   std::string* const mfilenameBasePtr = &mfilenameBase;
   std::vector<DataOutputDescriptor*> mDataOutputDescriptors;
   std::vector<std::string> mtreeFilenames;
   std::vector<std::string> mfilenameBases;
   std::vector<TFile*> mfilePtrs;
+  std::vector<TMap*> mParentMaps;
   bool mdebugmode = false;
+  int mfileCounter = 1;
+  float mmaxfilesize = -1.;
   int mnumberTimeFramesToMerge = 1;
   std::string mfileMode = "RECREATE";
 
-  std::tuple<std::string, std::string, int> readJsonDocument(Document* doc);
-  const std::tuple<std::string, std::string, int> memptyanswer = std::make_tuple(std::string(""), std::string(""), -1);
+  std::tuple<std::string, std::string, std::string, float, int> readJsonDocument(Document* doc);
+  const std::tuple<std::string, std::string, std::string, float, int> memptyanswer = std::make_tuple(std::string(""), std::string(""), std::string(""), -1., -1);
 };
 
 } // namespace o2::framework

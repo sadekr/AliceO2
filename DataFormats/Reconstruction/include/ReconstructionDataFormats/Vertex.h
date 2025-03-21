@@ -20,6 +20,8 @@
 #include "CommonDataFormat/TimeStamp.h"
 #ifndef GPUCA_GPUCODE_DEVICE
 #include <iosfwd>
+#include <string>
+#include <type_traits>
 #endif
 
 namespace o2
@@ -38,27 +40,31 @@ class VertexBase
                         kCovYZ,
                         kCovZZ };
   static constexpr int kNCov = 6;
-  GPUdDefault() VertexBase() = default;
-  GPUdDefault() ~VertexBase() = default;
-  GPUd() VertexBase(const math_utils::Point3D<float>& pos, const gpu::gpustd::array<float, kNCov>& cov) : mPos(pos), mCov(cov)
+  GPUhdDefault() VertexBase() = default;
+  GPUhdDefault() ~VertexBase() = default;
+  GPUhd() VertexBase(const math_utils::Point3D<float>& pos, const gpu::gpustd::array<float, kNCov>& cov) : mPos(pos), mCov(cov)
   {
   }
 
-#ifndef GPUCA_GPUCODE_DEVICE
+#if !defined(GPUCA_NO_FMT) && !defined(GPUCA_GPUCODE_DEVICE)
   void print() const;
   std::string asString() const;
 #endif
 
   // getting the cartesian coordinates and errors
-  GPUd() float getX() const { return mPos.X(); }
-  GPUd() float getY() const { return mPos.Y(); }
-  GPUd() float getZ() const { return mPos.Z(); }
+  GPUhd() float getX() const { return mPos.X(); }
+  GPUhd() float getY() const { return mPos.Y(); }
+  GPUhd() float getZ() const { return mPos.Z(); }
   GPUd() float getSigmaX2() const { return mCov[kCovXX]; }
   GPUd() float getSigmaY2() const { return mCov[kCovYY]; }
   GPUd() float getSigmaZ2() const { return mCov[kCovZZ]; }
   GPUd() float getSigmaXY() const { return mCov[kCovXY]; }
   GPUd() float getSigmaXZ() const { return mCov[kCovXZ]; }
   GPUd() float getSigmaYZ() const { return mCov[kCovYZ]; }
+  GPUd() float getSigmaX() const { return gpu::CAMath::Sqrt(getSigmaX2()); }
+  GPUd() float getSigmaY() const { return gpu::CAMath::Sqrt(getSigmaY2()); }
+  GPUd() float getSigmaZ() const { return gpu::CAMath::Sqrt(getSigmaZ2()); }
+
   GPUd() const gpu::gpustd::array<float, kNCov>& getCov() const { return mCov; }
 
   GPUd() math_utils::Point3D<float> getXYZ() const { return mPos; }
@@ -82,6 +88,10 @@ class VertexBase
   GPUd() void setSigmaXY(float v) { mCov[kCovXY] = v; }
   GPUd() void setSigmaXZ(float v) { mCov[kCovXZ] = v; }
   GPUd() void setSigmaYZ(float v) { mCov[kCovYZ] = v; }
+  GPUd() void setSigmaX(float val) { setSigmaX2(val * val); }
+  GPUd() void setSigmaY(float val) { setSigmaY2(val * val); }
+  GPUd() void setSigmaZ(float val) { setSigmaZ2(val * val); }
+
   GPUd() void setCov(float sxx, float sxy, float syy, float sxz, float syz, float szz)
   {
     setSigmaX2(sxx);
@@ -92,6 +102,9 @@ class VertexBase
     setSigmaYZ(syz);
   }
   GPUd() void setCov(const gpu::gpustd::array<float, kNCov>& cov) { mCov = cov; }
+
+  bool operator==(const VertexBase& other) const;
+  bool operator!=(const VertexBase& other) const { return !(*this == other); }
 
  protected:
   math_utils::Point3D<float> mPos{0., 0., 0.}; ///< cartesian position
@@ -111,13 +124,14 @@ class Vertex : public VertexBase
   using ushort = unsigned short;
   enum Flags : ushort {
     TimeValidated = 0x1 << 0, // Flag that the vertex was validated by external time measurement (e.g. FIT)
+    UPCMode = 0x1 << 1,       // vertex is found in the UPC mode ITS ROF
     FlagsMask = 0xffff
   };
 
-  GPUdDefault() Vertex() = default;
-  GPUdDefault() ~Vertex() = default;
-  GPUd() Vertex(const math_utils::Point3D<float>& pos, const gpu::gpustd::array<float, kNCov>& cov, ushort nCont, float chi2)
-    : VertexBase(pos, cov), mNContributors(nCont), mChi2(chi2)
+  GPUhdDefault() Vertex() = default;
+  GPUhdDefault() ~Vertex() = default;
+  GPUhd() Vertex(const math_utils::Point3D<float>& pos, const gpu::gpustd::array<float, kNCov>& cov, ushort nCont, float chi2)
+    : VertexBase(pos, cov), mChi2(chi2), mNContributors(nCont)
   {
   }
 
@@ -128,13 +142,13 @@ class Vertex : public VertexBase
   GPUd() ushort getFlags() const { return mBits; }
   GPUd() bool isFlagSet(uint f) const { return mBits & (FlagsMask & f); }
   GPUd() void setFlags(ushort f) { mBits |= FlagsMask & f; }
-  GPUd() void resetFrags(ushort f = FlagsMask) { mBits &= ~(FlagsMask & f); }
+  GPUd() void resetFlags(ushort f = FlagsMask) { mBits &= ~(FlagsMask & f); }
 
   GPUd() void setChi2(float v) { mChi2 = v; }
   GPUd() float getChi2() const { return mChi2; }
 
-  GPUd() const Stamp& getTimeStamp() const { return mTimeStamp; }
-  GPUd() Stamp& getTimeStamp() { return mTimeStamp; }
+  GPUhd() const Stamp& getTimeStamp() const { return mTimeStamp; }
+  GPUhd() Stamp& getTimeStamp() { return mTimeStamp; }
   GPUd() void setTimeStamp(const Stamp& v) { mTimeStamp = v; }
 
  protected:
@@ -146,10 +160,29 @@ class Vertex : public VertexBase
   ClassDefNV(Vertex, 3);
 };
 
-#ifndef GPUCA_GPUCODE_DEVICE
+#if !defined(GPUCA_GPUCODE_DEVICE) && !defined(GPUCA_NO_FMT)
 std::ostream& operator<<(std::ostream& os, const o2::dataformats::VertexBase& v);
 #endif
 
 } // namespace dataformats
+
+#ifndef GPUCA_GPUCODE_DEVICE
+/// Defining PrimaryVertex explicitly as messageable
+namespace framework
+{
+template <typename T>
+struct is_messageable;
+template <>
+struct is_messageable<o2::dataformats::VertexBase> : std::true_type {
+};
+template <>
+struct is_messageable<o2::dataformats::Vertex<o2::dataformats::TimeStamp<int>>> : std::true_type {
+};
+template <>
+struct is_messageable<o2::dataformats::Vertex<o2::dataformats::TimeStampWithError<float, float>>> : std::true_type {
+};
+} // namespace framework
+#endif
+
 } // namespace o2
 #endif

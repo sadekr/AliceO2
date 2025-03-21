@@ -15,16 +15,19 @@
 #ifndef GPUCOMMONRTYPES_H
 #define GPUCOMMONRTYPES_H
 
-#if defined(GPUCA_STANDALONE) || (defined(GPUCA_O2_LIB) && !defined(GPUCA_O2_INTERFACE)) || defined(GPUCA_GPULIBRARY) // clang-format off
+#include "GPUCommonDef.h"
+
+#if defined(GPUCA_STANDALONE) || (defined(GPUCA_O2_LIB) && !defined(GPUCA_O2_INTERFACE) && !defined(DEBUG_STREAMER)) || defined(GPUCA_GPUCODE) // clang-format off
   #if !defined(ROOT_Rtypes) && !defined(__CLING__)
     #define GPUCOMMONRTYPES_H_ACTIVE
+    struct MUST_NOT_USE_Rtypes_h {};
+    typedef MUST_NOT_USE_Rtypes_h TClass;
     #define ClassDef(name,id)
     #define ClassDefNV(name, id)
     #define ClassDefOverride(name, id)
     #define ClassImp(name)
+    #define templateClassImp(name)
     #ifndef GPUCA_GPUCODE_DEVICE
-      typedef unsigned long long int ULong64_t;
-      typedef unsigned int UInt_t;
       #include <iostream>
     #endif
   #endif

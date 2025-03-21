@@ -40,17 +40,17 @@
 
 #include "../utils/qconfig.h"
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 using namespace std;
-namespace GPUCA_NAMESPACE::gpu
+namespace o2::gpu
 {
 extern GPUSettingsStandalone configStandalone;
 }
 
-int genEvents::GetSlice(double GlobalPhi)
+int32_t genEvents::GetSector(double GlobalPhi)
 {
   double phi = GlobalPhi;
-  //  std::cout<<" GetSlice: phi = "<<phi<<std::endl;
+  //  std::cout<<" GetSector: phi = "<<phi<<std::endl;
 
   if (phi >= mTwoPi) {
     phi -= mTwoPi;
@@ -58,31 +58,31 @@ int genEvents::GetSlice(double GlobalPhi)
   if (phi < 0) {
     phi += mTwoPi;
   }
-  return (int)(phi / mSliceDAngle);
+  return (int32_t)(phi / mSectorDAngle);
 }
 
-int genEvents::GetDSlice(double LocalPhi) { return GetSlice(LocalPhi + mSliceAngleOffset); }
+int32_t genEvents::GetDSector(double LocalPhi) { return GetSector(LocalPhi + mSectorAngleOffset); }
 
-double genEvents::GetSliceAngle(int iSlice) { return mSliceAngleOffset + iSlice * mSliceDAngle; }
+double genEvents::GetSectorAngle(int32_t iSector) { return mSectorAngleOffset + iSector * mSectorDAngle; }
 
-int genEvents::RecalculateSlice(GPUTPCGMPhysicalTrackModel& t, int& iSlice)
+int32_t genEvents::RecalculateSector(GPUTPCGMPhysicalTrackModel& t, int32_t& iSector)
 {
   double phi = atan2(t.GetY(), t.GetX());
   //  std::cout<<" recalculate: phi = "<<phi<<std::endl;
-  int dSlice = GetDSlice(phi);
+  int32_t dSector = GetDSector(phi);
 
-  if (dSlice == 0) {
+  if (dSector == 0) {
     return 0; // nothing to do
   }
-  //  std::cout<<" dSlice = "<<dSlice<<std::endl;
-  double dAlpha = dSlice * mSliceDAngle;
+  //  std::cout<<" dSector = "<<dSector<<std::endl;
+  double dAlpha = dSector * mSectorDAngle;
   // rotate track on angle dAlpha
 
   t.Rotate(dAlpha);
 
-  iSlice += dSlice;
-  if (iSlice >= 18) {
-    iSlice -= 18;
+  iSector += dSector;
+  if (iSector >= 18) {
+    iSector -= 18;
   }
   return 1;
 }
@@ -102,13 +102,13 @@ double genEvents::GetGaus(double sigma)
 void genEvents::InitEventGenerator()
 {
   const char* rows[3] = {"0-63", "128-159", "64-127"};
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 2; j++) {
+  for (int32_t i = 0; i < 3; i++) {
+    for (int32_t j = 0; j < 2; j++) {
       char name[1024], title[1024];
 
-      sprintf(name, "clError%s%d", (j == 0 ? "Y" : "Z"), i);
+      snprintf(name, 1024, "clError%s%d", (j == 0 ? "Y" : "Z"), i);
 
-      sprintf(title, "Cluster %s Error for rows %s", (j == 0 ? "Y" : "Z"), rows[i]);
+      snprintf(title, 1024, "Cluster %s Error for rows %s", (j == 0 ? "Y" : "Z"), rows[i]);
 
       mClusterError[i][j] = new TH1F(name, title, 1000, 0., .7);
       mClusterError[i][j]->GetXaxis()->SetTitle("Cluster Error [cm]");
@@ -121,11 +121,11 @@ void genEvents::FinishEventGenerator()
   TFile* tout = new TFile("generator.root", "RECREATE");
   TCanvas* c = new TCanvas("ClusterErrors", "Cluste rErrors", 0, 0, 700, 700. * 2. / 3.);
   c->Divide(3, 2);
-  int ipad = 1;
-  for (int j = 0; j < 2; j++) {
-    for (int i = 0; i < 3; i++) {
+  int32_t ipad = 1;
+  for (int32_t j = 0; j < 2; j++) {
+    for (int32_t i = 0; i < 3; i++) {
       c->cd(ipad++);
-      int k = i;
+      int32_t k = i;
       if (i == 1) {
         k = 2;
       }
@@ -149,16 +149,16 @@ void genEvents::FinishEventGenerator()
   }
 }
 
-int genEvents::GenerateEvent(const GPUParam& param, char* filename)
+int32_t genEvents::GenerateEvent(const GPUParam& param, char* filename)
 {
   mRec->ClearIOPointers();
-  static int iEvent = -1;
+  static int32_t iEvent = -1;
   iEvent++;
   if (iEvent == 0) {
     gRandom->SetSeed(configStandalone.seed);
   }
 
-  int nTracks = configStandalone.EG.numberOfTracks; // Number of MC tracks, must be at least as large as the largest fMCID assigned above
+  int32_t nTracks = configStandalone.EG.numberOfTracks; // Number of MC tracks, must be at least as large as the largest fMCID assigned above
   cout << "NTracks " << nTracks << endl;
   std::vector<GPUTPCMCInfo> mcInfo(nTracks);
   memset(mcInfo.data(), 0, nTracks * sizeof(mcInfo[0]));
@@ -173,15 +173,14 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
     prop.SetPolynomialField(&merger.Param().polynomialField);
   }
 
-  //  const double kCLight = 0.000299792458;
-  // Bz*=kCLight;
+  // Bz*=o2::gpu::gpu_common_constants::kCLight;
 
   std::vector<GenCluster> vClusters;
-  int clusterId = 0; // Here we count up the cluster ids we fill (must be unique).
+  int32_t clusterId = 0; // Here we count up the cluster ids we fill (must be unique).
   // gRandom->SetSeed(0);
-  // unsigned int seed = gRandom->GetSeed();
+  // uint32_t seed = gRandom->GetSeed();
 
-  for (int itr = 0; itr < nTracks; itr++) {
+  for (int32_t itr = 0; itr < nTracks; itr++) {
     // std::cout<<"Track "<<itr<<":"<<std::endl;
     // gRandom->SetSeed(seed);
 
@@ -198,7 +197,7 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
 
     GPUTPCGMPhysicalTrackModel t;
     double dphi = mTwoPi / nTracks;
-    double phi = mSliceAngleOffset + dphi * itr;
+    double phi = mSectorAngleOffset + dphi * itr;
     double eta = gRandom->Uniform(-1.5, 1.5);
 
     double theta = 2 * std::atan(1. / exp(eta));
@@ -207,8 +206,8 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
     double pt = .08 * std::pow(10, gRandom->Uniform(0, 2.2));
 
     double q = 1.;
-    int iSlice = GetSlice(phi);
-    phi = phi - GetSliceAngle(iSlice);
+    int32_t iSector = GetSector(phi);
+    phi = phi - GetSectorAngle(iSector);
 
     // std::cout<<"phi = "<<phi<<std::endl;
     double x0 = cosf(phi);
@@ -216,19 +215,19 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
     double z0 = tanf(lambda);
     t.Set(x0, y0, z0, pt * x0, pt * y0, pt * z0, q);
 
-    if (RecalculateSlice(t, iSlice) != 0) {
-      std::cout << "Initial slice wrong!!!" << std::endl;
+    if (RecalculateSector(t, iSector) != 0) {
+      std::cout << "Initial sector wrong!!!" << std::endl;
       // exit(0);
     }
 
-    for (int iRow = 0; iRow < GPUCA_ROW_COUNT; iRow++) {
+    for (int32_t iRow = 0; iRow < GPUCA_ROW_COUNT; iRow++) {
       // if( iRow>=50 ) break; //SG!!!
-      float xRow = param.tpcGeometry.Row2X(iRow);
+      float xRow = GPUTPCGeometry::Row2X(iRow);
       // transport to row
-      int err = 0;
-      for (int itry = 0; itry < 1; itry++) {
+      int32_t err = 0;
+      for (int32_t itry = 0; itry < 1; itry++) {
         float B[3];
-        prop.GetBxByBz(GetSliceAngle(iSlice), t.GetX(), t.GetY(), t.GetZ(), B);
+        prop.GetBxByBz(GetSectorAngle(iSector), t.GetX(), t.GetY(), t.GetZ(), B);
         float dLp = 0;
         err = t.PropagateToXBxByBz(xRow, B[0], B[1], B[2], dLp);
         if (err) {
@@ -236,31 +235,31 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
           t.Print();
           break;
         }
-        if (fabsf(t.GetZ()) >= 250.) {
+        if (fabsf(t.GetZ()) >= GPUTPCGeometry::TPCLength()) {
           std::cout << "Can not propagate to x = " << xRow << ": Z outside the volume" << std::endl;
           t.Print();
           err = -1;
           break;
         }
         // rotate track coordinate system to current sector
-        int isNewSlice = RecalculateSlice(t, iSlice);
-        if (!isNewSlice) {
+        int32_t isNewSector = RecalculateSector(t, iSector);
+        if (!isNewSector) {
           break;
         } else {
-          std::cout << "track " << itr << ": new slice " << iSlice << " at row " << iRow << std::endl;
+          std::cout << "track " << itr << ": new sector " << iSector << " at row " << iRow << std::endl;
         }
       }
       if (err) {
         break;
       }
-      // std::cout<<" track "<<itr<<": Slice "<<iSlice<<" row "<<iRow<<" params :"<<std::endl;
+      // std::cout<<" track "<<itr<<": Sector "<<iSector<<" row "<<iRow<<" params :"<<std::endl;
       // t.Print();
-      // track at row iRow, slice iSlice
+      // track at row iRow, sector iSector
       if (iRow == 0) { // store MC track at first row
         // std::cout<<std::setprecision( 20 );
         // std::cout<<"track "<<itr<<": x "<<t.X()<<" y "<<t.Y()<<" z "<<t.Z()<<std::endl;
         GPUTPCGMPhysicalTrackModel tg(t); // global coordinates
-        tg.Rotate(-GetSliceAngle(iSlice));
+        tg.Rotate(-GetSectorAngle(iSector));
 
         mcInfo[itr].pid = 2; // pion
         mcInfo[itr].charge = 3 * q;
@@ -277,9 +276,9 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
       GenCluster c;
       float sigmaY = 0.3;
       float sigmaZ = 0.5;
-      const int rowType = iRow < 64 ? 0 : iRow < 128 ? 2 : 1;
+      const int32_t rowType = iRow < 64 ? 0 : iRow < 128 ? 2 : 1;
       t.UpdateValues();
-      param.GetClusterErrors2(rowType, t.GetZ(), t.GetSinPhi(), t.GetDzDs(), sigmaY, sigmaZ);
+      param.GetClusterErrors2(iSector, rowType, t.GetZ(), t.GetSinPhi(), t.GetDzDs(), -1.f, 0.f, 0.f, sigmaY, sigmaZ);
       sigmaY = std::sqrt(sigmaY);
       sigmaZ = std::sqrt(sigmaZ);
       mClusterError[rowType][0]->Fill(sigmaY);
@@ -287,7 +286,7 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
       // std::cout<<sigmaY<<" "<<sigmaY<<std::endl;
       // if( sigmaY > 0.5 ) sigmaY = 0.5;
       // if( sigmaZ > 0.5 ) sigmaZ = 0.5;
-      c.sector = (t.GetZ() >= 0.) ? iSlice : iSlice + 18;
+      c.sector = (t.GetZ() >= 0.) ? iSector : iSector + 18;
       c.row = iRow;
       c.mcID = itr;
       c.x = t.GetX();
@@ -296,16 +295,16 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
       c.id = clusterId++;
       vClusters.push_back(c);
     } // iRow
-  }   // itr
+  } // itr
 
   std::vector<AliHLTTPCClusterMCLabel> labels;
 
-  std::unique_ptr<GPUTPCClusterData> clSlices[GPUChainTracking::NSLICES];
+  std::unique_ptr<GPUTPCClusterData> clSectors[GPUChainTracking::NSECTORS];
 
-  for (int iSector = 0; iSector < (int)GPUChainTracking::NSLICES; iSector++) // HLT Sector numbering, sectors go from 0 to 35, all spanning all rows from 0 to 158.
+  for (int32_t iSector = 0; iSector < (int32_t)GPUChainTracking::NSECTORS; iSector++) // HLT Sector numbering, sectors go from 0 to 35, all spanning all rows from 0 to 158.
   {
-    int nNumberOfHits = 0;
-    for (unsigned int i = 0; i < vClusters.size(); i++) {
+    int32_t nNumberOfHits = 0;
+    for (uint32_t i = 0; i < vClusters.size(); i++) {
       if (vClusters[i].sector == iSector) {
         nNumberOfHits++;
       }
@@ -314,9 +313,9 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
     mRec->mIOPtrs.nClusterData[iSector] = nNumberOfHits;
 
     GPUTPCClusterData* clusters = new GPUTPCClusterData[nNumberOfHits];
-    clSlices[iSector].reset(clusters);
-    int icl = 0;
-    for (unsigned int i = 0; i < vClusters.size(); i++) {
+    clSectors[iSector].reset(clusters);
+    int32_t icl = 0;
+    for (uint32_t i = 0; i < vClusters.size(); i++) {
       GenCluster& c = vClusters[i];
       if (c.sector == iSector) {
         clusters[icl].id = c.id;
@@ -327,7 +326,7 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
         clusters[icl].amp = 100; // Arbitrary amplitude
         icl++;
         AliHLTTPCClusterMCLabel clusterLabel;
-        for (int j = 0; j < 3; j++) {
+        for (int32_t j = 0; j < 3; j++) {
           clusterLabel.fClusterID[j].fMCID = -1;
           clusterLabel.fClusterID[j].fWeight = 0;
         }
@@ -339,14 +338,14 @@ int genEvents::GenerateEvent(const GPUParam& param, char* filename)
     mRec->mIOPtrs.clusterData[iSector] = clusters;
   }
 
-  // Create vector with cluster MC labels, clusters are counter from 0 to clusterId in the order they have been written above. No separation in slices.
+  // Create vector with cluster MC labels, clusters are counter from 0 to clusterId in the order they have been written above. No separation in sectors.
 
   mRec->mIOPtrs.nMCLabelsTPC = labels.size();
   mRec->mIOPtrs.mcLabelsTPC = labels.data();
 
   mRec->mIOPtrs.nMCInfosTPC = mcInfo.size();
   mRec->mIOPtrs.mcInfosTPC = mcInfo.data();
-  static const GPUTPCMCInfoCol mcColInfo = {0, (unsigned int)mcInfo.size()};
+  static const GPUTPCMCInfoCol mcColInfo = {0, (uint32_t)mcInfo.size()};
   mRec->mIOPtrs.mcInfosTPCCol = &mcColInfo;
   mRec->mIOPtrs.nMCInfosTPCCol = 1;
 
@@ -366,7 +365,7 @@ void genEvents::RunEventGenerator(GPUChainTracking* rec)
 
   gen->InitEventGenerator();
 
-  for (int i = 0; i < (configStandalone.nEvents == -1 ? 10 : configStandalone.nEvents); i++) {
+  for (int32_t i = 0; i < (configStandalone.nEvents == -1 ? 10 : configStandalone.nEvents); i++) {
     GPUInfo("Generating event %d/%d", i, configStandalone.nEvents == -1 ? 10 : configStandalone.nEvents);
     snprintf(dirname, 256, "events/%s/" GPUCA_EVDUMP_FILE ".%d.dump", configStandalone.eventsDir, i);
     gen->GenerateEvent(rec->GetParam(), dirname);

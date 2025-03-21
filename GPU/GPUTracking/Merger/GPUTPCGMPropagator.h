@@ -16,23 +16,17 @@
 #define GPUTPCGMPROPAGATOR_H
 
 #include "GPUCommonDef.h"
-#include "GPUTPCGMOfflineStatisticalErrors.h"
 #include "GPUTPCGMPhysicalTrackModel.h"
 #include "GPUTPCGMPolynomialField.h"
 #include "GPUCommonMath.h"
 
-namespace o2
-{
-namespace base
+namespace o2::base
 {
 struct MatBudget;
 class MatLayerCylSet;
-} // namespace base
-} // namespace o2
+} // namespace o2::base
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 class GPUTPCGMTrackParam;
 struct GPUParam;
@@ -55,15 +49,29 @@ class GPUTPCGMPropagator
     ITS = 1, ///< ITS
     TRD = 2  ///< outer TPC -> outer TRD
   };
+  enum UpdateRetVal {
+    updateErrorFitFailed = -1,
+    updateErrorClusterRejected = 2,
+    updateErrorEdgeCluster = 3
+  };
+  enum RejectChi2Mode {
+    rejectDirect = 1,
+    rejectInterFill = 2,
+    rejectInterReject = 3
+  };
 
-  GPUdDefault() GPUTPCGMPropagator() CON_DEFAULT;
+  GPUdDefault() GPUTPCGMPropagator() = default;
 
   struct MaterialCorrection {
     GPUhd() MaterialCorrection() : radLen(28811.7f), rho(1.025e-3f), radLenInv(1.f / radLen), DLMax(0.f), EP2(0.f), sigmadE2(0.f), k22(0.f), k33(0.f), k43(0.f), k44(0.f) {}
-
     float radLen;                                              // [cm]
     float rho;                                                 // [g/cm^3]
     float radLenInv, DLMax, EP2, sigmadE2, k22, k33, k43, k44; // precalculated values for MS and EnergyLoss correction
+  };
+
+  struct DebugStreamerVals {
+    int32_t retVal = -100;
+    float err2Y = -1e6f, err2Z = -1e6f;
   };
 
   GPUd() void SetMaterial(float radLen, float rho);
@@ -93,18 +101,18 @@ class GPUTPCGMPropagator
     mT0.Set(*mT);
   }
 
-  GPUd() int RotateToAlpha(float newAlpha);
+  GPUd() int32_t RotateToAlpha(float newAlpha);
 
-  GPUd() int PropagateToXAlpha(float posX, float posAlpha, bool inFlyDirection);
+  GPUd() int32_t PropagateToXAlpha(float posX, float posAlpha, bool inFlyDirection);
 
-  GPUd() int PropagateToXAlphaBz(float posX, float posAlpha, bool inFlyDirection);
+  GPUd() int32_t PropagateToXAlphaBz(float posX, float posAlpha, bool inFlyDirection);
 
-  GPUd() int Update(float posY, float posZ, int iRow, const GPUParam& param, short clusterState, char rejectChi2, gputpcgmmergertypes::InterpolationErrorHit* inter, bool refit);
-  GPUd() int Update(float posY, float posZ, short clusterState, bool rejectChi2, float err2Y, float err2Z);
-  GPUd() int InterpolateReject(float posY, float posZ, short clusterState, char rejectChi2, gputpcgmmergertypes::InterpolationErrorHit* inter, float err2Y, float err2Z);
-  GPUd() float PredictChi2(float posY, float posZ, int iRow, const GPUParam& param, short clusterState) const;
+  GPUd() int32_t Update(float posY, float posZ, int32_t iRow, const GPUParam& param, int16_t clusterState, int8_t rejectChi2, gputpcgmmergertypes::InterpolationErrorHit* inter, bool refit, int8_t sideC, float time, float avgInvCharge, float invCharge GPUCA_DEBUG_STREAMER_CHECK(, DebugStreamerVals* debugVals = nullptr));
+  GPUd() int32_t Update(float posY, float posZ, int16_t clusterState, bool rejectChi2, float err2Y, float err2Z, const GPUParam* param = nullptr);
+  GPUd() int32_t InterpolateReject(const GPUParam& param, float posY, float posZ, int16_t clusterState, int8_t rejectChi2, gputpcgmmergertypes::InterpolationErrorHit* inter, float err2Y, float err2Z);
+  GPUd() float PredictChi2(float posY, float posZ, int32_t iRow, const GPUParam& param, int16_t clusterState, int8_t sideC, float time, float avgCharge, float charge) const;
   GPUd() float PredictChi2(float posY, float posZ, float err2Y, float err2Z) const;
-  GPUd() int RejectCluster(float chiY, float chiZ, unsigned char clusterState)
+  GPUd() int32_t RejectCluster(float chiY, float chiZ, uint8_t clusterState)
   {
     if (chiY > 9.f || chiZ > 9.f) {
       return 2;
@@ -128,7 +136,8 @@ class GPUTPCGMPropagator
   /// Bx,By,Bz in local coordinates rotated to Alpha
   GPUd() void GetBxByBz(float Alpha, float X, float Y, float Z, float B[3]) const;
 
-  GPUd() void GetErr2(float& err2Y, float& err2Z, const GPUParam& param, float posZ, int iRow, short clusterState) const;
+  GPUd() void GetErr2(float& err2Y, float& err2Z, const GPUParam& param, float posZ, int32_t iRow, int16_t clusterState, int8_t sector, float time, float avgCharge, float charge) const;
+  GPUd() static void GetErr2(float& err2Y, float& err2Z, const GPUParam& param, float snp, float tgl, float posZ, float trackX, float trackY, int32_t iRow, int16_t clusterState, int8_t sector, float time, float avgCharge, float charge, bool seedingErrors);
 
   GPUd() float GetAlpha() const { return mAlpha; }
   GPUd() void SetAlpha(float v) { mAlpha = v; }
@@ -140,7 +149,7 @@ class GPUTPCGMPropagator
   GPUd() void ChangeDirection();
   GPUd() float GetMirroredYModel() const;
   GPUd() float GetMirroredYTrack() const;
-  GPUd() int GetPropagatedYZ(float x, float& projY, float& projZ);
+  GPUd() int32_t GetPropagatedYZ(float x, float& projY, float& projZ);
   GPUd() bool GetFitInProjections() const { return mFitInProjections; }
 
   GPUd() GPUTPCGMPhysicalTrackModel& Model()
@@ -148,11 +157,10 @@ class GPUTPCGMPropagator
     return mT0;
   }
   GPUd() void CalculateMaterialCorrection();
-  GPUd() void SetStatErrorCurCluster(GPUTPCGMMergedTrackHit* c) { mStatErrors.SetCurCluster(c); }
 
  private:
   GPUd() static float ApproximateBetheBloch(float beta2);
-  GPUd() int FollowLinearization(const GPUTPCGMPhysicalTrackModel& t0e, float Bz, float dLp, bool inFlyDirection);
+  GPUd() int32_t FollowLinearization(const GPUTPCGMPhysicalTrackModel& t0e, float Bz, float dLp, bool inFlyDirection);
 
   /// Bz in local coordinates rotated to cosAlpha, sinAlpha
   GPUd() float GetBzBase(float cosAlpha, float sinAlpha, float X, float Y, float Z) const;
@@ -168,22 +176,19 @@ class GPUTPCGMPropagator
   GPUd() float getGlobalY(float X, float Y) const;
 
   const GPUTPCGMPolynomialField* mField = nullptr;
-  FieldRegion mFieldRegion = TPC;
-
+  const o2::base::MatLayerCylSet* mMatLUT = nullptr;
   GPUTPCGMTrackParam* mT = nullptr;
   float mAlpha = 0.f;    // rotation angle of the track coordinate system
   float mCosAlpha = 1.f; // cos of the rotation angle
   float mSinAlpha = 0.f; // sin of the rotation angle
+  float mMaxSinPhi = GPUCA_MAX_SIN_PHI;
   GPUTPCGMPhysicalTrackModel mT0;
   MaterialCorrection mMaterial;
+  FieldRegion mFieldRegion = TPC;
   bool mSeedingErrors = 0;
   bool mFitInProjections = 1; // fit (Y,SinPhi,QPt) and (Z,DzDs) paramteres separatelly
   bool mPropagateBzOnly = 0;  // Use Bz only in propagation
   bool mToyMCEvents = 0;      // events are simulated with simple home-made simulation
-  float mMaxSinPhi = GPUCA_MAX_SIN_PHI;
-
-  GPUTPCGMOfflineStatisticalErrors mStatErrors;
-  const o2::base::MatLayerCylSet* mMatLUT = nullptr;
 };
 
 GPUdi() void GPUTPCGMPropagator::GetBxByBz(float Alpha, float X, float Y, float Z, float B[3]) const
@@ -265,7 +270,6 @@ GPUdi() float GPUTPCGMPropagator::getGlobalY(float X, float Y) const
   return getGlobalY(mCosAlpha, mSinAlpha, X, Y);
 }
 
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

@@ -11,11 +11,13 @@
 #ifndef ALICEO2_EMCAL_RAWREADERMEMORY_H
 #define ALICEO2_EMCAL_RAWREADERMEMORY_H
 
+#include <vector>
 #include <gsl/span>
 #include <Rtypes.h>
 
 #include "EMCALBase/RCUTrailer.h"
 #include "EMCALReconstruction/RawBuffer.h"
+#include "EMCALReconstruction/RawDecodingError.h"
 #include "EMCALReconstruction/RawPayload.h"
 #include "Headers/RAWDataHeader.h"
 #include "Headers/RDHAny.h"
@@ -36,6 +38,46 @@ namespace emcal
 class RawReaderMemory
 {
  public:
+  /// \class MinorError
+  /// \brief Minor (non-crashing) raw decoding errors
+  ///
+  /// Minor errors share the same codes as major raw decoding errors,
+  /// however are not crashing.
+  class MinorError
+  {
+   public:
+    /// \brief Dummy constructor
+    MinorError() = default;
+
+    /// \brief Main constructor
+    /// \param errortype Type of the error
+    /// \param feeID ID of the FEE equipment
+    MinorError(RawDecodingError::ErrorType_t errortype, int feeID) : mErrorType(errortype), mFEEID(feeID) {}
+
+    /// \brief Destructor
+    ~MinorError() = default;
+
+    /// \brief Set the type of the error
+    /// \param errortype Type of the error
+    void setErrorType(RawDecodingError::ErrorType_t errortype) { mErrorType = errortype; }
+
+    /// \brief Set the ID of the FEE equipment
+    /// \param feeID ID of the FEE
+    void setFEEID(int feeID) { mFEEID = feeID; }
+
+    /// \brief Get type of the error
+    /// \return Type of the error
+    RawDecodingError::ErrorType_t getErrorType() const { return mErrorType; }
+
+    /// \brief Get ID of the FEE
+    /// \return ID of the FEE
+    int getFEEID() const { return mFEEID; }
+
+   private:
+    RawDecodingError::ErrorType_t mErrorType; ///< Type of the error
+    int mFEEID;                               ///< ID of the FEC responsible for the ERROR
+  };
+
   /// \brief Constructor
   RawReaderMemory(const gsl::span<const char> rawmemory);
 
@@ -45,6 +87,15 @@ class RawReaderMemory
   /// \brief set new raw memory chunk
   /// \param rawmemory New raw memory chunk
   void setRawMemory(const gsl::span<const char> rawmemory);
+
+  /// \brief Set range for DDLs from SRU (for RCU trailer merging)
+  /// \param minDDL Min DDL of the SRU DDL range
+  /// \param maxDDL Max DDL of the SRU DDL range
+  void setRangeSRUDDLs(uint16_t minDDL, uint16_t maxDDL)
+  {
+    mMinSRUDDL = minDDL;
+    mMaxSRUDDL = maxDDL;
+  }
 
   /// \brief Read next payload from the stream
   ///
@@ -75,6 +126,10 @@ class RawReaderMemory
   /// \return Raw Payload of the data until the stop bit is received.
   const RawPayload& getPayload() const { return mRawPayload; }
 
+  /// \brief Get minor (non-crashing) raw decoding errors
+  /// \return Minor raw decoding errors
+  gsl::span<const MinorError> getMinorErrors() const { return mMinorErrors; }
+
   /// \brief Return size of the payload
   /// \return size of the payload
   int getPayloadSize() const { return mRawPayload.getPayloadSize(); }
@@ -93,6 +148,10 @@ class RawReaderMemory
   /// Rewind stream to the first entry
   void init();
 
+  /// \brief Decode raw header words
+  /// \param headerwords Headerwords
+  /// \return Decoded RDH
+  /// \throw RawDecodingError with code HEADER_DECODING if the payload does not correspond to an expected header
   o2::header::RDHAny decodeRawHeader(const void* headerwords);
 
  private:
@@ -102,10 +161,13 @@ class RawReaderMemory
   RawPayload mRawPayload;                 ///< Raw payload (can consist of multiple pages)
   RCUTrailer mCurrentTrailer;             ///< RCU trailer
   uint64_t mTrailerPayloadWords = 0;      ///< Payload words in common trailer
+  uint16_t mMinSRUDDL = 0;                ///< Min. range of SRU DDLs (for RCU trailer merging)
+  uint16_t mMaxSRUDDL = 39;               ///< Max. range of SRU DDls (for RCU trailer merging)
   int mCurrentPosition = 0;               ///< Current page in file
   int mCurrentFEE = -1;                   ///< Current FEE in the data stream
   bool mRawHeaderInitialized = false;     ///< RDH for current page initialized
   bool mPayloadInitialized = false;       ///< Payload for current page initialized
+  std::vector<MinorError> mMinorErrors;   ///< Minor raw decoding errors
 
   ClassDefNV(RawReaderMemory, 1);
 };

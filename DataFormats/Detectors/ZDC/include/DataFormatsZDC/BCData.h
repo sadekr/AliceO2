@@ -38,7 +38,9 @@ struct __attribute__((__packed__)) ModuleTriggerMap {
   unsigned Auto_1 : 1;
   unsigned Auto_2 : 1;
   unsigned Auto_3 : 1;
-  unsigned empty : 7;
+  unsigned AliceErr : 1;
+  unsigned AutoErr : 1;
+  unsigned empty : 5;
 };
 
 union ModuleTriggerMapData {
@@ -49,11 +51,13 @@ union ModuleTriggerMapData {
 
 struct BCData {
   /// we are going to refer to at most 26 channels, so 5 bits for the NChannels and 27 for the reference
-  o2::dataformats::RangeRefComp<5> ref;
+  /// 220803 we are transmitting 32 ch: need to increase to 6 bit
+  o2::dataformats::RangeRefComp<6> ref;
   o2::InteractionRecord ir;
   std::array<uint16_t, NModules> moduleTriggers{};
+  // N.B. channels and triggers have geographical addressing (0x1 << (NChPerModule * im + ic)
   uint32_t channels = 0;    // pattern of channels it refers to
-  uint32_t triggers = 0;    // pattern of triggered channels (not necessarily stored) in this BC
+  uint32_t triggers = 0;    // pattern of triggered channels (not necessarily stored) in this BC (i.e. with Hit bit on)
   uint8_t ext_triggers = 0; // pattern of ALICE triggers
 
   BCData() = default;
@@ -71,7 +75,7 @@ struct BCData {
   gsl::span<const ChannelData> getBunchChannelData(const gsl::span<const ChannelData> tfdata) const;
   void print(uint32_t triggerMask = 0, int diff = 0) const;
 
-  ClassDefNV(BCData, 2);
+  ClassDefNV(BCData, 3);
 };
 } // namespace zdc
 } // namespace o2

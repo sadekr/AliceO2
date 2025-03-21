@@ -15,7 +15,9 @@
 /// \author julian.myrcha@cern.ch
 
 #include "EventVisualisationDetectors/DataReaderJSON.h"
-#include "FairLogger.h"
+#include "EventVisualisationDataConverter/VisualisationEventSerializer.h"
+#include <fairlogger/Logger.h>
+#include <filesystem>
 
 namespace o2
 {
@@ -25,7 +27,8 @@ namespace event_visualisation
 VisualisationEvent DataReaderJSON::getEvent(std::string fileName)
 {
   VisualisationEvent vEvent;
-  vEvent.fromFile(fileName);
+  auto serializer = VisualisationEventSerializer::getInstance(std::filesystem::path(fileName).extension());
+  serializer->fromFile(vEvent, fileName);
   return vEvent;
 }
 

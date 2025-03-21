@@ -32,11 +32,12 @@ namespace itsmft
 class EntropyDecoderSpec : public o2::framework::Task
 {
  public:
-  EntropyDecoderSpec(o2::header::DataOrigin orig, bool getDigits = false);
+  EntropyDecoderSpec(o2::header::DataOrigin orig, int verbosity, bool getDigits = false);
   ~EntropyDecoderSpec() override = default;
   void init(o2::framework::InitContext& ic) final;
   void run(o2::framework::ProcessingContext& pc) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
   static auto getName(o2::header::DataOrigin orig) { return std::string{orig == o2::header::gDataOriginITS ? ITSDeviceName : MFTDeviceName}; }
 
@@ -47,18 +48,19 @@ class EntropyDecoderSpec : public o2::framework::Task
   static constexpr std::string_view MFTDeviceName = "mft-entropy-decoder";
   o2::header::DataOrigin mOrigin = o2::header::gDataOriginInvalid;
   o2::itsmft::CTFCoder mCTFCoder;
-  std::unique_ptr<NoiseMap> mNoiseMap;
+  const NoiseMap* mNoiseMap = nullptr;
   LookUp mPattIdConverter;
   bool mGetDigits{false};
   bool mMaskNoise{false};
+  bool mUseClusterDictionary{true};
+  std::string mDetPrefix{};
+
   std::string mCTFDictPath{};
-  std::string mClusDictPath{};
-  std::string mNoiseFilePath{};
   TStopwatch mTimer;
 };
 
 /// create a processor spec
-framework::DataProcessorSpec getEntropyDecoderSpec(o2::header::DataOrigin orig, bool getDigits = false);
+framework::DataProcessorSpec getEntropyDecoderSpec(o2::header::DataOrigin orig, int verbosity, bool getDigits, unsigned int sspec);
 
 } // namespace itsmft
 } // namespace o2

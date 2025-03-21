@@ -11,33 +11,50 @@
 #ifndef O2_FRAMEWORK_CONFIGPARAMREGISTRY_H_
 #define O2_FRAMEWORK_CONFIGPARAMREGISTRY_H_
 
-#include "Framework/ParamRetriever.h"
 #include "Framework/ConfigParamStore.h"
-#include "Framework/Traits.h"
-#include "Framework/VariantPropertyTreeHelpers.h"
-
 #include <boost/property_tree/ptree.hpp>
+
+#include <concepts>
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <cassert>
 
-namespace
-{
 template <typename T>
-constexpr auto isSimpleType()
-{
-  return std::is_same_v<T, int> ||
-         std::is_same_v<T, uint8_t> ||
-         std::is_same_v<T, uint16_t> ||
-         std::is_same_v<T, uint32_t> ||
-         std::is_same_v<T, uint64_t> ||
-         std::is_same_v<T, int64_t> ||
-         std::is_same_v<T, long> ||
-         std::is_same_v<T, float> ||
-         std::is_same_v<T, double> ||
-         std::is_same_v<T, bool>;
-}
-} // namespace
+concept SimpleConfigValueType = std::same_as<T, int> ||
+                                std::same_as<T, int8_t> ||
+                                std::same_as<T, int16_t> ||
+                                std::same_as<T, uint8_t> ||
+                                std::same_as<T, uint16_t> ||
+                                std::same_as<T, unsigned int> ||
+                                std::same_as<T, unsigned long> ||
+                                std::same_as<T, unsigned long long> ||
+                                std::same_as<T, long> ||
+                                std::same_as<T, long long> ||
+                                std::same_as<T, float> ||
+                                std::same_as<T, double> ||
+                                std::same_as<T, bool>;
+
+template <typename T>
+concept VectorConfigValueType = std::same_as<T, std::vector<int>> ||
+                                std::same_as<T, std::vector<float>> ||
+                                std::same_as<T, std::vector<double>> ||
+                                std::same_as<T, std::vector<std::string>> ||
+                                std::same_as<T, std::vector<bool>>;
+
+template <typename T>
+concept StringConfigValueType = std::same_as<T, std::string>;
+
+template <typename T>
+concept PtreeConfigValueType = std::same_as<T, boost::property_tree::ptree> || std::constructible_from<T, boost::property_tree::ptree>;
+
+template <typename T>
+concept Array2DLike = requires(T& t) { t.is_array_2d(); };
+
+template <typename T>
+concept LabeledArrayLike = requires(T& t) { t.is_labeled_array(); };
+
+template <typename T>
+concept ConfigValueType = SimpleConfigValueType<T> || StringConfigValueType<T> || VectorConfigValueType<T> || Array2DLike<T> || LabeledArrayLike<T>;
 
 namespace o2::framework
 {
@@ -52,57 +69,42 @@ class ConfigParamStore;
 class ConfigParamRegistry
 {
  public:
-  ConfigParamRegistry(std::unique_ptr<ConfigParamStore> store)
-    : mStore{std::move(store)}
-  {
-  }
+  ConfigParamRegistry(std::unique_ptr<ConfigParamStore> store);
 
-  bool isSet(const char* key) const
-  {
-    return mStore->store().count(key);
-  }
+  bool isSet(const char* key) const;
 
-  bool isDefault(const char* key) const
-  {
-    return mStore->store().count(key) > 0 && mStore->provenance(key) != "default";
-  }
+  bool hasOption(const char* key) const;
+
+  bool isDefault(const char* key) const;
+
+  [[nodiscard]] std::vector<ConfigParamSpec> const& specs() const;
+
+  template <ConfigValueType T>
+  T get(const char* key) const;
 
   template <typename T>
-  T get(const char* key) const
-  {
-    assert(mStore.get());
-    try {
-      if constexpr (isSimpleType<T>()) {
-        return mStore->store().get<T>(key);
-      } else if constexpr (std::is_same_v<T, std::string>) {
-        return mStore->store().get<std::string>(key);
-      } else if constexpr (std::is_same_v<T, std::string_view>) {
-        return std::string_view{mStore->store().get<std::string>(key)};
-      } else if constexpr (is_base_of_template<std::vector, T>::value) {
-        return vectorFromBranch<typename T::value_type>(mStore->store().get_child(key));
-      } else if constexpr (is_base_of_template<o2::framework::Array2D, T>::value) {
-        return array2DFromBranch<typename T::element_t>(mStore->store().get_child(key));
-      } else if constexpr (is_base_of_template<o2::framework::LabeledArray, T>::value) {
-        return labeledArrayFromBranch<typename T::element_t>(mStore->store().get_child(key));
-      } else if constexpr (std::is_same_v<T, boost::property_tree::ptree>) {
-        return mStore->store().get_child(key);
-      } else if constexpr (std::is_constructible_v<T, boost::property_tree::ptree>) {
-        return T{mStore->store().get_child(key)};
-      } else if constexpr (std::is_constructible_v<T, boost::property_tree::ptree> == false) {
-        static_assert(std::is_constructible_v<T, boost::property_tree::ptree> == false,
-                      "Not a basic type and no constructor from ptree provided");
-      }
-    } catch (std::exception& e) {
-      throw std::invalid_argument(std::string("missing option: ") + key + " (" + e.what() + ")");
-    } catch (...) {
-      throw std::invalid_argument(std::string("error parsing option: ") + key);
-    }
-    throw std::invalid_argument(std::string("bad type for option: ") + key);
-  }
+  T get(const char* key) const;
+
+  void override(const char* key, ConfigValueType auto const& val) const;
+
+  // Load extra parameters discovered while we process data
+  void loadExtra(std::vector<ConfigParamSpec>& extras);
 
  private:
   std::unique_ptr<ConfigParamStore> mStore;
 };
+
+template <typename T>
+T ConfigParamRegistry::get(const char* key) const
+{
+  try {
+    return T{mStore->store().get_child(key)};
+  } catch (std::exception& e) {
+    throw std::invalid_argument(std::string("missing option: ") + key + " (" + e.what() + ")");
+  } catch (...) {
+    throw std::invalid_argument(std::string("error parsing option: ") + key);
+  }
+}
 
 } // namespace o2::framework
 

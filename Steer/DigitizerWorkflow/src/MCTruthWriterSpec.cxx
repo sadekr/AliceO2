@@ -36,7 +36,7 @@ class MCTruthWriterTask : public o2::framework::Task
 
   void init(framework::InitContext& ic) override
   {
-    LOG(INFO) << "Initializing MCTruth consumer " << mID;
+    LOG(info) << "Initializing MCTruth consumer " << mID;
   }
 
   void run(framework::ProcessingContext& pc) override
@@ -44,11 +44,11 @@ class MCTruthWriterTask : public o2::framework::Task
     if (mFinished) {
       return;
     }
-    LOG(INFO) << "Running MCTruth consumer " << mID;
+    LOG(info) << "Running MCTruth consumer " << mID;
     TString labelfilename;
     if (mNew) {
       auto labels = pc.inputs().get<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(mID >= 0 ? "labels" : "labels2");
-      LOG(INFO) << "GOT " << labels.getNElements() << " labels";
+      LOG(info) << "GOT " << labels.getNElements() << " labels";
 
       sleep(1);
 
@@ -66,7 +66,7 @@ class MCTruthWriterTask : public o2::framework::Task
       sleep(1);
     } else {
       auto labels = pc.inputs().get<o2::dataformats::MCTruthContainer<o2::MCCompLabel>*>(mID >= 0 ? "labels" : "labels2");
-      LOG(INFO) << "GOT " << labels->getNElements() << " labels";
+      LOG(info) << "GOT " << labels->getNElements() << " labels";
 
       sleep(1);
 
@@ -84,7 +84,7 @@ class MCTruthWriterTask : public o2::framework::Task
     }
     if (mIO) {
       // this triggers the reader process
-      pc.outputs().snapshot({"TST", "TRIGGERREAD", 0, Lifetime::Timeframe}, labelfilename);
+      pc.outputs().snapshot({"TST", "TRIGGERREAD", 0}, labelfilename);
     }
 
     // we should be only called once; tell DPL that this process is ready to exit
@@ -97,7 +97,6 @@ class MCTruthWriterTask : public o2::framework::Task
   bool mNew = false;
   bool mIO = false;
   int mID = 0;
-  o2::dataformats::MCTruthContainer<long> mLabels; // labels which get filled
 };
 
 o2::framework::DataProcessorSpec getMCTruthWriterSpec(int id, bool doio, bool newmctruth)

@@ -10,6 +10,7 @@
 // or submit itself to any jurisdiction.
 
 #include <gsl/span>
+#include <cstring>
 
 #include "TRDWorkflow/TRDTrackletTransformerSpec.h"
 
@@ -17,6 +18,8 @@
 #include "DataFormatsTRD/Tracklet64.h"
 #include "DataFormatsTRD/CalibratedTracklet.h"
 #include "CommonDataFormat/IRFrame.h"
+#include "Framework/CCDBParamSpec.h"
+#include "Framework/ConfigParamRegistry.h"
 
 using namespace o2::framework;
 using namespace o2::globaltracking;
@@ -28,18 +31,23 @@ namespace trd
 
 void TRDTrackletTransformerSpec::init(o2::framework::InitContext& ic)
 {
-  LOG(INFO) << "Initializing tracklet transformer";
+  o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
+  if (ic.options().get<bool>("apply-xor")) {
+    mTransformer.setApplyXOR();
+  }
+  if (getenv("ALIEN_JDL_LPMPRODUCTIONTYPE") && std::strcmp(getenv("ALIEN_JDL_LPMPRODUCTIONTYPE"), "MC") == 0) {
+    // apply artificial pad shift in case non-ideal alignment is used to compensate for shift in current alignment from real data
+    mTransformer.setApplyShift(false);
+  }
 }
 
 void TRDTrackletTransformerSpec::run(o2::framework::ProcessingContext& pc)
 {
-  LOG(INFO) << "Running tracklet transformer";
+  LOG(debug) << "Running tracklet transformer";
 
   o2::globaltracking::RecoContainer inputData;
   inputData.collectData(pc, *mDataRequest);
-
-  //auto tracklets = inputData.getTRDTracklets();
-  //auto trigRecs = inputData.getTRDTriggerRecords();
+  updateTimeDependentParams(pc); // Make sure this is called after recoData.collectData, which may load some conditions
 
   auto tracklets = pc.inputs().get<gsl::span<Tracklet64>>("trdtracklets");
   auto trigRecs = pc.inputs().get<gsl::span<TriggerRecord>>("trdtriggerrec");
@@ -51,9 +59,12 @@ void TRDTrackletTransformerSpec::run(o2::framework::ProcessingContext& pc)
 
   if (mTrigRecFilterActive) {
     const auto irFrames = inputData.getIRFramesITS();
-    int lastMatchedIdx = 0; // ITS IR are sorted in time and do not overlap
+    size_t lastMatchedIdx = 0; // ITS IR are sorted in time and do not overlap
     for (const auto& irFrame : irFrames) {
-      for (int j = lastMatchedIdx; j < trigRecs.size(); ++j) {
+      if (!irFrame.info) { // skip IRFrames where ITS did not find any track
+        continue;
+      }
+      for (auto j = lastMatchedIdx; j < trigRecs.size(); ++j) {
         const auto& trigRec = trigRecs[j];
         if (trigRec.getBCData() >= irFrame.getMin()) {
           if (trigRec.getBCData() <= irFrame.getMax()) {
@@ -66,16 +77,16 @@ void TRDTrackletTransformerSpec::run(o2::framework::ProcessingContext& pc)
           }
         }
       }
-      LOGF(DEBUG, "ITS IR Frame start: %li, end: %li", irFrame.getMin().toLong(), irFrame.getMax().toLong());
+      LOGF(debug, "ITS IR Frame start: %li, end: %li", irFrame.getMin().toLong(), irFrame.getMax().toLong());
     }
     /*
     // for debugging: print TRD trigger times which are accepted and which are filtered out
     for (int j = 0; j < trigRecs.size(); ++j) {
       const auto& trigRec = trigRecs[j];
       if (!trigRecBitfield[j]) {
-        LOGF(DEBUG, "Could not find ITS info for TRD trigger %i: %li", j, trigRec.getBCData().toLong());
+        LOGF(debug, "Could not find ITS info for TRD trigger %i: %li", j, trigRec.getBCData().toLong());
       } else {
-        LOGF(DEBUG, "Found ITS info for TRD trigger %i: %li", j, trigRec.getBCData().toLong());
+        LOGF(debug, "Found ITS info for TRD trigger %i: %li", j, trigRec.getBCData().toLong());
       }
     }
     */
@@ -86,7 +97,7 @@ void TRDTrackletTransformerSpec::run(o2::framework::ProcessingContext& pc)
 
   if (mTrigRecFilterActive) {
     // skip tracklets from TRD triggers without ITS data
-    for (int iTrig = 0; iTrig < trigRecs.size(); ++iTrig) {
+    for (size_t iTrig = 0; iTrig < trigRecs.size(); ++iTrig) {
       if (!trigRecBitfield[iTrig]) {
         continue;
       } else {
@@ -99,16 +110,40 @@ void TRDTrackletTransformerSpec::run(o2::framework::ProcessingContext& pc)
     }
   } else {
     // transform all tracklets
-    for (int iTrklt = 0; iTrklt < tracklets.size(); ++iTrklt) {
+    for (size_t iTrklt = 0; iTrklt < tracklets.size(); ++iTrklt) {
       calibratedTracklets[iTrklt] = mTransformer.transformTracklet(tracklets[iTrklt]);
       ++nTrackletsTransformed;
     }
   }
 
-  LOGF(INFO, "Found %lu tracklets. Applied filter for ITS IR frames: %i. Transformed %i tracklets.", tracklets.size(), mTrigRecFilterActive, nTrackletsTransformed);
+  LOGF(info, "Found %lu tracklets in %lu trigger records. Applied filter for ITS IR frames: %i. Transformed %i tracklets.", tracklets.size(), trigRecs.size(), mTrigRecFilterActive, nTrackletsTransformed);
 
-  pc.outputs().snapshot(Output{"TRD", "CTRACKLETS", 0, Lifetime::Timeframe}, calibratedTracklets);
-  pc.outputs().snapshot(Output{"TRD", "TRIGRECMASK", 0, Lifetime::Timeframe}, trigRecBitfield);
+  pc.outputs().snapshot(Output{"TRD", "CTRACKLETS", 0}, calibratedTracklets);
+  pc.outputs().snapshot(Output{"TRD", "TRIGRECMASK", 0}, trigRecBitfield);
+}
+
+void TRDTrackletTransformerSpec::updateTimeDependentParams(ProcessingContext& pc)
+{
+  o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+  static bool initOnceDone = false;
+  if (!initOnceDone) { // this params need to be queried only once
+    initOnceDone = true;
+    // init-once stuff
+    mTransformer.init();
+  }
+  pc.inputs().get<o2::trd::CalVdriftExB*>("calvdexb"); // just to trigger the finaliseCCDB
+}
+
+void TRDTrackletTransformerSpec::finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+{
+  if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+    return;
+  }
+  if (matcher == ConcreteDataMatcher("TRD", "CALVDRIFTEXB", 0)) {
+    LOG(info) << "CalVdriftExB object has been updated";
+    mTransformer.setCalVdriftExB((const o2::trd::CalVdriftExB*)obj);
+    return;
+  }
 }
 
 o2::framework::DataProcessorSpec getTRDTrackletTransformerSpec(bool trigRecFilterActive)
@@ -120,7 +155,15 @@ o2::framework::DataProcessorSpec getTRDTrackletTransformerSpec(bool trigRecFilte
   auto& inputs = dataRequest->inputs;
   inputs.emplace_back("trdtracklets", "TRD", "TRACKLETS", 0, Lifetime::Timeframe);
   inputs.emplace_back("trdtriggerrec", "TRD", "TRKTRGRD", 0, Lifetime::Timeframe);
-
+  inputs.emplace_back("calvdexb", "TRD", "CALVDRIFTEXB", 0, Lifetime::Condition, ccdbParamSpec("TRD/Calib/CalVdriftExB"));
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                             // orbitResetTime
+                                                              false,                             // GRPECS=true
+                                                              false,                             // GRPLHCIF
+                                                              true,                              // GRPMagField
+                                                              false,                             // askMatLUT
+                                                              o2::base::GRPGeomRequest::Aligned, // geometry
+                                                              inputs,
+                                                              true);
   std::vector<OutputSpec> outputs;
   outputs.emplace_back("TRD", "CTRACKLETS", 0, Lifetime::Timeframe);
   outputs.emplace_back("TRD", "TRIGRECMASK", 0, Lifetime::Timeframe);
@@ -129,8 +172,9 @@ o2::framework::DataProcessorSpec getTRDTrackletTransformerSpec(bool trigRecFilte
     "TRDTRACKLETTRANSFORMER",
     inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<TRDTrackletTransformerSpec>(dataRequest, trigRecFilterActive)},
-    Options{}};
+    AlgorithmSpec{adaptFromTask<TRDTrackletTransformerSpec>(dataRequest, ggRequest, trigRecFilterActive)},
+    Options{
+      {"apply-xor", o2::framework::VariantType::Bool, false, {"flip the 8-th bit of slope and position (for processing CTFs from 2021 pilot beam)"}}}};
 }
 
 } //end namespace trd

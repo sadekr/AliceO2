@@ -13,13 +13,14 @@
 /// \brief Implementation of the ITSMFT Alpide simulated response parametrization
 
 #include "ITSMFTSimulation/AlpideSimResponse.h"
+#include "ITSMFTSimulation/DPLDigitizerParam.h"
 #include <TSystem.h>
 #include <cstdio>
 #include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 using namespace o2::itsmft;
 using namespace std;
@@ -29,11 +30,21 @@ ClassImp(o2::itsmft::AlpideRespSimMat);
 
 constexpr float micron2cm = 1e-4;
 
-void AlpideSimResponse::initData()
+void AlpideSimResponse::initData(int tableNumber, std::string dataPath, const bool quiet)
 {
   /*
    * read grid parameters and load data
    */
+  if (tableNumber == 0) // 0V back bias
+  {
+    const std::string newDataPath = dataPath + "Vbb-0.0V";
+    setDataPath(newDataPath);  // setting the new data path
+  } else if (tableNumber == 1) // -3V back bias
+  {
+    const std::string newDataPath = dataPath + "Vbb-3.0V";
+    setDataPath(newDataPath); // setting the new data path
+  }
+
   if (mData.size()) {
     cout << "Object already initialized" << endl;
     print();
@@ -53,7 +64,7 @@ void AlpideSimResponse::initData()
   // read X grid
   inpGrid.open(inpfname, std::ifstream::in);
   if (inpGrid.fail()) {
-    LOG(FATAL) << "Failed to open file " << inpfname;
+    LOG(fatal) << "Failed to open file " << inpfname;
   }
 
   while (inpGrid >> mStepInvCol && inpGrid.good()) {
@@ -61,7 +72,7 @@ void AlpideSimResponse::initData()
   }
 
   if (!mNBinCol || mStepInvCol < kTiny) {
-    LOG(FATAL) << "Failed to read X(col) binning from " << inpfname;
+    LOG(fatal) << "Failed to read X(col) binning from " << inpfname;
   }
   mMaxBinCol = mNBinCol - 1;
   mStepInvCol = mMaxBinCol / mStepInvCol; // inverse of the X bin width
@@ -71,14 +82,14 @@ void AlpideSimResponse::initData()
   inpfname = mDataPath + mGridRowName;
   inpGrid.open(inpfname, std::ifstream::in);
   if (inpGrid.fail()) {
-    LOG(FATAL) << "Failed to open file " << inpfname;
+    LOG(fatal) << "Failed to open file " << inpfname;
   }
 
   while (inpGrid >> mStepInvRow && inpGrid.good()) {
     mNBinRow++;
   }
   if (!mNBinRow || mStepInvRow < kTiny) {
-    LOG(FATAL) << "Failed to read Y(row) binning from " << inpfname;
+    LOG(fatal) << "Failed to read Y(row) binning from " << inpfname;
   }
   mMaxBinRow = mNBinRow - 1;
   mStepInvRow = mMaxBinRow / mStepInvRow; // inverse of the Row bin width
@@ -99,7 +110,7 @@ void AlpideSimResponse::initData()
       inpfname = composeDataName(ix, iy);
       inpGrid.open(inpfname, std::ifstream::in);
       if (inpGrid.fail()) {
-        LOG(FATAL) << "Failed to open file " << inpfname;
+        LOG(fatal) << "Failed to open file " << inpfname;
       }
       inpGrid >> nz;
       if (cnt == 0) {
@@ -107,7 +118,7 @@ void AlpideSimResponse::initData()
         dataSize = mNBinCol * mNBinRow * mNBinDpt;
         mData.reserve(dataSize); // reserve space for data
       } else if (nz != mNBinDpt) {
-        LOG(FATAL) << "Mismatch in Nz slices of bin X(col): " << ix << " Y(row): " << iy
+        LOG(fatal) << "Mismatch in Nz slices of bin X(col): " << ix << " Y(row): " << iy
                    << " wrt bin 0,0. File " << inpfname;
       }
 
@@ -124,11 +135,11 @@ void AlpideSimResponse::initData()
         inpGrid >> lost >> dead >> untrck >> nele >> gx >> gy >> gz;
 
         if (inpGrid.bad()) {
-          LOG(FATAL) << "Failed reading data for depth(Z) slice " << iz << " from "
+          LOG(fatal) << "Failed reading data for depth(Z) slice " << iz << " from "
                      << inpfname;
         }
         if (!nele) {
-          LOG(FATAL) << "Wrong normalization Nele=" << nele << "for  depth(Z) slice "
+          LOG(fatal) << "Wrong normalization Nele=" << nele << "for  depth(Z) slice "
                      << iz << " from " << inpfname;
         }
 
@@ -154,7 +165,7 @@ void AlpideSimResponse::initData()
 
   // final check
   if (dataSize != mData.size()) {
-    LOG(FATAL) << "Mismatch between expected " << dataSize << " and loaded " << mData.size()
+    LOG(fatal) << "Mismatch between expected " << dataSize << " and loaded " << mData.size()
                << " number of bins";
   }
 
@@ -169,7 +180,9 @@ void AlpideSimResponse::initData()
   mDptMin -= 0.5 / mStepInvDpt;
   mDptMax += 0.5 / mStepInvDpt;
   mDptShift = 0.5 * (mDptMax + mDptMin);
-  print();
+  if (!quiet) {
+    print();
+  }
 }
 
 //-----------------------------------------------------
@@ -208,7 +221,7 @@ bool AlpideSimResponse::getResponse(float vRow, float vCol, float vDepth, Alpide
    * vCol(sensor local Z, along columns) and vDepth (sensor local Y, i.e. depth)
    */
   if (!mNBinDpt) {
-    LOG(FATAL) << "response object is not initialized";
+    LOG(fatal) << "response object is not initialized";
   }
   bool flipCol = false, flipRow = true;
   if (vDepth < mDptMin || vDepth > mDptMax) {
@@ -232,7 +245,7 @@ bool AlpideSimResponse::getResponse(float vRow, float vCol, float vDepth, Alpide
   size_t bin = getDepthBin(vDepth) + mNBinDpt * (getRowBin(vRow) + mNBinRow * getColBin(vCol));
   if (bin >= mData.size()) {
     // this should not happen
-    LOG(FATAL) << "requested bin " << bin << "row/col/depth: " << getRowBin(vRow) << ":" << getColBin(vCol)
+    LOG(fatal) << "requested bin " << bin << "row/col/depth: " << getRowBin(vRow) << ":" << getColBin(vCol)
                << ":" << getDepthBin(vDepth) << ")"
                << ">= maxBin " << mData.size()
                << " for X(row)=" << vRow << " Z(col)=" << vCol << " Y(depth)=" << vDepth;
@@ -257,7 +270,7 @@ const AlpideRespSimMat* AlpideSimResponse::getResponse(float vRow, float vCol, f
    * vCol(sensor local Z, along columns) and vDepth (sensor local Y, i.e. depth)
    */
   if (!mNBinDpt) {
-    LOG(FATAL) << "response object is not initialized";
+    LOG(fatal) << "response object is not initialized";
   }
   if (vDepth < mDptMin || vDepth > mDptMax) {
     return nullptr;
@@ -284,7 +297,7 @@ const AlpideRespSimMat* AlpideSimResponse::getResponse(float vRow, float vCol, f
   size_t bin = getDepthBin(vDepth) + mNBinDpt * (getRowBin(vRow) + mNBinRow * getColBin(vCol));
   if (bin >= mData.size()) {
     // this should not happen
-    LOG(FATAL) << "requested bin " << bin << "row/col/depth: " << getRowBin(vRow) << ":" << getColBin(vCol)
+    LOG(fatal) << "requested bin " << bin << "row/col/depth: " << getRowBin(vRow) << ":" << getColBin(vCol)
                << ":" << getDepthBin(vDepth) << ")"
                << ">= maxBin " << mData.size()
                << " for X(row)=" << vRow << " Z(col)=" << vCol << " Y(depth)=" << vDepth;

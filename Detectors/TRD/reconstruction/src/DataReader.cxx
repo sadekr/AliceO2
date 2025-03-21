@@ -19,11 +19,13 @@
 #include "Framework/ConfigParamSpec.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "Framework/ConcreteDataMatcher.h"
-#include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
 #include "Framework/Logger.h"
+#include "Framework/CCDBParamSpec.h"
 #include "DetectorsRaw/RDHUtils.h"
 #include "TRDWorkflowIO/TRDTrackletWriterSpec.h"
 #include "TRDWorkflowIO/TRDDigitWriterSpec.h"
+#include "TRDWorkflowIO/TRDRawStatWriterSpec.h"
 #include "DataFormatsTRD/RawDataStats.h"
 
 // add workflow options, note that customization needs to be declared before
@@ -32,26 +34,19 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
 {
 
   std::vector<o2::framework::ConfigParamSpec> options{
-    {"trd-datareader-output-desc", VariantType::String, "TRDTLT", {"Output specs description string"}},
-    {"trd-datareader-verbose", VariantType::Bool, false, {"Enable verbose epn data reading"}},
-    {"trd-datareader-headerverbose", VariantType::Bool, false, {"Enable verbose header info"}},
-    {"trd-datareader-dataverbose", VariantType::Bool, false, {"Enable verbose data info"}},
-    {"trd-datareader-compresseddata", VariantType::Bool, false, {"The incoming data is compressed or not"}},
+    {"verbose", VariantType::Bool, false, {"Enable verbose epn data reading."}},
+    {"verboseerrors", VariantType::Bool, false, {"Enable verbose error text, instead of simply updating the spectra."}},
     {"ignore-dist-stf", VariantType::Bool, false, {"do not subscribe to FLP/DISTSUBTIMEFRAME/0 message (no lost TF recovery)"}},
-    {"trd-datareader-fixdigitcorruptdata", VariantType::Bool, false, {"Fix the erroneous data at the end of digits"}},
-    {"enable-timing", VariantType::Bool, false, {"enable the timing of tracklet, digit, timeframe, cru processing"}},
-    {"enable-stats", VariantType::Bool, false, {"enable the reader stats"}},
-    {"enable-root-output", VariantType::Bool, false, {"Write the data to file"}},
-    {"ignore-tracklethcheader", VariantType::Bool, false, {"Ignore the tracklethalf chamber header for cross referencing"}},
     {"halfchamberwords", VariantType::Int, 0, {"Fix half chamber for when it is version is 0.0 integer value of additional header words, ignored if version is not 0.0"}},
     {"halfchambermajor", VariantType::Int, 0, {"Fix half chamber for when it is version is 0.0 integer value of major version, ignored if version is not 0.0"}},
-    {"ignore-digithcheader", VariantType::Bool, false, {"Ignore the digithalf chamber header for cross referencing, take rdh/cru as authorative."}},
-    {"tracklethcheader", VariantType::Int, 0, {"Status of TrackletHalfChamberHeader 0 off always, 1 iff tracklet data, 2 on always"}},
-    {"histogramsfile", VariantType::String, "histos.root", {"Name of the histogram file, so one can run multiple per node"}},
-    {"trd-datareader-enablebyteswapdata", VariantType::Bool, false, {"byteswap the incoming data, raw data needs it and simulation does not."}}};
-
-  o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
+    {"fixforoldtrigger", VariantType::Bool, false, {"Fix for the old data not having a 2 stage trigger stored in the cru header."}},
+    {"onlycalibrationtrigger", VariantType::Bool, false, {"Only permit calibration triggers, used for debugging traclets and their digits, maybe other uses."}},
+    {"sortDigits", VariantType::Bool, false, {"Sort the digits in det/row/col (tracklets are always sorted)"}},
+    {"detailed-link-stats", VariantType::Bool, false, {"Collect link statistics per trigger"}},
+    {"tracklethcheader", VariantType::Int, 2, {"Status of TrackletHalfChamberHeader 0 off always, 1 iff tracklet data, 2 on always"}},
+    {"disable-stats", VariantType::Bool, false, {"Do not generate stat messages for qc"}},
+    {"disable-root-output", VariantType::Bool, false, {"Do not write the digits and tracklets to file"}},
+    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}}};
   std::swap(workflowOptions, options);
 }
 
@@ -62,19 +57,10 @@ using namespace o2::framework;
 WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
 {
 
-  //  auto config = cfgc.options().get<std::string>("trd-datareader-config");
+  o2::conf::ConfigurableParam::updateFromString(cfgc.options().get<std::string>("configKeyValues"));
 
-  //auto outputspec = cfgc.options().get<std::string>("trd-datareader-outputspec");
-  auto verbose = cfgc.options().get<bool>("trd-datareader-verbose");
-  auto byteswap = cfgc.options().get<bool>("trd-datareader-enablebyteswapdata");
-  auto compresseddata = cfgc.options().get<bool>("trd-datareader-compresseddata");
-  auto headerverbose = cfgc.options().get<bool>("trd-datareader-headerverbose");
-  auto dataverbose = cfgc.options().get<bool>("trd-datareader-dataverbose");
   auto askSTFDist = !cfgc.options().get<bool>("ignore-dist-stf");
-  auto fixdigitcorruption = cfgc.options().get<bool>("trd-datareader-fixdigitcorruptdata");
   auto tracklethcheader = cfgc.options().get<int>("tracklethcheader");
-  auto enabletimeinfo = cfgc.options().get<bool>("enable-timing");
-  auto enablestats = cfgc.options().get<bool>("enable-stats");
   auto halfchamberwords = cfgc.options().get<int>("halfchamberwords");
   auto halfchambermajor = cfgc.options().get<int>("halfchambermajor");
 
@@ -82,53 +68,49 @@ WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
   outputs.emplace_back("TRD", "TRACKLETS", 0, Lifetime::Timeframe);
   outputs.emplace_back("TRD", "DIGITS", 0, Lifetime::Timeframe);
   outputs.emplace_back("TRD", "TRKTRGRD", 0, Lifetime::Timeframe);
-  //outputs.emplace_back("TRD", "FLPSTAT", 0, Lifetime::Timeframe);
-  //
-  std::bitset<16> binaryoptions;
-  binaryoptions[o2::trd::TRDVerboseBit] = cfgc.options().get<bool>("trd-datareader-verbose");
-  binaryoptions[o2::trd::TRDHeaderVerboseBit] = cfgc.options().get<bool>("trd-datareader-headerverbose");
-  binaryoptions[o2::trd::TRDDataVerboseBit] = cfgc.options().get<bool>("trd-datareader-dataverbose");
-  binaryoptions[o2::trd::TRDCompressedDataBit] = cfgc.options().get<bool>("trd-datareader-compresseddata");
-  binaryoptions[o2::trd::TRDFixDigitCorruptionBit] = cfgc.options().get<bool>("trd-datareader-fixdigitcorruptdata");
-  binaryoptions[o2::trd::TRDEnableTimeInfoBit] = cfgc.options().get<bool>("enable-timing");
-  binaryoptions[o2::trd::TRDEnableStatsBit] = cfgc.options().get<bool>("enable-stats");
-  binaryoptions[o2::trd::TRDIgnoreDigitHCHeaderBit] = cfgc.options().get<bool>("ignore-digithcheader");
-  binaryoptions[o2::trd::TRDIgnoreTrackletHCHeaderBit] = cfgc.options().get<bool>("ignore-tracklethcheader");
-  binaryoptions[o2::trd::TRDEnableRootOutputBit] = cfgc.options().get<bool>("enable-root-output");
-  binaryoptions[o2::trd::TRDByteSwapBit] = cfgc.options().get<bool>("trd-datareader-enablebyteswapdata");
 
+  std::bitset<16> binaryoptions;
+  binaryoptions[o2::trd::TRDVerboseBit] = cfgc.options().get<bool>("verbose");
+  binaryoptions[o2::trd::TRDVerboseErrorsBit] = cfgc.options().get<bool>("verboseerrors");
+  binaryoptions[o2::trd::TRDIgnore2StageTrigger] = cfgc.options().get<bool>("fixforoldtrigger");
+  binaryoptions[o2::trd::TRDGenerateStats] = !cfgc.options().get<bool>("disable-stats");
+  binaryoptions[o2::trd::TRDOnlyCalibrationTriggerBit] = cfgc.options().get<bool>("onlycalibrationtrigger");
+  binaryoptions[o2::trd::TRDSortDigits] = cfgc.options().get<bool>("sortDigits");
+  binaryoptions[o2::trd::TRDLinkStats] = cfgc.options().get<bool>("detailed-link-stats");
   AlgorithmSpec algoSpec;
-  algoSpec = AlgorithmSpec{adaptFromTask<o2::trd::DataReaderTask>(tracklethcheader, halfchamberwords, halfchambermajor, cfgc.options().get<std::string>("histogramsfile"), binaryoptions)};
+  algoSpec = AlgorithmSpec{adaptFromTask<o2::trd::DataReaderTask>(tracklethcheader, halfchamberwords, halfchambermajor, binaryoptions)};
+  if (binaryoptions[o2::trd::TRDGenerateStats]) {
+    outputs.emplace_back("TRD", "RAWSTATS", 0, Lifetime::Timeframe);
+  }
+  if (binaryoptions[o2::trd::TRDLinkStats]) {
+    outputs.emplace_back("TRD", "LINKSTATS", 0, Lifetime::Timeframe);
+  }
 
   WorkflowSpec workflow;
 
-  std::string iconfig;
-  std::string inputDescription;
-  int idevice = 0;
-  auto orig = o2::header::gDataOriginTRD;
   auto inputs = o2::framework::select(std::string("x:TRD/RAWDATA").c_str());
-  for (auto& inp : inputs) {
-    // take care of case where our data is not in the time frame
-    inp.lifetime = Lifetime::Optional;
-  }
   if (askSTFDist) {
     inputs.emplace_back("stdDist", "FLP", "DISTSUBTIMEFRAME", 0, Lifetime::Timeframe);
   }
+  inputs.emplace_back("trigoffset", "CTP", "Trig_Offset", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("CTP/Config/TriggerOffsets"));
+  inputs.emplace_back("linkToHcid", "TRD", "LinkToHcid", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("TRD/Config/LinkToHCIDMapping"));
   workflow.emplace_back(DataProcessorSpec{
     std::string("trd-datareader"), // left as a string cast incase we append stuff to the string
     inputs,
     outputs,
     algoSpec,
     Options{{"log-max-errors", VariantType::Int, 20, {"maximum number of errors to log"}},
-            {"log-max-warnings", VariantType::Int, 20, {"maximum number of warnings to log"}}}});
+            {"log-max-warnings", VariantType::Int, 20, {"maximum number of warnings to log"}},
+            {"number-of-TBs", VariantType::Int, -1, {"set to >=0 in order to overwrite number of time bins"}},
+            {"every-nth-tf", VariantType::Int, 1, {"process only every n-th TF"}}}});
 
-  if (cfgc.options().get<bool>("enable-root-output")) {
+  if (!cfgc.options().get<bool>("disable-root-output")) {
     workflow.emplace_back(o2::trd::getTRDDigitWriterSpec(false, false));
     workflow.emplace_back(o2::trd::getTRDTrackletWriterSpec(false));
+    if (binaryoptions[o2::trd::TRDGenerateStats]) {
+      workflow.emplace_back(o2::trd::getTRDRawStatWriterSpec(binaryoptions[o2::trd::TRDLinkStats]));
+    }
   }
-
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
-  o2::raw::HBFUtilsInitializer hbfIni(cfgc, workflow);
 
   return workflow;
 }

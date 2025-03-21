@@ -23,6 +23,9 @@
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/Monitoring.h"
 #include "Framework/DataRefUtils.h"
+#include "Framework/FairMQDeviceProxy.h"
+#include "Framework/DataProcessingHelpers.h"
+#include "Framework/DataRelayer.h"
 
 #include <Configuration/ConfigurationInterface.h>
 #include <Configuration/ConfigurationFactory.h>
@@ -35,7 +38,7 @@ namespace o2::utilities
 {
 
 Dispatcher::Dispatcher(std::string name, const std::string reconfigurationSource)
-  : mName(name), mReconfigurationSource(reconfigurationSource)
+  : mName(std::move(name)), mReconfigurationSource(reconfigurationSource)
 {
 }
 
@@ -43,7 +46,7 @@ Dispatcher::~Dispatcher() = default;
 
 void Dispatcher::init(InitContext& ctx)
 {
-  LOG(DEBUG) << "Reading Data Sampling Policies...";
+  LOG(debug) << "Reading Data Sampling Policies...";
   boost::property_tree::ptree policiesTree;
 
   if (mReconfigurationSource.empty() == false) {
@@ -62,15 +65,15 @@ void Dispatcher::init(InitContext& ctx)
     try {
       mPolicies.emplace_back(std::make_shared<DataSamplingPolicy>(DataSamplingPolicy::fromConfiguration(policyConfig.second)));
     } catch (std::exception& ex) {
-      LOG(WARN) << "Could not load the Data Sampling Policy '"
+      LOG(warn) << "Could not load the Data Sampling Policy '"
                 << policyConfig.second.get_optional<std::string>("id").value_or("") << "', because: " << ex.what();
     } catch (...) {
-      LOG(WARN) << "Could not load the Data Sampling Policy '"
+      LOG(warn) << "Could not load the Data Sampling Policy '"
                 << policyConfig.second.get_optional<std::string>("id").value_or("") << "'";
     }
   }
 
-  auto spec = ctx.services().get<const DeviceSpec>();
+  auto& spec = ctx.services().get<const DeviceSpec>();
   mDeviceID.runtimeInit(spec.id.substr(0, DataSamplingHeader::deviceIDTypeSize).c_str());
 }
 
@@ -111,7 +114,6 @@ void Dispatcher::run(ProcessingContext& ctx)
               routeAsConcreteDataType.origin,
               routeAsConcreteDataType.description,
               partInputHeader->subSpecification,
-              part.spec->lifetime,
               std::move(headerStack)};
             send(ctx.outputs(), part, output);
           }
@@ -123,6 +125,9 @@ void Dispatcher::run(ProcessingContext& ctx)
   if (ctx.inputs().isValid("timer-stats")) {
     reportStats(ctx.services().get<Monitoring>());
   }
+  auto& relayer = ctx.services().get<DataRelayer>();
+  auto timeslice = relayer.getOldestPossibleOutput().timeslice.value;
+  DataProcessingHelpers::broadcastOldestPossibleTimeslice(ctx.services(), timeslice);
 }
 
 void Dispatcher::reportStats(Monitoring& monitoring) const
@@ -135,8 +140,8 @@ void Dispatcher::reportStats(Monitoring& monitoring) const
     dispatcherTotalAcceptedMessages += policy->getTotalAcceptedMessages();
   }
 
-  monitoring.send(Metric{dispatcherTotalEvaluatedMessages, "Dispatcher_messages_evaluated"}.addTag(tags::Key::Subsystem, tags::Value::DataSampling));
-  monitoring.send(Metric{dispatcherTotalAcceptedMessages, "Dispatcher_messages_passed"}.addTag(tags::Key::Subsystem, tags::Value::DataSampling));
+  monitoring.send(Metric{dispatcherTotalEvaluatedMessages, "Dispatcher_messages_evaluated", Verbosity::Prod}.addTag(tags::Key::Subsystem, tags::Value::DataSampling));
+  monitoring.send(Metric{dispatcherTotalAcceptedMessages, "Dispatcher_messages_passed", Verbosity::Prod}.addTag(tags::Key::Subsystem, tags::Value::DataSampling));
 }
 
 DataSamplingHeader Dispatcher::prepareDataSamplingHeader(const DataSamplingPolicy& policy)
@@ -168,7 +173,7 @@ header::Stack Dispatcher::extractAdditionalHeaders(const char* inputHeaderStack)
 void Dispatcher::send(DataAllocator& dataAllocator, const DataRef& inputData, const Output& output) const
 {
   const auto* inputHeader = DataRefUtils::getHeader<header::DataHeader*>(inputData);
-  dataAllocator.snapshot(output, inputData.payload, inputHeader->payloadSize, inputHeader->payloadSerializationMethod);
+  dataAllocator.snapshot(output, inputData.payload, DataRefUtils::getPayloadSize(inputData), inputHeader->payloadSerializationMethod);
 }
 
 void Dispatcher::registerPolicy(std::unique_ptr<DataSamplingPolicy>&& policy)

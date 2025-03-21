@@ -55,6 +55,7 @@ struct MGParameters {                                             ///< Parameter
   inline static int nMGCycle = 200;                               ///< number of multi grid cycle (V type)
   inline static int maxLoop = 7;                                  ///< the number of tree-deep of multi grid
   inline static int gamma = 1;                                    ///< number of iteration at coarsest level !TODO SET TO REASONABLE VALUE!
+  inline static bool normalizeGridToOneSector = false;            ///< the grid in phi direction is squashed from 2 Pi to (2 Pi / SECTORSPERSIDE). This can used to get the potential for phi symmetric sc density or boundary potentials
 };
 
 template <typename DataT = double>
@@ -71,6 +72,15 @@ struct TPCParameters {
 };
 
 template <typename DataT = double>
+struct GEMFrameParameters {
+  static constexpr DataT WIDTHFRAME{1};                             ///< width of the frame 1 cm
+  static constexpr DataT LENGTHFRAMEIROCBOTTOM{29.195};             ///< length of the GEM frame on the bottom side of the IROC
+  static constexpr DataT LENGTHFRAMEOROC3TOP{87.048};               ///< length of the GEM frame on the top side of the OROC3
+  static constexpr DataT POSBOTTOM[]{83.65, 133.5, 169.75, 207.85}; ///< local x position of the GEM frame on the bottom side per stack
+  static constexpr DataT POSTOP[]{133.3, 169.75, 207.85, 247.7};    ///< local x position of the GEM frame on the top side per stack
+};
+
+template <typename DataT = double>
 struct GridProperties {
   static constexpr DataT RMIN{TPCParameters<DataT>::IFCRADIUS};                  ///< min radius
   static constexpr DataT ZMIN{0};                                                ///< min z coordinate
@@ -78,6 +88,10 @@ struct GridProperties {
   static constexpr DataT RMAX{TPCParameters<DataT>::OFCRADIUS};                  ///< max radius
   static constexpr DataT ZMAX{TPCParameters<DataT>::TPCZ0};                      ///< max z coordinate
   static constexpr DataT PHIMAX{static_cast<DataT>(o2::constants::math::TwoPI)}; ///< max phi coordinate
+
+  static constexpr DataT getRMin() { return RMIN; }
+  static constexpr DataT getZMin() { return ZMIN; }
+  static constexpr DataT getPhiMin() { return PHIMIN; }
 
   ///< \return returns grid spacing in r direction
   static constexpr DataT getGridSpacingR(const unsigned int nR) { return (RMAX - RMIN) / (nR - 1); }

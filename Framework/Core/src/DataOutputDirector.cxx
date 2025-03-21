@@ -9,15 +9,24 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 #include "Framework/DataOutputDirector.h"
+#include "Framework/DataSpecUtils.h"
+#include "Headers/DataHeaderHelpers.h"
+#include "Framework/DataDescriptorQueryBuilder.h"
 #include "Framework/Logger.h"
+
+#include <filesystem>
+#include <regex>
 
 #include "rapidjson/document.h"
 #include "rapidjson/prettywriter.h"
 #include "rapidjson/filereadstream.h"
 
-namespace o2
-{
-namespace framework
+#include "TMap.h"
+#include "TObjString.h"
+
+namespace fs = std::filesystem;
+
+namespace o2::framework
 {
 using namespace rapidjson;
 
@@ -28,7 +37,7 @@ DataOutputDescriptor::DataOutputDescriptor(std::string inString)
   // the 1st part is used to create a DataDescriptorMatcher
   // the other parts are used to fill treename, colnames, and filename
   // remove all spaces
-  auto cleanString = remove_ws(inString);
+  inString.erase(std::remove_if(inString.begin(), inString.end(), isspace), inString.end());
 
   // reset
   treename = "";
@@ -38,8 +47,8 @@ DataOutputDescriptor::DataOutputDescriptor(std::string inString)
   // analyze the  parts of the input string
   static const std::regex delim1(":");
   std::sregex_token_iterator end;
-  std::sregex_token_iterator iter1(cleanString.begin(),
-                                   cleanString.end(),
+  std::sregex_token_iterator iter1(inString.begin(),
+                                   inString.end(),
                                    delim1,
                                    -1);
 
@@ -55,12 +64,15 @@ DataOutputDescriptor::DataOutputDescriptor(std::string inString)
   if (!std::string(tableItems[2]).empty()) {
     tablename = tableItems[2];
   }
+  if (!std::string(tableItems[3]).empty() && std::atoi(std::string(tableItems[3]).c_str()) > 0) {
+    version = std::string{"_"}.append(std::string(3 - std::string(tableItems[3]).length(), '0')).append(std::string(tableItems[3]));
+  }
 
   // get the tree name
   // default tree name is the O2 + table name (lower case)
   treename = tablename;
   std::transform(treename.begin(), treename.end(), treename.begin(), [](unsigned char c) { return std::tolower(c); });
-  treename = std::string("O2") + treename;
+  treename = std::string("O2") + treename + version;
   ++iter1;
   if (iter1 == end) {
     return;
@@ -106,29 +118,18 @@ std::string DataOutputDescriptor::getFilenameBase()
 
 void DataOutputDescriptor::printOut()
 {
-  LOGP(INFO, "DataOutputDescriptor");
-  LOGP(INFO, "  Table name     : {}", tablename);
-  LOGP(INFO, "  File name base : {}", getFilenameBase());
-  LOGP(INFO, "  Tree name      : {}", treename);
+  LOGP(info, "DataOutputDescriptor");
+  LOGP(info, "  Table name     : {}", tablename);
+  LOGP(info, "  File name base : {}", getFilenameBase());
+  LOGP(info, "  Tree name      : {}", treename);
   if (colnames.empty()) {
-    LOGP(INFO, "  Columns        : \"all\"");
+    LOGP(info, "  Columns        : \"all\"");
   } else {
-    LOGP(INFO, "  Columns        : {}", colnames.size());
+    LOGP(info, "  Columns        : {}", colnames.size());
   }
   for (auto cn : colnames) {
-    LOGP(INFO, "    {}", cn);
+    LOGP(info, "    {}", cn);
   }
-}
-
-std::string DataOutputDescriptor::remove_ws(const std::string& s)
-{
-  std::string s_wns;
-  for (auto c : s) {
-    if (!std::isspace(c)) {
-      s_wns += c;
-    }
-  }
-  return s_wns;
 }
 
 DataOutputDirector::DataOutputDirector()
@@ -144,6 +145,7 @@ void DataOutputDirector::reset()
   closeDataFiles();
   mfilePtrs.clear();
   mfilenameBase = std::string("");
+  mfileCounter = 1;
 };
 
 void DataOutputDirector::readString(std::string const& keepString)
@@ -176,7 +178,7 @@ void DataOutputDirector::readString(std::string const& keepString)
   auto it = std::unique(mtreeFilenames.begin(), mtreeFilenames.end());
   if (it != mtreeFilenames.end()) {
     printOut();
-    LOGP(FATAL, "Dublicate tree names in a file!");
+    LOGP(fatal, "Dublicate tree names in a file!");
   }
 
   // make unique/sorted list of filenameBases
@@ -187,6 +189,7 @@ void DataOutputDirector::readString(std::string const& keepString)
   // prepare list mfilePtrs of TFile
   for (auto fn : mfilenameBases) {
     mfilePtrs.emplace_back(new TFile());
+    mParentMaps.emplace_back(new TMap());
   }
 }
 
@@ -212,12 +215,12 @@ void DataOutputDirector::readSpecs(std::vector<InputSpec> inputs)
   }
 }
 
-std::tuple<std::string, std::string, int> DataOutputDirector::readJson(std::string const& fnjson)
+std::tuple<std::string, std::string, std::string, float, int> DataOutputDirector::readJson(std::string const& fnjson)
 {
   // open the file
   FILE* fjson = fopen(fnjson.c_str(), "r");
   if (!fjson) {
-    LOGP(INFO, "Could not open JSON file \"{}\"", fnjson);
+    LOGP(info, "Could not open JSON file \"{}\"", fnjson);
     return memptyanswer;
   }
 
@@ -228,38 +231,40 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJson(std::stri
   // parse the json file
   Document jsonDocument;
   jsonDocument.ParseStream(jsonStream);
-  auto [dfn, fmode, ntfm] = readJsonDocument(&jsonDocument);
+  auto [rdn, dfn, fmode, mfs, ntfm] = readJsonDocument(&jsonDocument);
 
   // clean up
   fclose(fjson);
 
-  return std::make_tuple(dfn, fmode, ntfm);
+  return std::make_tuple(rdn, dfn, fmode, mfs, ntfm);
 }
 
-std::tuple<std::string, std::string, int> DataOutputDirector::readJsonString(std::string const& jsonString)
+std::tuple<std::string, std::string, std::string, float, int> DataOutputDirector::readJsonString(std::string const& jsonString)
 {
   // parse the json string
   Document jsonDocument;
   jsonDocument.Parse(jsonString.c_str());
-  auto [dfn, fmode, ntfm] = readJsonDocument(&jsonDocument);
+  auto [rdn, dfn, fmode, mfs, ntfm] = readJsonDocument(&jsonDocument);
 
-  return std::make_tuple(dfn, fmode, ntfm);
+  return std::make_tuple(rdn, dfn, fmode, mfs, ntfm);
 }
 
-std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(Document* jsonDocument)
+std::tuple<std::string, std::string, std::string, float, int> DataOutputDirector::readJsonDocument(Document* jsonDocument)
 {
   std::string smc(":");
   std::string slh("/");
   const char* itemName;
 
   // initialisations
+  std::string resdir(".");
   std::string dfn("");
   std::string fmode("");
+  float maxfs = -1.;
   int ntfm = -1;
 
   // is it a proper json document?
   if (jsonDocument->HasParseError()) {
-    LOGP(ERROR, "Check the JSON document! There is a problem with the format!");
+    LOGP(error, "Check the JSON document! There is a problem with the format!");
     return memptyanswer;
   }
 
@@ -267,7 +272,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
   itemName = "OutputDirector";
   const Value& dodirItem = (*jsonDocument)[itemName];
   if (!dodirItem.IsObject()) {
-    LOGP(INFO, "No \"{}\" object found in the JSON document!", itemName);
+    LOGP(info, "No \"{}\" object found in the JSON document!", itemName);
     return memptyanswer;
   }
 
@@ -277,7 +282,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
     if (dodirItem[itemName].IsBool()) {
       mdebugmode = dodirItem[itemName].GetBool();
     } else {
-      LOGP(ERROR, "Check the JSON document! Item \"{}\" must be a boolean!", itemName);
+      LOGP(error, "Check the JSON document! Item \"{}\" must be a boolean!", itemName);
       return memptyanswer;
     }
   } else {
@@ -289,7 +294,17 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
     buffer.Clear();
     Writer<rapidjson::StringBuffer> writer(buffer);
     dodirItem.Accept(writer);
-    LOGP(INFO, "OutputDirector object: {}", std::string(buffer.GetString()));
+  }
+
+  itemName = "resdir";
+  if (dodirItem.HasMember(itemName)) {
+    if (dodirItem[itemName].IsString()) {
+      resdir = dodirItem[itemName].GetString();
+      setResultDir(resdir);
+    } else {
+      LOGP(error, "Check the JSON document! Item \"{}\" must be a string!", itemName);
+      return memptyanswer;
+    }
   }
 
   itemName = "resfile";
@@ -298,7 +313,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
       dfn = dodirItem[itemName].GetString();
       setFilenameBase(dfn);
     } else {
-      LOGP(ERROR, "Check the JSON document! Item \"{}\" must be a string!", itemName);
+      LOGP(error, "Check the JSON document! Item \"{}\" must be a string!", itemName);
       return memptyanswer;
     }
   }
@@ -309,7 +324,18 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
       fmode = dodirItem[itemName].GetString();
       setFileMode(fmode);
     } else {
-      LOGP(ERROR, "Check the JSON document! Item \"{}\" must be a string!", itemName);
+      LOGP(error, "Check the JSON document! Item \"{}\" must be a string!", itemName);
+      return memptyanswer;
+    }
+  }
+
+  itemName = "maxfilesize";
+  if (dodirItem.HasMember(itemName)) {
+    if (dodirItem[itemName].IsNumber()) {
+      maxfs = dodirItem[itemName].GetFloat();
+      setMaximumFileSize(maxfs);
+    } else {
+      LOGP(error, "Check the JSON document! Item \"{}\" must be a number!", itemName);
       return memptyanswer;
     }
   }
@@ -320,7 +346,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
       ntfm = dodirItem[itemName].GetInt();
       setNumberTimeFramesToMerge(ntfm);
     } else {
-      LOGP(ERROR, "Check the JSON document! Item \"{}\" must be a number!", itemName);
+      LOGP(error, "Check the JSON document! Item \"{}\" must be a number!", itemName);
       return memptyanswer;
     }
   }
@@ -328,14 +354,14 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
   itemName = "OutputDescriptors";
   if (dodirItem.HasMember(itemName)) {
     if (!dodirItem[itemName].IsArray()) {
-      LOGP(ERROR, "Check the JSON document! Item \"{}\" must be an array!", itemName);
+      LOGP(error, "Check the JSON document! Item \"{}\" must be an array!", itemName);
       return memptyanswer;
     }
 
     // loop over DataOutputDescriptors
     for (auto& dodescItem : dodirItem[itemName].GetArray()) {
       if (!dodescItem.IsObject()) {
-        LOGP(ERROR, "Check the JSON document! \"{}\" must be objects!", itemName);
+        LOGP(error, "Check the JSON document! \"{}\" must be objects!", itemName);
         return memptyanswer;
       }
 
@@ -345,7 +371,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
         if (dodescItem[itemName].IsString()) {
           dodString += dodescItem[itemName].GetString();
         } else {
-          LOGP(ERROR, "Check the JSON document! \"{}\" must be a string!", itemName);
+          LOGP(error, "Check the JSON document! \"{}\" must be a string!", itemName);
           return memptyanswer;
         }
       }
@@ -355,7 +381,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
         if (dodescItem[itemName].IsString()) {
           dodString += dodescItem[itemName].GetString();
         } else {
-          LOGP(ERROR, "Check the JSON document! \"{}\" must be a string!", itemName);
+          LOGP(error, "Check the JSON document! \"{}\" must be a string!", itemName);
           return memptyanswer;
         }
       }
@@ -368,7 +394,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
             dodString += (c == columnNames[0]) ? c.GetString() : slh + c.GetString();
           }
         } else {
-          LOGP(ERROR, "Check the JSON document! \"{}\" must be an array!", itemName);
+          LOGP(error, "Check the JSON document! \"{}\" must be an array!", itemName);
           return memptyanswer;
         }
       }
@@ -378,7 +404,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
         if (dodescItem[itemName].IsString()) {
           dodString += dodescItem[itemName].GetString();
         } else {
-          LOGP(ERROR, "Check the JSON document! \"{}\" must be a string!", itemName);
+          LOGP(error, "Check the JSON document! \"{}\" must be a string!", itemName);
           return memptyanswer;
         }
       }
@@ -393,7 +419,7 @@ std::tuple<std::string, std::string, int> DataOutputDirector::readJsonDocument(D
     printOut();
   }
 
-  return std::make_tuple(dfn, fmode, ntfm);
+  return std::make_tuple(resdir, dfn, fmode, maxfs, ntfm);
 }
 
 std::vector<DataOutputDescriptor*> DataOutputDirector::getDataOutputDescriptors(header::DataHeader dh)
@@ -429,7 +455,7 @@ std::vector<DataOutputDescriptor*> DataOutputDirector::getDataOutputDescriptors(
   return result;
 }
 
-FileAndFolder DataOutputDirector::getFileFolder(DataOutputDescriptor* dodesc, uint64_t folderNumber)
+FileAndFolder DataOutputDirector::getFileFolder(DataOutputDescriptor* dodesc, uint64_t folderNumber, std::string parentFileName, int compression)
 {
   // initialisation
   FileAndFolder fileAndFolder;
@@ -438,17 +464,43 @@ FileAndFolder DataOutputDirector::getFileFolder(DataOutputDescriptor* dodesc, ui
   auto it = std::find(mfilenameBases.begin(), mfilenameBases.end(), dodesc->getFilenameBase());
   if (it != mfilenameBases.end()) {
     int ind = std::distance(mfilenameBases.begin(), it);
+
+    // open new output file
     if (!mfilePtrs[ind]->IsOpen()) {
-      auto fn = mfilenameBases[ind] + ".root";
-      mfilePtrs[ind] = new TFile(fn.c_str(), mfileMode.c_str(), "", 501);
+      // output directory
+      auto resdirname = mresultDirectory;
+      // is the maximum-file-size check enabled?
+      if (mmaxfilesize > 0.) {
+        // subdirectory ./xxx
+        char chcnt[4];
+        std::snprintf(chcnt, sizeof(chcnt), "%03d", mfileCounter);
+        resdirname += "/" + std::string(chcnt);
+      }
+      auto resdir = fs::path{resdirname.c_str()};
+
+      if (!fs::is_directory(resdir)) {
+        if (!fs::create_directories(resdir)) {
+          LOGF(fatal, "Could not create output directory %s", resdirname.c_str());
+        }
+      }
+
+      // complete file name
+      auto fn = resdirname + "/" + mfilenameBases[ind] + ".root";
+      delete mfilePtrs[ind];
+      mParentMaps[ind]->Clear();
+      mfilePtrs[ind] = TFile::Open(fn.c_str(), mfileMode.c_str(), "", compression);
     }
     fileAndFolder.file = mfilePtrs[ind];
 
     // check if folder DF_* exists
-    fileAndFolder.folderName = "DF_" + std::to_string(folderNumber) + "/";
+    fileAndFolder.folderName = "DF_" + std::to_string(folderNumber);
     auto key = fileAndFolder.file->GetKey(fileAndFolder.folderName.c_str());
     if (!key) {
       fileAndFolder.file->mkdir(fileAndFolder.folderName.c_str());
+      // TODO not clear why we get a " " in case we sent empty over DPL, put the limit to 1 for now
+      if (parentFileName.length() > 1) {
+        mParentMaps[ind]->Add(new TObjString(fileAndFolder.folderName.c_str()), new TObjString(parentFileName.c_str()));
+      }
     }
     fileAndFolder.file->cd(fileAndFolder.folderName.c_str());
   }
@@ -456,10 +508,53 @@ FileAndFolder DataOutputDirector::getFileFolder(DataOutputDescriptor* dodesc, ui
   return fileAndFolder;
 }
 
+bool DataOutputDirector::checkFileSizes()
+{
+  // is the maximum-file-size check enabled?
+  if (mmaxfilesize <= 0.) {
+    return true;
+  }
+
+  // current result directory
+  char chcnt[4];
+  std::snprintf(chcnt, sizeof(chcnt), "%03d", mfileCounter);
+  std::string strcnt{chcnt};
+  auto resdirname = mresultDirectory + "/" + strcnt;
+
+  // loop over all files
+  // if one file is large, then all files need to be closed
+  for (auto i = 0U; i < mfilenameBases.size(); i++) {
+    if (!mfilePtrs[i]) {
+      continue;
+    }
+    // size of fn
+    auto fn = resdirname + "/" + mfilenameBases[i] + ".root";
+    auto resfile = fs::path{fn.c_str()};
+    if (!fs::exists(resfile)) {
+      continue;
+    }
+    auto fsize = (float)fs::file_size(resfile) / 1.E6; // MBytes
+    LOGF(debug, "File %s: %f MBytes", fn.c_str(), fsize);
+    if (fsize >= mmaxfilesize) {
+      closeDataFiles();
+      // increment the subdirectory counter
+      mfileCounter++;
+      return false;
+    }
+  }
+
+  return true;
+}
+
 void DataOutputDirector::closeDataFiles()
 {
-  for (auto filePtr : mfilePtrs) {
+  for (auto i = 0U; i < mfilePtrs.size(); i++) {
+    auto filePtr = mfilePtrs[i];
     if (filePtr) {
+      if (filePtr->IsOpen() && mParentMaps[i]->GetEntries() > 0) {
+        filePtr->cd("/");
+        filePtr->WriteObject(mParentMaps[i], "parentFiles");
+      }
       filePtr->Close();
     }
   }
@@ -467,19 +562,26 @@ void DataOutputDirector::closeDataFiles()
 
 void DataOutputDirector::printOut()
 {
-  LOGP(INFO, "DataOutputDirector");
-  LOGP(INFO, "  Default file name    : {}", mfilenameBase);
-  LOGP(INFO, "  Number of files      : {}", mfilenameBases.size());
+  LOGP(info, "DataOutputDirector");
+  LOGP(info, "  Output directory     : {}", mresultDirectory);
+  LOGP(info, "  Default file name    : {}", mfilenameBase);
+  LOGP(info, "  Maximum file size    : {} megabytes", mmaxfilesize);
+  LOGP(info, "  Number of files      : {}", mfilenameBases.size());
 
-  LOGP(INFO, "  DataOutputDescriptors: {}", mDataOutputDescriptors.size());
+  LOGP(info, "  DataOutputDescriptors: {}", mDataOutputDescriptors.size());
   for (auto const& ds : mDataOutputDescriptors) {
     ds->printOut();
   }
 
-  LOGP(INFO, "  File name bases      :");
+  LOGP(info, "  File name bases      :");
   for (auto const& fb : mfilenameBases) {
-    LOGP(INFO, fb);
+    LOGP(info, "{}", fb);
   }
+}
+
+void DataOutputDirector::setResultDir(std::string resDir)
+{
+  mresultDirectory = resDir;
 }
 
 void DataOutputDirector::setFilenameBase(std::string dfn)
@@ -503,7 +605,7 @@ void DataOutputDirector::setFilenameBase(std::string dfn)
   auto it = std::unique(mtreeFilenames.begin(), mtreeFilenames.end());
   if (it != mtreeFilenames.end()) {
     printOut();
-    LOG(FATAL) << "Duplicate tree names in a file!";
+    LOG(fatal) << "Duplicate tree names in a file!";
   }
 
   // make unique/sorted list of filenameBases
@@ -514,8 +616,12 @@ void DataOutputDirector::setFilenameBase(std::string dfn)
   // prepare list mfilePtrs of TFile
   for (auto fn : mfilenameBases) {
     mfilePtrs.emplace_back(new TFile());
+    mParentMaps.emplace_back(new TMap());
   }
 }
 
-} // namespace framework
-} // namespace o2
+void DataOutputDirector::setMaximumFileSize(float maxfs)
+{
+  mmaxfilesize = maxfs;
+}
+} // namespace o2::framework

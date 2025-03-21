@@ -20,7 +20,8 @@
 #include "Framework/Logger.h"
 #include "TOFWorkflowIO/DigitReaderSpec.h"
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
+#include "DetectorsBase/TFIDInfoHelper.h"
 
 using namespace o2::framework;
 using namespace o2::tof;
@@ -32,12 +33,14 @@ namespace tof
 
 void DigitReader::init(InitContext& ic)
 {
-  LOG(DEBUG) << "Init Digit reader!";
+  LOG(debug) << "Init Digit reader!";
   auto filename = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")),
                                                 ic.options().get<std::string>("tof-digit-infile"));
-  mFile = std::make_unique<TFile>(filename.c_str(), "OLD");
+  mDelayInMuSec1TF = atof(ic.options().get<std::string>("delay-1st-tf").c_str()) * 1E6;
+
+  mFile.reset(TFile::Open(filename.c_str()));
   if (!mFile->IsOpen()) {
-    LOG(ERROR) << "Cannot open the " << filename.c_str() << " file !";
+    LOG(error) << "Cannot open the " << filename.c_str() << " file !";
     mState = 0;
     return;
   }
@@ -46,6 +49,12 @@ void DigitReader::init(InitContext& ic)
 
 void DigitReader::run(ProcessingContext& pc)
 {
+  static bool firstCall = true;
+  if (firstCall) {
+    usleep(mDelayInMuSec1TF);
+  }
+  firstCall = false;
+
   if (mState != 1) {
     return;
   }
@@ -63,21 +72,36 @@ void DigitReader::run(ProcessingContext& pc)
 
     treeDig->GetEntry(mCurrentEntry);
 
+    // fill diagnostic frequencies
+    mFiller.clearCounts();
+    for (auto digit : mDigits) {
+      mFiller.addCount(digit.getChannel());
+    }
+    mFiller.setReadoutWindowData(mRow, mPatterns);
+    mFiller.fillDiagnosticFrequency();
+    mDiagnostic = mFiller.getDiagnosticFrequency();
+    auto creationTime = pc.services().get<o2::framework::TimingInfo>().creation;
+    mDiagnostic.setTimeStamp(creationTime / 1000);
+    // add TFIDInfo
+    o2::dataformats::TFIDInfo tfinfo;
+    o2::base::TFIDInfoHelper::fillTFIDInfo(pc, tfinfo);
+    mDiagnostic.setTFIDInfo(tfinfo);
+
     // add digits loaded in the output snapshot
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "DIGITS", 0, Lifetime::Timeframe}, mDigits);
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "READOUTWINDOW", 0, Lifetime::Timeframe}, mRow);
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "PATTERNS", 0, Lifetime::Timeframe}, mPatterns);
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "DIAFREQ", 0, Lifetime::Timeframe}, mDiagnostic);
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "DIGITS", 0}, mDigits);
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "READOUTWINDOW", 0}, mRow);
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "PATTERNS", 0}, mPatterns);
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "DIAFREQ", 0}, mDiagnostic);
     if (mUseMC) {
-      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "DIGITSMCTR", 0, Lifetime::Timeframe}, mLabels);
+      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "DIGITSMCTR", 0}, mLabels);
     }
 
     static o2::parameters::GRPObject::ROMode roMode = o2::parameters::GRPObject::CONTINUOUS;
 
-    LOG(DEBUG) << "TOF: Sending ROMode= " << roMode << " to GRPUpdater";
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "ROMode", 0, Lifetime::Timeframe}, roMode);
+    LOG(debug) << "TOF: Sending ROMode= " << roMode << " to GRPUpdater";
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "ROMode", 0}, roMode);
   } else {
-    LOG(ERROR) << "Cannot read the TOF digits !";
+    LOG(error) << "Cannot read the TOF digits !";
     return;
   }
 
@@ -109,6 +133,7 @@ DataProcessorSpec getDigitReaderSpec(bool useMC)
     AlgorithmSpec{adaptFromTask<DigitReader>(useMC)},
     Options{
       {"tof-digit-infile", VariantType::String, "tofdigits.root", {"Name of the input file"}},
+      {"delay-1st-tf", VariantType::String, "none", {"delay in seconds before 1st TF"}},
       {"input-dir", VariantType::String, "none", {"Input directory"}}}};
 }
 

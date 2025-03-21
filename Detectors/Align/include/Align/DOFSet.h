@@ -17,6 +17,7 @@
 #define ALG_DOFSET_H
 
 #include <TNamed.h>
+#include "Framework/Logger.h"
 
 namespace o2
 {
@@ -56,20 +57,25 @@ class DOFSet : public TNamed
   void setParVals(int npar, double* vl, double* er);
   void setParVal(int par, double v = 0) { getParVals()[par] = v; }
   void setParErr(int par, double e = 0) { getParErrs()[par] = e; }
-  void setParLab(int par, int lab) { getParLabs()[par] = lab; }
+  void setParLab(int par, int lab)
+  {
+    getParLabs()[par] = lab;
+    LOGP(debug, "Assign label {} to DOF{}/{} of {}", lab, par, mNDOFs, GetName());
+  }
 
  protected:
   auto getController() { return mController; }
   float* getParVals();
   float* getParErrs();
   int* getParLabs();
+  bool varsSet() const { return mFirstParGloID != -1; }
 
   Controller* mController = nullptr;
   int mNDOFs = 0;          // number of DOFs
   int mNDOFsFree = 0;      // numer of DOFs free
   int mNCalibDOFs = 0;     // number of calibDOFs
   int mNCalibDOFsFree = 0; // number of calibDOFs free
-  int mFirstParGloID = 0;  // ID of the 1st parameter in the global results array
+  int mFirstParGloID = -1; // ID of the 1st parameter in the global results array
 
   ClassDefOverride(DOFSet, 1);
 };

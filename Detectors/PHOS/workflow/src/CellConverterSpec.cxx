@@ -8,76 +8,81 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "Framework/RootSerializationSupport.h"
 #include "DataFormatsPHOS/Digit.h"
 #include "DataFormatsPHOS/PHOSBlockHeader.h"
 #include "PHOSWorkflow/CellConverterSpec.h"
 #include "Framework/ControlService.h"
+#include "Framework/CCDBParamSpec.h"
 #include "DataFormatsPHOS/MCLabel.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
 #include "SimulationDataFormat/ConstMCTruthContainer.h"
 #include "CommonDataFormat/InteractionRecord.h"
 #include "PHOSBase/PHOSSimParams.h"
-#include "CCDB/CcdbApi.h"
 
 using namespace o2::phos::reco_workflow;
 
 void CellConverterSpec::init(framework::InitContext& ctx)
 {
-  LOG(INFO) << "[PHOSCellConverter - init] Initialize converter " << (mPropagateMC ? "with" : "without") << " MC truth container";
+  LOG(info) << "[PHOSCellConverter - init] Initialize converter " << (mPropagateMC ? "with" : "without") << " MC truth container";
+  if (mDefBadMap) {
+    LOG(info) << "No reading BadMap from ccdb requested, set default";
+    // create test BadMap and Calib objects. ClusterizerSpec should be owner
+    mBadMap = std::make_unique<BadChannelsMap>(); // Create empty bad map
+    mHasCalib = true;
+  }
 }
 
 void CellConverterSpec::run(framework::ProcessingContext& ctx)
 {
-  //  LOG(DEBUG) << "[PHOSCellConverter - run] called";
-  LOG(INFO) << "[PHOSCellConverter - run] called";
-  auto dataref = ctx.inputs().get("digits");
-  auto const* phosheader = o2::framework::DataRefUtils::getHeader<o2::phos::PHOSBlockHeader*>(dataref);
-  if (!phosheader->mHasPayload) {
-    LOG(INFO) << "[PHOSCellConverter - run] No more digits" << std::endl;
-    ctx.services().get<o2::framework::ControlService>().readyToQuit(framework::QuitRequest::Me);
+  // LOG(debug) << "[PHOSCellConverter - run] called";
+  // auto dataref = ctx.inputs().get("digits");
+  // auto const* phosheader = o2::framework::DataRefUtils::getHeader<o2::phos::PHOSBlockHeader*>(dataref);
+  // if (!phosheader->mHasPayload) {
+  auto digitsTR = ctx.inputs().get<std::vector<o2::phos::TriggerRecord>>("digitTriggerRecords");
+  if (!digitsTR.size()) { // nothing to process
+    mOutputCells.clear();
+    ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLS", 0}, mOutputCells);
+    mOutputCellTrigRecs.clear();
+    ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLTRIGREC", 0}, mOutputCellTrigRecs);
+    if (mPropagateMC) {
+      mOutputTruthCont.clear();
+      ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLSMCTR", 0}, mOutputTruthCont);
+    }
     return;
+  }
+
+  if (mInitSimParams) { // trigger reading sim/rec parameters from CCDB, singleton initiated in Fetcher
+    ctx.inputs().get<o2::phos::PHOSSimParams*>("recoparams");
+    mInitSimParams = false;
   }
 
   mOutputCells.clear();
   mOutputCellTrigRecs.clear();
 
   auto digits = ctx.inputs().get<std::vector<o2::phos::Digit>>("digits");
-  auto digitsTR = ctx.inputs().get<std::vector<o2::phos::TriggerRecord>>("digitTriggerRecords");
   std::unique_ptr<const o2::dataformats::MCTruthContainer<o2::phos::MCLabel>> truthcont(nullptr);
   if (mPropagateMC) {
     truthcont = ctx.inputs().get<o2::dataformats::MCTruthContainer<o2::phos::MCLabel>*>("digitsmctr");
     mOutputTruthCont.clear();
   }
   if (mPropagateMC) {
-    LOG(INFO) << "[PHOSCellConverter - run]  Received " << digits.size() << " digits and " << digitsTR.size() << " TriggerRecords" << truthcont->getNElements() << " MC labels";
+    LOG(info) << "[PHOSCellConverter - run]  Received " << digits.size() << " digits and " << digitsTR.size() << " TriggerRecords" << truthcont->getNElements() << " MC labels";
   } else {
-    LOG(INFO) << "[PHOSCellConverter - run]  Received " << digits.size() << " digits and " << digitsTR.size() << " TriggerRecords";
+    LOG(info) << "[PHOSCellConverter - run]  Received " << digits.size() << " digits and " << digitsTR.size() << " TriggerRecords";
   }
 
-  //Get TimeStamp from TriggerRecord
-  if (!mBadMap) {
-    if (o2::phos::PHOSSimParams::Instance().mCCDBPath.compare("localtest") == 0) {
-      mBadMap = new BadChannelsMap(1); // test default map
-      LOG(INFO) << "[PHOSCellConverter - run] No reading BadMap from ccdb requested, set default";
-    } else {
-      LOG(INFO) << "[PHOSCellConverter - run] getting BadMap object from ccdb";
-      o2::ccdb::CcdbApi ccdb;
-      std::map<std::string, std::string> metadata; // do we want to store any meta data?
-      ccdb.init("http://ccdb-test.cern.ch:8080");  // or http://localhost:8080 for a local installation
-      long bcTime = -1;                            //TODO!!! Convert BC time to time o2::InteractionRecord bcTime = digitsTR.front().getBCData() ;
-      mBadMap = ccdb.retrieveFromTFileAny<o2::phos::BadChannelsMap>("PHOS/BadMap", metadata, bcTime);
-      if (!mBadMap) {
-        LOG(FATAL) << "[PHOSCellConverter - run] can not get Bad Map";
-      }
-    }
+  // get BadMap from CCDB, once
+  if (!mHasCalib) {
+    auto badMapPtr = ctx.inputs().get<o2::phos::BadChannelsMap*>("badmap");
+    mBadMap = std::make_unique<BadChannelsMap>(*(badMapPtr.get()));
+    mHasCalib = true;
   }
-  //TODO!!! Should we check if BadMap should be updated/validity range still valid???
+
   mOutputCells.reserve(digits.size()); // most of digits will be copied
   int icell = 0;
-  int labelIndex = 0;
   for (const auto& tr : digitsTR) {
     int iFirstDigit = tr.getFirstEntry();
     int iLastDigit = iFirstDigit + tr.getNumberOfObjects();
@@ -94,7 +99,7 @@ void CellConverterSpec::run(framework::ProcessingContext& ctx)
         }
         mOutputCells.emplace_back(dig.getAbsId(), dig.getAmplitude(), dig.getTime(), chantype);
       } else {
-        //apply filter
+        // apply filter
         if (!mBadMap->isChannelGood(dig.getAbsId())) {
           continue;
         }
@@ -106,7 +111,7 @@ void CellConverterSpec::run(framework::ProcessingContext& ctx)
           chantype = ChannelType_t::LOW_GAIN;
         }
         mOutputCells.emplace_back(dig.getAbsId(), dig.getAmplitude(), dig.getTime(), chantype);
-        if (mPropagateMC) { //copy MC info,
+        if (mPropagateMC) { // copy MC info,
           int iLab = dig.getLabel();
           if (iLab > -1) {
             mOutputTruthCont.addElements(icell, truthcont->getLabels(iLab));
@@ -121,21 +126,26 @@ void CellConverterSpec::run(framework::ProcessingContext& ctx)
     }
     mOutputCellTrigRecs.emplace_back(tr.getBCData(), indexStart, mOutputCells.size() - indexStart);
   }
-  LOG(INFO) << "[PHOSCellConverter - run] Writing " << mOutputCells.size() << " cells, " << mOutputCellTrigRecs.size() << " Trig Records " << mOutputTruthCont.getNElements() << " PHOS labels ";
-  ;
-  ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLS", 0, o2::framework::Lifetime::Timeframe}, mOutputCells);
-  ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLTRIGREC", 0, o2::framework::Lifetime::Timeframe}, mOutputCellTrigRecs);
+  LOG(info) << "[PHOSCellConverter - run] Writing " << mOutputCells.size() << " cells, " << mOutputCellTrigRecs.size() << " Trig Records " << mOutputTruthCont.getNElements() << " PHOS labels ";
+
+  ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLS", 0}, mOutputCells);
+  ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLTRIGREC", 0}, mOutputCellTrigRecs);
   if (mPropagateMC) {
-    ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLSMCTR", 0, o2::framework::Lifetime::Timeframe}, mOutputTruthCont);
+    ctx.outputs().snapshot(o2::framework::Output{"PHS", "CELLSMCTR", 0}, mOutputTruthCont);
   }
 }
 
-o2::framework::DataProcessorSpec o2::phos::reco_workflow::getCellConverterSpec(bool propagateMC)
+o2::framework::DataProcessorSpec o2::phos::reco_workflow::getCellConverterSpec(bool propagateMC, bool defBadMap)
 {
   std::vector<o2::framework::InputSpec> inputs;
   std::vector<o2::framework::OutputSpec> outputs;
   inputs.emplace_back("digits", o2::header::gDataOriginPHS, "DIGITS", 0, o2::framework::Lifetime::Timeframe);
   inputs.emplace_back("digitTriggerRecords", o2::header::gDataOriginPHS, "DIGITTRIGREC", 0, o2::framework::Lifetime::Timeframe);
+  if (!defBadMap) {
+    inputs.emplace_back("badmap", o2::header::gDataOriginPHS, "PHS_Calib_BadMap", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("PHS/Calib/BadMap"));
+  }
+  inputs.emplace_back("recoparams", o2::header::gDataOriginPHS, "PHS_RecoParams", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("PHS/Config/RecoParams"));
+
   outputs.emplace_back("PHS", "CELLS", 0, o2::framework::Lifetime::Timeframe);
   outputs.emplace_back("PHS", "CELLTRIGREC", 0, o2::framework::Lifetime::Timeframe);
   if (propagateMC) {
@@ -145,5 +155,5 @@ o2::framework::DataProcessorSpec o2::phos::reco_workflow::getCellConverterSpec(b
   return o2::framework::DataProcessorSpec{"PHOSCellConverterSpec",
                                           inputs,
                                           outputs,
-                                          o2::framework::adaptFromTask<o2::phos::reco_workflow::CellConverterSpec>(propagateMC)};
+                                          o2::framework::adaptFromTask<o2::phos::reco_workflow::CellConverterSpec>(propagateMC, defBadMap)};
 }

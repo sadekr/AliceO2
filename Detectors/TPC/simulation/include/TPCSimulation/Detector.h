@@ -19,6 +19,7 @@
 
 #include "TPCSimulation/Point.h"
 #include "TPCBase/Sector.h"
+#include "DataFormatsTPC/BetheBlochAleph.h"
 
 class FairVolume; // lines 10-10
 
@@ -62,10 +63,16 @@ class Detector : public o2::base::DetImpl<Detector>
     kAlumina1 = 26
   };
   /**      Name :  Detector Name
-    *       Active: kTRUE for active detectors (ProcessHits() will be called)
-    *               kFALSE for inactive detectors
-    */
+   *       Active: kTRUE for active detectors (ProcessHits() will be called)
+   *               kFALSE for inactive detectors
+   */
   Detector(Bool_t Active);
+
+  // Factory method
+  static o2::base::Detector* create(bool active)
+  {
+    return new Detector(active);
+  }
 
   /**      default constructor    */
   Detector();
@@ -77,8 +84,8 @@ class Detector : public o2::base::DetImpl<Detector>
   void InitializeO2Detector() override;
 
   /**       this method is called for each step during simulation
-    *       (see FairMCApplication::Stepping())
-    */
+   *       (see FairMCApplication::Stepping())
+   */
   //     virtual Bool_t ProcessHitsOrig( FairVolume* v=0);
   Bool_t ProcessHits(FairVolume* v = nullptr) override;
 
@@ -104,8 +111,8 @@ class Detector : public o2::base::DetImpl<Detector>
   void ConstructGeometry() override;
 
   /**      This method is an example of how to add your own point
-     *       of type DetectorPoint to the clones array
-    */
+   *       of type DetectorPoint to the clones array
+   */
   Point* addHit(float x, float y, float z, float time, float nElectrons, float trackID, float detID);
 
   /// Copied from AliRoot - should go to someplace else
@@ -115,7 +122,10 @@ class Detector : public o2::base::DetImpl<Detector>
   /// @param kp* Parameters for the ALICE TPC
   /// @return Bethe-Bloch value in MIP units
   template <typename T>
-  static T BetheBlochAleph(T bg, T kp1, T kp2, T kp3, T kp4, T kp5);
+  static T BetheBlochAleph(T bg, T kp1, T kp2, T kp3, T kp4, T kp5)
+  {
+    return o2::tpc::BetheBlochAleph(bg, kp1, kp2, kp3, kp4, kp5);
+  }
 
   /// Copied from AliRoot - should go to someplace else
   /// Function to generate random numbers according to Gamma function
@@ -126,8 +136,8 @@ class Detector : public o2::base::DetImpl<Detector>
   Double_t Gamma(Double_t k);
 
   /** The following methods can be implemented if you need to make
-     *  any optional action in your detector during the transport.
-    */
+   *  any optional action in your detector during the transport.
+   */
 
   void EndOfEvent() override;
   void FinishPrimary() override { ; }
@@ -143,6 +153,7 @@ class Detector : public o2::base::DetImpl<Detector>
   int mHitCounter = 0;
   int mElectronCounter = 0;
   int mStepCounter = 0;
+  ElementalHit mHitLast{}; ///<! buffer last processed hit to be able to fill it to mHitsPerSectorCollection
 
   /// Create the detector materials
   virtual void CreateMaterials();
@@ -187,18 +198,6 @@ class Detector : public o2::base::DetImpl<Detector>
   friend class o2::base::DetImpl;
   ClassDefOverride(Detector, 1);
 };
-
-template <typename T>
-inline T Detector::BetheBlochAleph(T bg, T kp1, T kp2, T kp3, T kp4, T kp5)
-{
-  T beta = bg / std::sqrt(static_cast<T>(1.) + bg * bg);
-
-  T aa = std::pow(beta, kp4);
-  T bb = std::pow(static_cast<T>(1.) / bg, kp5);
-  bb = std::log(kp3 + bb);
-
-  return (kp2 - aa - bb) * kp1 / aa;
-}
 
 } // namespace tpc
 } // namespace o2

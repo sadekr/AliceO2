@@ -13,27 +13,21 @@
 /// \file    VisualisationEvent.cxx
 /// \author  Jeremi Niedziela
 /// \author  Maciej Grochowicz
+/// \author julian.myrcha@cern.ch
 ///
 
 #include "EventVisualisationDataConverter/VisualisationEvent.h"
-#include "rapidjson/document.h"
-#include "rapidjson/writer.h"
-#include "rapidjson/prettywriter.h"
-#include "rapidjson/stringbuffer.h"
 
 #include <string>
-#include <iostream>
-#include <iomanip>
-#include "FairLogger.h"
+#include <limits>
+#include <algorithm>
+#include <map>
 
 using namespace std;
 using namespace rapidjson;
 
-namespace o2
+namespace o2::event_visualisation
 {
-namespace event_visualisation
-{
-constexpr int JSON_FILE_VERSION = 1;
 
 VisualisationEvent::GIDVisualisation VisualisationEvent::mVis = [] {
   VisualisationEvent::GIDVisualisation res;
@@ -43,26 +37,33 @@ VisualisationEvent::GIDVisualisation VisualisationEvent::mVis = [] {
     if (filter == o2::event_visualisation::EVisualisationGroup::TPC) {
       res.contains[o2::dataformats::GlobalTrackID::TPC][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::ITSTPC][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRD][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRDTOF][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::TPCTRD][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::TPCTRDTOF][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::TPCTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::TPCTRD][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRD][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::TPCTRDTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRDTOF][filter] = true;
     }
     if (filter == o2::event_visualisation::EVisualisationGroup::ITS) {
       res.contains[o2::dataformats::GlobalTrackID::ITS][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::ITSTPC][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRD][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTOF][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRDTOF][filter] = true;
     }
     if (filter == o2::event_visualisation::EVisualisationGroup::TRD) {
       res.contains[o2::dataformats::GlobalTrackID::TRD][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::TPCTRD][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRD][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::TPCTRDTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRDTOF][filter] = true;
     }
     if (filter == o2::event_visualisation::EVisualisationGroup::TOF) {
-      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRDTOF][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::TPCTRDTOF][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::TPCTOF][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::TOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::TPCTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::TPCTRDTOF][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::ITSTPCTRDTOF][filter] = true;
     }
     if (filter == o2::event_visualisation::EVisualisationGroup::MFT) {
       res.contains[o2::dataformats::GlobalTrackID::MFT][filter] = true;
@@ -72,160 +73,111 @@ VisualisationEvent::GIDVisualisation VisualisationEvent::mVis = [] {
     if (filter == o2::event_visualisation::EVisualisationGroup::MCH) {
       res.contains[o2::dataformats::GlobalTrackID::MCH][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::MFTMCH][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::MCHMID][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::MFTMCHMID][filter] = true;
     }
     if (filter == o2::event_visualisation::EVisualisationGroup::MID) {
-      res.contains[o2::dataformats::GlobalTrackID::MCH][filter] = true;
-      res.contains[o2::dataformats::GlobalTrackID::MFTMCH][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::MID][filter] = true;
+      res.contains[o2::dataformats::GlobalTrackID::MCHMID][filter] = true;
       res.contains[o2::dataformats::GlobalTrackID::MFTMCHMID][filter] = true;
+    }
+    if (filter == o2::event_visualisation::EVisualisationGroup::EMC) {
+      res.contains[o2::dataformats::GlobalTrackID::EMC][filter] = true;
+    }
+    if (filter == o2::event_visualisation::EVisualisationGroup::PHS) {
+      res.contains[o2::dataformats::GlobalTrackID::PHS][filter] = true;
+    }
+    if (filter == o2::event_visualisation::EVisualisationGroup::HMP) {
+      res.contains[o2::dataformats::GlobalTrackID::HMP][filter] = true;
     }
   }
   return res;
 }();
 
 /// Ctor -- set the minimalistic event up
-VisualisationEvent::VisualisationEvent(VisualisationEventVO vo)
+VisualisationEvent::VisualisationEvent(const VisualisationEventVO vo)
 {
   this->mEventNumber = vo.eventNumber;
   this->mRunNumber = vo.runNumber;
   this->mEnergy = vo.energy;
   this->mMultiplicity = vo.multiplicity;
   this->mCollidingSystem = vo.collidingSystem;
-  this->mTimeStamp = vo.timeStamp;
+  this->mCreationTime = vo.collisionTime;
+  this->mMinTimeOfTracks = numeric_limits<float>::max();
+  this->mMaxTimeOfTracks = numeric_limits<float>::min();
+  this->mClMask = 0;
+  this->mTrkMask = 0;
+  this->mTfCounter = 0;
 }
 
-std::string VisualisationEvent::toJson()
+void VisualisationEvent::appendAnotherEventCalo(const VisualisationEvent& another)
 {
-  Document tree(kObjectType);
-  Document::AllocatorType& allocator = tree.GetAllocator();
-
-  // compatibility verification
-  tree.AddMember("fileVersion", rapidjson::Value().SetInt(JSON_FILE_VERSION), allocator);
-  tree.AddMember("timeStamp", rapidjson::Value().SetFloat(this->mTimeStamp), allocator);
-  tree.AddMember("workflowVersion", rapidjson::Value().SetFloat(this->mWorkflowVersion), allocator);
-  tree.AddMember("workflowParameters", rapidjson::Value().SetString(this->mWorkflowParameters.c_str(), this->mWorkflowParameters.size()), allocator);
-  // Tracks
-  tree.AddMember("trackCount", rapidjson::Value().SetInt(this->getTrackCount()), allocator);
-
-  Value jsonTracks(kArrayType);
-  for (size_t i = 0; i < this->getTrackCount(); i++) {
-    jsonTracks.PushBack(this->mTracks[i].jsonTree(allocator), allocator);
+  for (auto calo : another.getCalorimetersSpan()) {
+    this->mCalo.push_back(calo);
   }
-  tree.AddMember("mTracks", jsonTracks, allocator);
-
-  // Clusters
-  rapidjson::Value clusterCount(rapidjson::kNumberType);
-  clusterCount.SetInt(this->getClusterCount());
-  tree.AddMember("clusterCount", clusterCount, allocator);
-  Value jsonClusters(kArrayType);
-  for (size_t i = 0; i < this->getClusterCount(); i++) {
-    jsonClusters.PushBack(this->mClusters[i].jsonTree(allocator), allocator);
-  }
-  tree.AddMember("mClusters", jsonClusters, allocator);
-
-  // stringify
-  rapidjson::StringBuffer buffer;
-  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
-  tree.Accept(writer);
-  std::string json_str = std::string(buffer.GetString(), buffer.GetSize());
-  return json_str;
 }
 
-VisualisationEvent::VisualisationEvent(std::string fileName)
-{
-  this->fromFile(fileName);
-}
-
-VisualisationEvent::VisualisationEvent(const VisualisationEvent& source, EVisualisationGroup filter)
+VisualisationEvent::VisualisationEvent(const VisualisationEvent& source, EVisualisationGroup filter, float minTime, float maxTime)
 {
   for (auto it = source.mTracks.begin(); it != source.mTracks.end(); ++it) {
+    // if (it->getTime() < minTime) {
+    //   continue;
+    // }
+    // if (it->getTime() > maxTime) {
+    //   continue;
+    // }
     if (VisualisationEvent::mVis.contains[it->getSource()][filter]) {
-      this->addTrack({.time = it->getTime(),
-                      .charge = it->getCharge(),
-                      .PID = it->getPID(),
-                      .startXYZ = {
-                        it->getStartCoordinates()[0], it->getStartCoordinates()[1], it->getStartCoordinates()[2]},
-                      .phi = it->getPhi(),
-                      .theta = it->getTheta(),
-                      .source = it->getSource()});
+      this->mTracks.push_back(*it);
     }
   }
   for (auto it = source.mClusters.begin(); it != source.mClusters.end(); ++it) {
+    if (VisualisationEvent::mVis.contains[o2::dataformats::GlobalTrackID::HMP][filter]) { // only HMP can be standalone clusters
+      this->mClusters.push_back(*it);
+    }
   }
-}
-
-void VisualisationEvent::fromJson(std::string json)
-{
-  mTracks.clear();
-  mClusters.clear();
-
-  rapidjson::Document tree;
-  tree.Parse(json.c_str());
-
-  auto version = 1;
-  if (tree.HasMember("fileVersion")) {
-    rapidjson::Value& fileVersion = tree["fileVersion"];
-    version = fileVersion.GetInt();
+  for (auto it = source.mCalo.begin(); it != source.mCalo.end(); ++it) {
+    if (VisualisationEvent::mVis.contains[it->getSource()][filter]) {
+      this->mCalo.push_back(*it);
+    }
   }
-  auto timeStamp = time(nullptr);
-  if (tree.HasMember("timeStamp")) {
-    rapidjson::Value& fileTimeStamp = tree["timeStamp"];
-    timeStamp = fileTimeStamp.GetFloat();
-  }
-  this->mTimeStamp = timeStamp;
-
-  rapidjson::Value& trackCount = tree["trackCount"];
-  this->mTracks.reserve(trackCount.GetInt());
-  rapidjson::Value& jsonTracks = tree["mTracks"];
-  for (auto& v : jsonTracks.GetArray()) {
-    mTracks.emplace_back(v);
-  }
-
-  rapidjson::Value& clusterCount = tree["clusterCount"];
-  this->mClusters.reserve(clusterCount.GetInt());
-  rapidjson::Value& jsonClusters = tree["mClusters"];
-  for (auto& v : jsonClusters.GetArray()) {
-    mClusters.emplace_back(v);
-  }
-}
-
-void VisualisationEvent::toFile(std::string fileName)
-{
-  std::string json = toJson();
-  std::ofstream out(fileName);
-  out << json;
-  out.close();
-}
-
-std::string VisualisationEvent::fileNameIndexed(const std::string fileName, const int index)
-{
-  std::stringstream buffer;
-  buffer << fileName << std::setfill('0') << std::setw(3) << index << ".json";
-  return buffer.str();
-}
-
-bool VisualisationEvent::fromFile(std::string fileName)
-{
-  if (FILE* file = fopen(fileName.c_str(), "r")) {
-    fclose(file); // file exists
-  } else {
-    return false;
-  }
-  std::ifstream inFile;
-  inFile.open(fileName);
-
-  std::stringstream strStream;
-  strStream << inFile.rdbuf(); //read the file
-  inFile.close();
-  std::string str = strStream.str(); //str holds the content of the file
-  fromJson(str);
-  return true;
 }
 
 VisualisationEvent::VisualisationEvent()
 {
-  this->mTimeStamp = time(nullptr); // current time
+  this->mRunNumber = 0;
+  this->mClMask = 0;
+  this->mTracks.clear();
 }
 
-} // namespace event_visualisation
+void VisualisationEvent::afterLoading()
+{
+  this->mMinTimeOfTracks = std::numeric_limits<float>::max();
+  this->mMaxTimeOfTracks = std::numeric_limits<float>::min();
+  for (auto& v : this->mTracks) {
+    this->mMinTimeOfTracks = std::min(this->mMinTimeOfTracks, v.getTime());
+    this->mMaxTimeOfTracks = std::max(this->mMaxTimeOfTracks, v.getTime());
+  }
+}
+
+VisualisationEvent VisualisationEvent::limit(std::size_t maximum_number_of_items)
+{
+  VisualisationEvent result = *this;
+  result.mTracks.clear();
+  result.mCalo.clear();
+  result.mClusters.clear();
+  size_t count = 0;
+  do {
+    if (count < mTracks.size()) {
+      result.mTracks.push_back(mTracks[count]);
+    }
+    if (count < mClusters.size()) {
+      result.mClusters.push_back(mClusters[count]);
+    }
+    if (count < mCalo.size()) {
+      result.mCalo.push_back(mCalo[count]);
+    }
+  } while (count++ < maximum_number_of_items);
+  return result;
+}
+
 } // namespace o2

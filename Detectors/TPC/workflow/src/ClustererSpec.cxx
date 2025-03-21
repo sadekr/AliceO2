@@ -24,7 +24,7 @@
 #include "DataFormatsTPC/TPCSectorHeader.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
 #include "SimulationDataFormat/MCCompLabel.h"
-#include <FairMQLogger.h>
+#include <fairlogger/Logger.h>
 #include <memory> // for make_shared
 #include <vector>
 #include <map>
@@ -70,7 +70,7 @@ DataProcessorSpec getClustererSpec(bool sendMC)
       auto& verbosity = processAttributes->verbosity;
       auto const* sectorHeader = DataRefUtils::getHeader<o2::tpc::TPCSectorHeader*>(dataref);
       if (sectorHeader == nullptr) {
-        LOG(ERROR) << "sector header missing on header stack";
+        LOG(error) << "sector header missing on header stack";
         return;
       }
       auto const* dataHeader = DataRefUtils::getHeader<o2::header::DataHeader*>(dataref);
@@ -81,9 +81,9 @@ DataProcessorSpec getClustererSpec(bool sendMC)
         // forward the control information
         // FIXME define and use flags in TPCSectorHeader
         o2::tpc::TPCSectorHeader header{sector};
-        pc.outputs().snapshot(Output{gDataOriginTPC, "CLUSTERHW", fanSpec, Lifetime::Timeframe, {header}}, fanSpec);
+        pc.outputs().snapshot(Output{gDataOriginTPC, "CLUSTERHW", fanSpec, {header}}, fanSpec);
         if (DataRefUtils::isValid(mclabelref)) {
-          pc.outputs().snapshot(Output{gDataOriginTPC, "CLUSTERHWMCLBL", fanSpec, Lifetime::Timeframe, {header}}, fanSpec);
+          pc.outputs().snapshot(Output{gDataOriginTPC, "CLUSTERHWMCLBL", fanSpec, {header}}, fanSpec);
         }
         return;
       }
@@ -93,7 +93,7 @@ DataProcessorSpec getClustererSpec(bool sendMC)
       }
       auto inDigits = pc.inputs().get<gsl::span<o2::tpc::Digit>>(dataref);
       if (verbosity > 0 && inMCLabels.getBuffer().size()) {
-        LOG(INFO) << "received " << inDigits.size() << " digits, "
+        LOG(info) << "received " << inDigits.size() << " digits, "
                   << inMCLabels.getIndexedSize() << " MC label objects"
                   << " input MC label size " << DataRefUtils::getPayloadSize(mclabelref);
       }
@@ -107,7 +107,7 @@ DataProcessorSpec getClustererSpec(bool sendMC)
       auto& clusterer = clusterers[sector];
 
       if (verbosity > 0) {
-        LOG(INFO) << "processing " << inDigits.size() << " digit object(s) of sector " << sectorHeader->sector()
+        LOG(info) << "processing " << inDigits.size() << " digit object(s) of sector " << sectorHeader->sector()
                   << " input size " << DataRefUtils::getPayloadSize(dataref);
       }
       // process the digits and MC labels, the bool parameter controls whether to clear all
@@ -120,23 +120,23 @@ DataProcessorSpec getClustererSpec(bool sendMC)
       ConstMCLabelContainerView emptyLabels;
       clusterer->finishProcess(emptyDigits, emptyLabels, false); // keep here the false, otherwise the clusters are lost of they are not stored in the meantime
       if (verbosity > 0) {
-        LOG(INFO) << "clusterer produced "
+        LOG(info) << "clusterer produced "
                   << std::accumulate(clusterArray.begin(), clusterArray.end(), size_t(0), [](size_t l, auto const& r) { return l + r.getContainer()->numberOfClusters; })
                   << " cluster(s)"
                   << " for sector " << sectorHeader->sector()
                   << " total size " << sizeof(ClusterHardwareContainer8kb) * clusterArray.size();
         if (DataRefUtils::isValid(mclabelref)) {
-          LOG(INFO) << "clusterer produced " << mctruthArray.getIndexedSize() << " MC label object(s) for sector " << sectorHeader->sector();
+          LOG(info) << "clusterer produced " << mctruthArray.getIndexedSize() << " MC label object(s) for sector " << sectorHeader->sector();
         }
       }
       // FIXME: that should be a case for pmr, want to send the content of the vector as a binary
       // block by using move semantics
-      auto outputPages = pc.outputs().make<ClusterHardwareContainer8kb>(Output{gDataOriginTPC, "CLUSTERHW", fanSpec, Lifetime::Timeframe, {*sectorHeader}}, clusterArray.size());
+      auto outputPages = pc.outputs().make<ClusterHardwareContainer8kb>(Output{gDataOriginTPC, "CLUSTERHW", fanSpec, {*sectorHeader}}, clusterArray.size());
       std::copy(clusterArray.begin(), clusterArray.end(), outputPages.begin());
       if (DataRefUtils::isValid(mclabelref)) {
         ConstMCLabelContainer mcflat;
         mctruthArray.flatten_to(mcflat);
-        pc.outputs().snapshot(Output{gDataOriginTPC, "CLUSTERHWMCLBL", fanSpec, Lifetime::Timeframe, {*sectorHeader}}, mcflat);
+        pc.outputs().snapshot(Output{gDataOriginTPC, "CLUSTERHWMCLBL", fanSpec, {*sectorHeader}}, mcflat);
       }
     };
 
@@ -155,7 +155,7 @@ DataProcessorSpec getClustererSpec(bool sendMC)
       for (auto const& inputRef : InputRecordWalker(pc.inputs())) {
         auto const* sectorHeader = DataRefUtils::getHeader<o2::tpc::TPCSectorHeader*>(inputRef);
         if (sectorHeader == nullptr) {
-          LOG(ERROR) << "sector header missing on header stack for input on " << inputRef.spec->binding;
+          LOG(error) << "sector header missing on header stack for input on " << inputRef.spec->binding;
           continue;
         }
         const int sector = sectorHeader->sector();

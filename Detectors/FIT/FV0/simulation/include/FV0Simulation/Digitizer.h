@@ -12,16 +12,14 @@
 #ifndef ALICEO2_FV0_DIGITIZER_H
 #define ALICEO2_FV0_DIGITIZER_H
 
+#include "CommonDataFormat/InteractionRecord.h"
+#include "DataFormatsFV0/Digit.h"
+#include "DataFormatsFV0/ChannelData.h"
+#include "DataFormatsFV0/MCLabel.h"
+#include "FV0Simulation/Detector.h"
 #include "FV0Base/Constants.h"
-#include <DataFormatsFV0/MCLabel.h>
-#include <FV0Simulation/DigitizationConstant.h>
-#include <FV0Simulation/FV0DigParam.h>
-#include <DataFormatsFV0/ChannelData.h>
-#include <DataFormatsFV0/BCData.h>
-#include <FV0Simulation/Detector.h>
-#include <SimulationDataFormat/MCTruthContainer.h>
-#include <MathUtils/RandomRing.h>
-#include <CommonDataFormat/InteractionRecord.h>
+#include "SimulationDataFormat/MCTruthContainer.h"
+#include "FV0Simulation/DigitizationConstant.h"
 #include <array>
 #include <vector>
 
@@ -54,11 +52,11 @@ class Digitizer
   void setSrcId(Int_t id) { mSrcId = id; }
   void setInteractionRecord(const InteractionTimeRecord& ir) { mIntRecord = ir; }
 
-  void process(const std::vector<o2::fv0::Hit>& hits, std::vector<o2::fv0::BCData>& digitsBC,
+  void process(const std::vector<o2::fv0::Hit>& hits, std::vector<o2::fv0::Digit>& digitsBC,
                std::vector<o2::fv0::ChannelData>& digitsCh, std::vector<o2::fv0::DetTrigInput>& digitsTrig,
                o2::dataformats::MCTruthContainer<o2::fv0::MCLabel>& labels);
 
-  void flush(std::vector<o2::fv0::BCData>& digitsBC,
+  void flush(std::vector<o2::fv0::Digit>& digitsBC,
              std::vector<o2::fv0::ChannelData>& digitsCh,
              std::vector<o2::fv0::DetTrigInput>& digitsTrig,
              o2::dataformats::MCTruthContainer<o2::fv0::MCLabel>& labels);
@@ -68,11 +66,11 @@ class Digitizer
   uint32_t getOrbit() const { return mIntRecord.orbit; }
   uint16_t getBC() const { return mIntRecord.bc; }
 
-  using ChannelBCDataF = std::vector<float>;
+  using ChannelDigitF = std::vector<float>;
 
   struct BCCache : public o2::InteractionRecord {
     std::vector<o2::fv0::MCLabel> labels;
-    std::array<ChannelBCDataF, Constants::nFv0Channels> mPmtChargeVsTime = {};
+    std::array<ChannelDigitF, Constants::nFv0Channels> mPmtChargeVsTime = {};
 
     void clear()
     {
@@ -92,8 +90,16 @@ class Digitizer
 
  private:
   static constexpr int BCCacheMin = 0, BCCacheMax = 7, NBC2Cache = 1 + BCCacheMax - BCCacheMin;
-  void createPulse(float mipFraction, int parID, const double hitTime, std::array<o2::InteractionRecord, NBC2Cache> const& cachedIR,
-                   int nCachedIR, const int detID);
+  /// Create signal pulse based on MC hit
+  /// \param mipFraction Fraction of the MIP energy deposited in the cell
+  /// \param parID       Particle ID
+  /// \param hitTime     Time of the hit
+  /// \param hitR        Length to IP from the position of the hit
+  /// \param cachedIR    Cached interaction records
+  /// \param nCachedIR   Number of cached interaction records
+  /// \param detID       Detector cell ID
+  void createPulse(float mipFraction, int parID, const double hitTime, const float hitR,
+                   std::array<o2::InteractionRecord, NBC2Cache> const& cachedIR, int nCachedIR, const int detID);
 
   long mTimeStamp;                  // TF (run) timestamp
   InteractionTimeRecord mIntRecord; // Interaction record (orbit, bc) -> InteractionTimeRecord
@@ -106,7 +112,7 @@ class Digitizer
   BCCache* getBCCache(const o2::InteractionRecord& ir);
 
   void storeBC(const BCCache& bc,
-               std::vector<o2::fv0::BCData>& digitsBC,
+               std::vector<o2::fv0::Digit>& digitsBC,
                std::vector<o2::fv0::ChannelData>& digitsCh,
                std::vector<o2::fv0::DetTrigInput>& digitsTrig,
                o2::dataformats::MCTruthContainer<o2::fv0::MCLabel>& labels);
@@ -128,8 +134,8 @@ class Digitizer
 
   /// Internal helper methods related to conversion of energy-deposition into el. signal
   Int_t SimulateLightYield(Int_t pmt, Int_t nPhot) const;
-  Float_t SimulateTimeCfd(int& startIndex, const ChannelBCDataF& pulseLast, const ChannelBCDataF& pulse) const;
-  Float_t IntegrateCharge(const ChannelBCDataF& pulse) const;
+  Float_t SimulateTimeCfd(int& startIndex, const ChannelDigitF& pulseLast, const ChannelDigitF& pulse) const;
+  Float_t IntegrateCharge(const ChannelDigitF& pulse) const;
 
   /// Functions related to splitting ring-5 cell signal to two readout channels
   static float getDistFromCellCenter(UInt_t cellId, double hitx, double hity);

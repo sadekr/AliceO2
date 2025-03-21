@@ -19,7 +19,7 @@
 #include "GPUITSTrack.h"
 #include "GPUReconstruction.h"
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 #ifndef GPUCA_GPUCODE
 void GPUITSFitter::InitializeProcessor()
@@ -29,7 +29,7 @@ void GPUITSFitter::InitializeProcessor()
 void* GPUITSFitter::SetPointersInput(void* mem)
 {
   computePointerWithAlignment(mem, mRoads, mNumberOfRoads);
-  for (int i = 0; i < 7; i++) {
+  for (int32_t i = 0; i < 7; i++) {
     computePointerWithAlignment(mem, mTF[i], mNTF[i]);
   }
   return mem;

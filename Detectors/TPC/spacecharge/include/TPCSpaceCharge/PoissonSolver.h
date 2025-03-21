@@ -16,12 +16,12 @@
 ///
 ///
 /// \author  Matthias Kleiner <mkleiner@ikf.uni-frankfurt.de>
+///          Rifki Sadikin <rifki.sadikin@cern.ch> (original code in AliRoot in AliTPCPoissonSolver.h)
 /// \date Aug 21, 2020
 
 #ifndef ALICEO2_TPC_POISSONSOLVER_H_
 #define ALICEO2_TPC_POISSONSOLVER_H_
 
-#include "TPCSpaceCharge/DataContainer3D.h"
 #include "TPCSpaceCharge/RegularGrid3D.h"
 #include "CommonConstants/MathConstants.h"
 #include "TPCSpaceCharge/SpaceChargeParameter.h"
@@ -34,6 +34,9 @@ namespace tpc
 
 template <typename DataT>
 class Vector3D;
+
+template <typename DataT>
+class DataContainer3D;
 
 /// \class PoissonSolver
 /// The PoissonSolver class represents methods to solve the poisson equation.
@@ -93,11 +96,14 @@ class PoissonSolver
   static void setNThreads(int nThreads) { sNThreads = nThreads; }
 
  private:
-  inline static auto& mParamGrid = ParameterSpaceCharge::Instance(); ///< parameters of the grid on which the calculations are performed
   const RegularGrid& mGrid3D{};                                      ///< grid properties
+  const ParamSpaceCharge mParamGrid{mGrid3D.getParamSC()};           ///< parameters of the grid on which the calculations are performed
   inline static DataT sConvergenceError{1e-6};                       ///< Error tolerated
   static constexpr DataT INVTWOPI = 1. / o2::constants::math::TwoPI; ///< inverse of 2*pi
   inline static int sNThreads{4};                                    ///< number of threads which are used during some of the calculations (increasing this number has no big impact)
+
+  /// \returns inverse grid size in phi (either 1/2Pi or NSECTORSPERSIDE/2Pi)
+  static DataT getGridSizePhiInv();
 
   /// Relative error calculation: comparison with exact solution
   ///
@@ -214,7 +220,7 @@ class PoissonSolver
   /// \param oldPhiSlice number of Nphi (in phi-direction) for finer grid
   void restrictBoundary3D(Vector& matricesCurrentCharge, const Vector& residue, const int tnRRow, const int tnZColumn, const int newPhiSlice, const int oldPhiSlice) const;
 
-  ///Relaxation operation for multiGrid
+  /// Relaxation operation for multiGrid
   ///   relaxation used 7 stencil in cylindrical coordinate
   ///
   /// Using the following equations
@@ -399,7 +405,7 @@ class PoissonSolver
   ///
   /// Implementation non-recursive W-cycle for 2D
   ///
-  ///Algorithms:
+  /// Algorithms:
   ///
   /// \param gridFrom finest level of grid
   /// \param gridTo coarsest level of grid

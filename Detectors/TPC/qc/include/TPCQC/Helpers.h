@@ -17,11 +17,13 @@
 #ifndef AliceO2_TPC_HELPERS_H
 #define AliceO2_TPC_HELPERS_H
 
-#include <vector>
-#include "TPCBase/CalDet.h"
+// root includes
+#include "TH1F.h"
+#include "TH2F.h"
 
-class TH1F;
-class TH2F;
+#include <vector>
+#include <string>
+#include "TPCBase/CalDet.h"
 
 namespace o2
 {
@@ -32,7 +34,7 @@ namespace qc
 namespace helpers
 {
 
-///Some utility functions for qc
+/// Some utility functions for qc
 ///
 
 /// get a vector containing binning info for constant sized bins on a log axis
@@ -50,6 +52,17 @@ void setStyleHistogram2D(TH2& histo);
 /// Set nice style for vector of 2D histograms
 void setStyleHistogram2D(std::vector<TH2F>& histos);
 
+/// set nice style for 1D histograms ptr
+void setStyleHistogram(TH1& histo);
+
+// set nice style of histograms in a map of vectors
+void setStyleHistogramsInMap(std::unordered_map<std::string_view, std::vector<std::unique_ptr<TH1>>>& mapOfvectors);
+// set nice style of histograms in a map
+void setStyleHistogramsInMap(std::unordered_map<std::string_view, std::unique_ptr<TH1>>& mapOfHisto);
+// set nice style of histograms in a map of vectors
+void setStyleHistogramsInMap(std::unordered_map<std::string, std::vector<std::unique_ptr<TH1>>>& mapOfvectors);
+// set nice style of histograms in a map
+void setStyleHistogramsInMap(std::unordered_map<std::string, std::unique_ptr<TH1>>& mapOfHisto);
 /// Check if at least one pad in refPedestal and pedestal differs by 3*refNoise to see if new ZS calibration data should be uploaded to the FECs.
 /// @param refPedestal
 /// @param refNoise

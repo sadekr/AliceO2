@@ -25,20 +25,32 @@ namespace dataformats
 using namespace o2::dataformats;
 
 template <typename T>
-FlatHisto2D<T>::FlatHisto2D(int nbx, T xmin, T xmax, int nby, T ymin, T ymax)
+FlatHisto2D<T>::FlatHisto2D(uint32_t nbx, T xmin, T xmax, uint32_t nby, T ymin, T ymax)
 {
-  assert(nbx > 0 && xmin < xmax);
-  assert(nby > 0 && ymin < ymax);
-  mContainer.resize(nbx * nby + NServiceSlots, 0.);
-  mContainer[NBinsX] = nbx;
-  mContainer[NBinsY] = nby;
-  mContainer[XMin] = xmin;
-  mContainer[XMax] = xmax;
-  mContainer[YMin] = ymin;
-  mContainer[YMax] = ymax;
-  mContainer[BinSizeX] = (xmax - xmin) / nbx;
-  mContainer[BinSizeY] = (ymax - ymin) / nby;
+  init(nbx, xmin, xmax, nby, ymin, ymax);
+}
+
+template <typename T>
+FlatHisto2D<T>::FlatHisto2D(const FlatHisto2D& src)
+{
+  mContainer = src.mContainer;
   init(gsl::span<const T>(mContainer.data(), mContainer.size()));
+}
+
+template <typename T>
+FlatHisto2D<T>& FlatHisto2D<T>::operator=(const FlatHisto2D<T>& rhs)
+{
+  if (this == &rhs) {
+    return *this;
+  }
+  if (!rhs.canFill() && rhs.getNBins()) { // was initialized
+    throw std::runtime_error("trying to copy read-only histogram");
+  }
+  if (rhs.getNBins()) {
+    mContainer = rhs.mContainer;
+    init(gsl::span<const T>(mContainer.data(), mContainer.size()));
+  }
+  return *this;
 }
 
 template <typename T>
@@ -58,7 +70,7 @@ void FlatHisto2D<T>::add(const FlatHisto2D& other)
         canFill())) {
     throw std::runtime_error("adding incompatible histos or destination histo is const");
   }
-  for (int i = getNBins(); i--;) {
+  for (uint32_t i = getNBins(); i--;) {
     mDataPtr[i] += other.mDataPtr[i];
   }
 }
@@ -71,7 +83,7 @@ void FlatHisto2D<T>::subtract(const FlatHisto2D& other)
         canFill())) {
     throw std::runtime_error("subtracting incompatible histos or destination histo is const");
   }
-  for (int i = getNBins(); i--;) {
+  for (uint32_t i = getNBins(); i--;) {
     mDataPtr[i] -= other.mDataPtr[i];
   }
 }
@@ -80,7 +92,7 @@ template <typename T>
 T FlatHisto2D<T>::getSum() const
 {
   T sum = 0;
-  for (int i = getNBins(); i--;) {
+  for (uint32_t i = getNBins(); i--;) {
     sum += getBinContent(i);
   }
   return sum;
@@ -92,8 +104,8 @@ void FlatHisto2D<T>::init(const gsl::span<const T> ext)
   assert(ext.size() > NServiceSlots);
   mContainerView = ext;
   mDataPtr = const_cast<T*>(&ext[NServiceSlots]);
-  mNBinsX = (int)ext[NBinsX];
-  mNBinsY = (int)ext[NBinsY];
+  mNBinsX = (uint32_t)ext[NBinsX];
+  mNBinsY = (uint32_t)ext[NBinsY];
   mXMin = ext[XMin];
   mXMax = ext[XMax];
   mYMin = ext[YMin];
@@ -105,11 +117,28 @@ void FlatHisto2D<T>::init(const gsl::span<const T> ext)
 }
 
 template <typename T>
-std::unique_ptr<TH2F> FlatHisto2D<T>::createTH2F(const std::string& name)
+void FlatHisto2D<T>::init(uint32_t nbx, T xmin, T xmax, uint32_t nby, T ymin, T ymax)
+{ // when reading from file, need to call this method to make it operational
+  assert(nbx > 0 && xmin < xmax);
+  assert(nby > 0 && ymin < ymax);
+  mContainer.resize(nbx * nby + NServiceSlots, 0.);
+  mContainer[NBinsX] = nbx;
+  mContainer[NBinsY] = nby;
+  mContainer[XMin] = xmin;
+  mContainer[XMax] = xmax;
+  mContainer[YMin] = ymin;
+  mContainer[YMax] = ymax;
+  mContainer[BinSizeX] = (xmax - xmin) / nbx;
+  mContainer[BinSizeY] = (ymax - ymin) / nby;
+  init(gsl::span<const T>(mContainer.data(), mContainer.size()));
+}
+
+template <typename T>
+std::unique_ptr<TH2F> FlatHisto2D<T>::createTH2F(const std::string& name) const
 {
   auto h = std::make_unique<TH2F>(name.c_str(), name.c_str(), getNBinsX(), getXMin(), getXMax(), getNBinsY(), getYMin(), getYMax());
-  for (int i = getNBinsX(); i--;) {
-    for (int j = getNBinsY(); j--;) {
+  for (uint32_t i = getNBinsX(); i--;) {
+    for (uint32_t j = getNBinsY(); j--;) {
       auto w = getBinContent(i, j);
       if (w) {
         h->SetBinContent(i + 1, j + 1, w);
@@ -124,7 +153,7 @@ std::unique_ptr<TH1F> FlatHisto2D<T>::createSliceYTH1F(uint32_t binX, const std:
 {
   auto h = std::make_unique<TH1F>(name.c_str(), name.c_str(), getNBinsY(), getYMin(), getYMax());
   if (binX < getNBinsX()) {
-    for (int i = getNBinsY(); i--;) {
+    for (uint32_t i = getNBinsY(); i--;) {
       h->SetBinContent(i + 1, getBinContent(binX, i));
     }
   }
@@ -136,7 +165,7 @@ std::unique_ptr<TH1F> FlatHisto2D<T>::createSliceXTH1F(uint32_t binY, const std:
 {
   auto h = std::make_unique<TH1F>(name.c_str(), name.c_str(), getNBinsX(), getXMin(), getXMax());
   if (binY < getNBinsY()) {
-    for (int i = getNBinsX(); i--;) {
+    for (uint32_t i = getNBinsX(); i--;) {
       h->SetBinContent(i + 1, getBinContent(i, binY));
     }
   }

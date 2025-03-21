@@ -8,19 +8,26 @@
 # In applying this license CERN does not waive the privileges and immunities
 # granted to it by virtue of its status as an Intergovernmental Organization
 # or submit itself to any jurisdiction.
-
 o2_add_library(DataFormatsCTP
   SOURCES src/Digits.cxx
           src/Configuration.cxx
           src/Scalers.cxx
           src/CTF.cxx
+          src/TriggerOffsetsParam.cxx
+          src/LumiInfo.cxx
+          src/CTPRateFetcher.cxx
   PUBLIC_LINK_LIBRARIES O2::CommonDataFormat
                         O2::Headers
-                        O2::SimulationDataFormat
+                        O2::CommonUtils
+                        O2::DetectorsCommonDataFormats
+                        O2::DataFormatsParameters
                         O2::CommonConstants)
 o2_target_root_dictionary(DataFormatsCTP
                           HEADERS include/DataFormatsCTP/Digits.h
+                                  include/DataFormatsCTP/CTF.h
                                   include/DataFormatsCTP/Configuration.h
                                   include/DataFormatsCTP/Scalers.h
-                                  include/DataFormatsCTP/CTF.h)
+                                  include/DataFormatsCTP/LumiInfo.h
+                                  include/DataFormatsCTP/CTPRateFetcher.h
+                                  include/DataFormatsCTP/TriggerOffsetsParam.h)
 

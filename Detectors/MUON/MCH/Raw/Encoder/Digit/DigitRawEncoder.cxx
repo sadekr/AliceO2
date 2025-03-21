@@ -12,7 +12,7 @@
 #include "MCHRawEncoderDigit/DigitRawEncoder.h"
 
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "Framework/Logger.h"
 #include "Headers/DAQID.h"
 #include "MCHRawCommon/DataFormats.h"
@@ -60,7 +60,7 @@ void setupRawFileWriter(o2::raw::RawFileWriter& fw, const std::set<LinkInfo>& li
     }
   }
 
-  std::string output = fmt::format("{:s}/mch", opt.outputDir);
+  std::string output = fmt::format("{:s}/MCH", opt.outputDir);
 
   // Register the corresponding links (might have several solars for 1 link)
   registerLinks(fw, output, links,
@@ -130,12 +130,12 @@ std::set<o2::mch::raw::LinkInfo> getLinks(Solar2LinkInfo solar2LinkInfo, bool du
   for (auto solarId : solarIds) {
     auto li = solar2LinkInfo(solarId);
     if (!li.has_value()) {
-      LOGP(FATAL, "Could not find information about solarId {:d}", solarId);
+      LOGP(fatal, "Could not find information about solarId {:d}", solarId);
     }
     links.insert(li.value());
   }
 
-  LOGP(INFO, "MCH: registered {:d} links for {:d} solars",
+  LOGP(info, "MCH: registered {:d} links for {:d} solars",
        links.size(),
        solarIds.size());
   return links;

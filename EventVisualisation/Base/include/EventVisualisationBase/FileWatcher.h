@@ -18,6 +18,7 @@
 
 #include <string>
 #include <deque>
+#include <vector>
 
 namespace o2
 {
@@ -31,14 +32,15 @@ class FileWatcher
   std::deque<std::string> mFiles; ///< sorted file list with guards at the beginning and end
   std::string nextItem(const std::string& item) const;
   std::string prevItem(const std::string& item) const;
-  static std::deque<std::string> load(const std::string path);
-  std::string mDataFolder;  ///< folder being observed
+  std::vector<std::string> mDataFolders; ///< folders being observed
   std::string mCurrentFile; ///< "current" file name
+  const std::vector<std::string>& mExt; ///< extensions of files to be observed
   bool currentFileExist();
 
  public:
-  FileWatcher(const std::string& path);
+  FileWatcher(const std::vector<std::string>& path, const std::vector<std::string>& ext);
   void changeFolder(const std::string& path);                         ///< switch to observe other folder
+  void changeFolder(const std::vector<std::string>& paths);           ///< switch to observe other folders
   void saveCurrentFileToFolder(const std::string& destinationFolder); ///< copies
   int getSize() const; ///< include guards (so >=2 )
   int getPos() const;  ///< include guards -> 0 points to mLowGuard
@@ -46,6 +48,7 @@ class FileWatcher
   void setLast();
   void setNext();
   void setPrev();
+  void rollToNext();                   ///< round robin next item
   bool refresh();                      ///< reads folder content, updates current if points to not existing file
   std::string currentItem() const;     ///< name of the file (without path) but guards replaced with file names
   void setCurrentItem(int no);         ///< sets using index

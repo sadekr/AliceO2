@@ -27,8 +27,11 @@ o2_add_library(
           src/WorkflowHelper.cxx
           src/CompressedClusters.cxx
           src/TrackCuts.cxx
+          src/CalibdEdxCorrection.cxx
+          src/DCS.cxx
   PUBLIC_LINK_LIBRARIES O2::GPUCommon
                         O2::SimulationDataFormat
+                        O2::ReconstructionDataFormats
                         O2::CommonDataFormat
                         O2::Headers
                         O2::Algorithm)
@@ -40,20 +43,28 @@ o2_target_root_dictionary(
           include/DataFormatsTPC/ClusterNativeHelper.h
           include/DataFormatsTPC/ClusterHardware.h
           include/DataFormatsTPC/Digit.h
+          include/DataFormatsTPC/DCS.h
           include/DataFormatsTPC/Helpers.h
           include/DataFormatsTPC/KrCluster.h
           include/DataFormatsTPC/TrackTPC.h
           include/DataFormatsTPC/LaserTrack.h
           include/DataFormatsTPC/Constants.h
+          include/DataFormatsTPC/RawDataTypes.h
           include/DataFormatsTPC/Defs.h
           include/DataFormatsTPC/dEdxInfo.h
           include/DataFormatsTPC/CompressedClusters.h
           include/DataFormatsTPC/CTF.h
           include/DataFormatsTPC/IDC.h
+          include/DataFormatsTPC/SAC.h
           include/DataFormatsTPC/ZeroSuppression.h
           include/DataFormatsTPC/ZeroSuppressionLinkBased.h
           include/DataFormatsTPC/TrackCuts.h
-          include/DataFormatsTPC/LtrCalibData.h)
+          include/DataFormatsTPC/LtrCalibData.h
+          include/DataFormatsTPC/VDriftCorrFact.h
+          include/DataFormatsTPC/CalibdEdxCorrection.h
+          include/DataFormatsTPC/BetheBlochAleph.h
+          include/DataFormatsTPC/PIDResponse.h
+          include/DataFormatsTPC/AltroSyncSignal.h)
 
 o2_add_test(
   ClusterNative

@@ -20,14 +20,14 @@
 #include "GPUConstantMem.h"
 #include "GPUTPCClusterFinder.h"
 
-namespace GPUCA_NAMESPACE::gpu
+namespace o2::gpu
 {
 
 class GPUTPCCFStreamCompaction : public GPUKernelTemplate
 {
 
  public:
-  enum K : int {
+  enum K : int32_t {
     scanStart = 0,
     scanUp = 1,
     scanTop = 2,
@@ -35,46 +35,27 @@ class GPUTPCCFStreamCompaction : public GPUKernelTemplate
     compactDigits = 4,
   };
 
-  struct GPUSharedMemory : public GPUKernelTemplate::GPUSharedMemoryScan64<int, GPUCA_THREAD_COUNT_SCAN> {
+  struct GPUSharedMemory : public GPUKernelTemplate::GPUSharedMemoryScan64<int32_t, GPUCA_THREAD_COUNT_SCAN> {
   };
 
-#ifdef GPUCA_HAVE_O2HEADERS
   typedef GPUTPCClusterFinder processorType;
   GPUhdi() static processorType* Processor(GPUConstantMem& processors)
   {
     return processors.tpcClusterer;
   }
-#endif
 
-  GPUhdi() CONSTEXPR static GPUDataTypes::RecoStep GetRecoStep()
+  GPUhdi() constexpr static GPUDataTypes::RecoStep GetRecoStep()
   {
     return GPUDataTypes::RecoStep::TPCClusterFinding;
   }
 
-  template <int iKernel = GPUKernelTemplate::defaultKernel, typename... Args>
-  GPUd() static void Thread(int nBlocks, int nThreads, int iBlock, int iThread, GPUSharedMemory& smem, processorType& clusterer, Args... args);
+  template <int32_t iKernel = GPUKernelTemplate::defaultKernel, typename... Args>
+  GPUd() static void Thread(int32_t nBlocks, int32_t nThreads, int32_t iBlock, int32_t iThread, GPUSharedMemory& smem, processorType& clusterer, Args... args);
 
  private:
-  static GPUd() void nativeScanUpStartImpl(int, int, int, int, GPUSharedMemory&,
-                                           const uchar*, int*, int*,
-                                           int);
-
-  static GPUd() void nativeScanUpImpl(int, int, int, int, GPUSharedMemory&,
-                                      int*, int*, int);
-
-  static GPUd() void nativeScanTopImpl(int, int, int, int, GPUSharedMemory&,
-                                       int*, int);
-
-  static GPUd() void nativeScanDownImpl(int, int, int, int, GPUSharedMemory&,
-                                        int*, const int*, unsigned int, int);
-
-  static GPUd() void compactImpl(int, int, int, int, GPUSharedMemory&,
-                                 const ChargePos*, ChargePos*,
-                                 const uchar*, int*, const int*,
-                                 int, tpccf::SizeT);
-  static GPUd() int compactionElems(processorType& clusterer, int stage);
+  static GPUd() int32_t CompactionElems(processorType& clusterer, int32_t stage);
 };
 
-} // namespace GPUCA_NAMESPACE::gpu
+} // namespace o2::gpu
 
 #endif

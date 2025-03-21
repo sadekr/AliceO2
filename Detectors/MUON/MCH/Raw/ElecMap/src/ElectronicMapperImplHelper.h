@@ -12,18 +12,19 @@
 #ifndef O2_MCH_RAW_ELECMAP_ELECTRONIC_MAPPER_IMPL_HELPER_H
 #define O2_MCH_RAW_ELECMAP_ELECTRONIC_MAPPER_IMPL_HELPER_H
 
+#include "MCHConstants/DetectionElements.h"
 #include "MCHRawElecMap/DsDetId.h"
 #include "MCHRawElecMap/DsElecId.h"
 #include "MCHRawElecMap/FeeLinkId.h"
-#include <functional>
-#include <optional>
-#include <map>
-#include <cstdint>
-#include <set>
-#include <fmt/format.h>
-#include <iostream>
 #include "MCHRawElecMap/Mapper.h"
 #include "dslist.h"
+#include <cstdint>
+#include <fmt/format.h>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <set>
 
 namespace o2::mch::raw::impl
 {
@@ -92,9 +93,9 @@ std::map<VALUE, KEY> inverseMap(const std::map<KEY, VALUE>& src)
 template <typename T>
 std::set<uint16_t> getSolarUIDs(int deid)
 {
-  auto d2e = o2::mch::raw::createDet2ElecMapper<T>();
+  static auto d2e = o2::mch::raw::createDet2ElecMapper<T>();
   std::set<uint16_t> solarsForDE;
-  auto dslist = createDualSampaMapper();
+  static auto dslist = createDualSampaMapper();
   for (auto dsid : dslist(deid)) {
     DsDetId id{static_cast<uint16_t>(deid), static_cast<uint16_t>(dsid)};
     auto dsel = d2e(id);
@@ -110,7 +111,7 @@ std::set<uint16_t> getSolarUIDs()
 {
   std::set<uint16_t> solarUIDs;
 
-  for (auto deid : deIdsForAllMCH) {
+  for (auto deid : o2::mch::constants::deIdsForAllMCH) {
     std::set<uint16_t> solarsForDE = getSolarUIDs<T>(deid);
     for (auto s : solarsForDE) {
       solarUIDs.insert(s);
@@ -120,13 +121,40 @@ std::set<uint16_t> getSolarUIDs()
 }
 
 template <typename T>
+std::set<uint16_t> getSolarUIDsPerFeeId(uint16_t feeid)
+{
+  std::set<uint16_t> solars;
+  static auto feeLink2Solar = createFeeLink2SolarMapper<T>();
+  for (uint8_t link = 0; link < 12; link++) {
+    auto solar = feeLink2Solar(FeeLinkId{feeid, link});
+    if (solar.has_value()) {
+      solars.insert(solar.value());
+    }
+  }
+  return solars;
+}
+
+template <typename T>
+std::set<DsDetId> getDualSampasPerFeeId(uint16_t feeId)
+{
+  auto solarIds = getSolarUIDsPerFeeId<T>(feeId);
+  int n{0};
+  std::set<DsDetId> allDualSampas;
+  for (auto solarId : solarIds) {
+    auto solarDualSampas = getDualSampas<T>(solarId);
+    allDualSampas.insert(solarDualSampas.begin(), solarDualSampas.end());
+  }
+  return allDualSampas;
+}
+
+template <typename T>
 std::vector<std::string> solar2FeeLinkConsistencyCheck()
 {
   std::vector<std::string> errors;
 
   // All solars must have a FeeLinkId
   std::set<uint16_t> solarIds = getSolarUIDs<T>();
-  auto solar2feeLink = createSolar2FeeLinkMapper<T>();
+  static auto solar2feeLink = createSolar2FeeLinkMapper<T>();
   std::vector<o2::mch::raw::FeeLinkId> feeLinkIds;
   for (auto s : solarIds) {
     auto p = solar2feeLink(s);
@@ -153,10 +181,10 @@ std::set<DsElecId> getAllDs()
 {
   std::set<DsElecId> dsElecIds;
 
-  auto dslist = createDualSampaMapper();
-  auto det2ElecMapper = createDet2ElecMapper<T>();
+  static auto dslist = createDualSampaMapper();
+  static auto det2ElecMapper = createDet2ElecMapper<T>();
 
-  for (auto deId : o2::mch::raw::deIdsForAllMCH) {
+  for (auto deId : o2::mch::constants::deIdsForAllMCH) {
     for (auto dsId : dslist(deId)) {
       auto dsElecId = det2ElecMapper(DsDetId{deId, dsId});
       if (dsElecId.has_value()) {
@@ -166,6 +194,60 @@ std::set<DsElecId> getAllDs()
   }
 
   return dsElecIds;
+}
+
+template <typename T>
+std::set<DsDetId> getDualSampas(uint16_t solarId)
+{
+  std::set<DsDetId> dualSampas;
+
+  static auto elec2det = o2::mch::raw::createElec2DetMapper<T>();
+  for (uint8_t group = 0; group < 8; group++) {
+    for (uint8_t index = 0; index < 5; index++) {
+      DsElecId dsElecId{solarId, group, index};
+      auto dsDetId = elec2det(dsElecId);
+      if (dsDetId.has_value()) {
+        dualSampas.insert(dsDetId.value());
+      }
+    }
+  }
+  return dualSampas;
+}
+
+template <typename T>
+std::map<uint16_t, uint16_t> generateSolarIndex2IdMap()
+{
+  std::set<uint16_t> solarIds = raw::getSolarUIDs<T>();
+  std::map<uint16_t, uint16_t> m;
+  uint16_t i{0};
+  for (const auto& solarId : solarIds) {
+    m[i] = solarId;
+    ++i;
+  }
+  return m;
+}
+
+template <typename T>
+std::optional<uint16_t> solarIndex2Id(uint16_t solarIndex)
+{
+  static std::map<uint16_t, uint16_t> ix2id = generateSolarIndex2IdMap<T>();
+  auto it = ix2id.find(solarIndex);
+  if (it == ix2id.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+template <typename T>
+std::optional<uint16_t> solarId2Index(uint16_t solarId)
+{
+  static std::map<uint16_t, uint16_t> id2ix =
+    inverseMap(generateSolarIndex2IdMap<T>());
+  auto it = id2ix.find(solarId);
+  if (it == id2ix.end()) {
+    return std::nullopt;
+  }
+  return it->second;
 }
 
 } // namespace o2::mch::raw::impl

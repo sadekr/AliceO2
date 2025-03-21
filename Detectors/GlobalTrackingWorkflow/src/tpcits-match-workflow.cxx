@@ -10,6 +10,7 @@
 // or submit itself to any jurisdiction.
 
 #include "TPCWorkflow/ClusterSharingMapSpec.h"
+#include "TPCWorkflow/TPCScalerSpec.h"
 #include "GlobalTrackingWorkflow/TPCITSMatchingSpec.h"
 #include "GlobalTrackingWorkflow/TrackWriterTPCITSSpec.h"
 #include "GlobalTrackingWorkflowHelpers/InputHelper.h"
@@ -20,12 +21,19 @@
 #include "Framework/CompletionPolicy.h"
 #include "TPCReaderWorkflow/TPCSectorCompletionPolicy.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
+#include "Framework/ConfigContext.h"
+#include "Framework/CompletionPolicyHelpers.h"
+#include "TPCCalibration/CorrectionMapsLoader.h"
 
 using namespace o2::framework;
 using GID = o2::dataformats::GlobalTrackID;
-// ------------------------------------------------------------------
 
-// we need to add workflow options before including Framework/runDataProcessing
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
+
 void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 {
   // option allowing to set parameters
@@ -36,10 +44,10 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
     {"disable-root-output", o2::framework::VariantType::Bool, false, {"disable root-files output writer"}},
     {"track-sources", VariantType::String, "TPC", {"comma-separated list of sources to use: TPC,TPC-TOF,TPC-TRD,TPC-TRD-TOF"}},
     {"produce-calibration-data", o2::framework::VariantType::Bool, false, {"produce output for TPC vdrift calibration"}},
+    {"use-full-geometry", o2::framework::VariantType::Bool, false, {"use full geometry instead of the light-weight ITS part"}},
     {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings ..."}}};
-
+  o2::tpc::CorrectionMapsLoader::addGlobalOptions(options);
   o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
   std::swap(workflowOptions, options);
 }
 
@@ -52,6 +60,7 @@ void customize(std::vector<o2::framework::CompletionPolicy>& policies)
   policies.push_back(o2::tpc::TPCSectorCompletionPolicy("itstpc-track-matcher",
                                                         o2::tpc::TPCSectorCompletionPolicy::Config::RequireAll,
                                                         o2::framework::InputSpec{"cluster", o2::framework::ConcreteDataTypeMatcher{"TPC", "CLUSTERNATIVE"}})());
+  policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*itstpc-track-writer.*"));
 }
 
 // ------------------------------------------------------------------
@@ -64,20 +73,27 @@ WorkflowSpec defineDataProcessing(o2::framework::ConfigContext const& configcont
   o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
   // write the configuration used for the workflow
   o2::conf::ConfigurableParam::writeINI("o2matchtpcits-workflow_configuration.ini");
-
   GID::mask_t alowedSources = GID::getSourcesMask("ITS,TPC,TPC-TOF");
   GID::mask_t src = alowedSources & GID::getSourcesMask(configcontext.options().get<std::string>("track-sources"));
   bool needStrictTRDTOF = (src & GID::getSourcesMask("TPC-TRD,TPC-TOF,TPC-TRD-TOF")).any();
+  auto sclOpt = o2::tpc::CorrectionMapsLoader::parseGlobalOptions(configcontext.options());
+  auto useGeom = configcontext.options().get<bool>("use-full-geometry");
   auto useFT0 = configcontext.options().get<bool>("use-ft0");
   if (useFT0) {
     src |= GID::getSourceMask(GID::FT0);
   }
   auto useMC = !configcontext.options().get<bool>("disable-mc");
   auto calib = configcontext.options().get<bool>("produce-calibration-data");
-  auto srcL = src | GID::getSourcesMask("ITS,TPC"); // ITS is neadded always, TPC must be loaded even if bare TPC tracks are not used in matching
+  auto srcL = src | GID::getSourcesMask("ITS,TPC"); // ITS is needed always, TPC must be loaded even if bare TPC tracks are not used in matching
+  if (sclOpt.requestCTPLumi) {
+    srcL = srcL | GID::getSourcesMask("CTP");
+  }
 
   o2::framework::WorkflowSpec specs;
-  specs.emplace_back(o2::globaltracking::getTPCITSMatchingSpec(srcL, useFT0, calib, !GID::includesSource(GID::TPC, src), useMC));
+  if (sclOpt.needTPCScalersWorkflow() && !configcontext.options().get<bool>("disable-root-input")) {
+    specs.emplace_back(o2::tpc::getTPCScalerSpec(sclOpt.lumiType == 2, sclOpt.enableMShapeCorrection));
+  }
+  specs.emplace_back(o2::globaltracking::getTPCITSMatchingSpec(srcL, useFT0, calib, !GID::includesSource(GID::TPC, src), useGeom, useMC, sclOpt));
 
   if (!configcontext.options().get<bool>("disable-root-output")) {
     specs.emplace_back(o2::globaltracking::getTrackWriterTPCITSSpec(useMC));
@@ -86,7 +102,7 @@ WorkflowSpec defineDataProcessing(o2::framework::ConfigContext const& configcont
   // the only clusters MC which is need with useMC is ITS (for afterburner), for the rest we use tracks MC labels
   o2::globaltracking::InputHelper::addInputSpecs(configcontext, specs, srcL, srcL, srcL, useMC, GID::getSourceMask(GID::ITS), GID::getSourcesMask(GID::ALL), needStrictTRDTOF);
 
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(configcontext, specs);
 
   return std::move(specs);

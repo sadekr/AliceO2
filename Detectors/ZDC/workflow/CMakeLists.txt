@@ -16,13 +16,17 @@ o2_add_library(ZDCWorkflow
                        src/ZDCDataReaderDPLSpec.cxx
                        src/ZDCDigitWriterDPLSpec.cxx
                        src/ZDCRecoWriterDPLSpec.cxx
-         src/RecEventReaderSpec.cxx
+                       src/RecEventReaderSpec.cxx
                        src/RecoWorkflow.cxx
                        src/DigitRecoSpec.cxx
                        src/DigitReaderSpec.cxx
+                       src/DigitParserSpec.cxx
+                       src/RecoReaderSpec.cxx
+                       src/ParserWorkflow.cxx
                PUBLIC_LINK_LIBRARIES O2::Framework
                                      O2::DataFormatsZDC
                                      O2::ZDCRaw
+                                     O2::ZDCCalib
                                      O2::SimulationDataFormat
                                      O2::DPLUtils
                                      O2::ZDCReconstruction
@@ -43,6 +47,11 @@ o2_add_executable(digits-read
                   SOURCES src/digits-reader-workflow.cxx
                   PUBLIC_LINK_LIBRARIES O2::ZDCWorkflow)
 
+o2_add_executable(reco-read
+                  COMPONENT_NAME zdc
+                  SOURCES src/reco-reader-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::ZDCWorkflow)
+
 o2_add_executable(digits-reco
                   COMPONENT_NAME zdc
                   SOURCES src/zdc-reco-workflow.cxx
@@ -52,3 +61,14 @@ o2_add_executable(write-reco
                   COMPONENT_NAME zdc
                   SOURCES src/reco-writer-workflow.cxx
                   PUBLIC_LINK_LIBRARIES O2::ZDCWorkflow)
+
+o2_add_executable(digits-writer
+                  COMPONENT_NAME zdc
+                  SOURCES src/digits-writer-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::ZDCWorkflow O2::ZDCReconstruction)
+
+o2_add_executable(digits-parser
+                  COMPONENT_NAME zdc
+                  SOURCES src/zdc-parser-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::ZDCWorkflow O2::ZDCReconstruction)
+

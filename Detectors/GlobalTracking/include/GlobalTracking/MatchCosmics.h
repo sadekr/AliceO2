@@ -32,6 +32,14 @@
 
 namespace o2
 {
+namespace tpc
+{
+class VDriftCorrFact;
+}
+namespace gpu
+{
+class CorrectionMapsHelper;
+}
 namespace globaltracking
 {
 
@@ -77,8 +85,10 @@ class MatchCosmics
     GTrackID origID;        ///< track origin id
     int matchID = MinusOne; ///< entry (none if MinusOne) of its match in the vector of matches
   };
+  void setTPCCorrMaps(o2::gpu::CorrectionMapsHelper* maph);
+  void setTPCVDrift(const o2::tpc::VDriftCorrFact& v);
   void setITSROFrameLengthMUS(float fums) { mITSROFrameLengthMUS = fums; }
-  void setITSDict(std::unique_ptr<o2::itsmft::TopologyDictionary>& dict) { mITSDict = std::move(dict); }
+  void setITSDict(const o2::itsmft::TopologyDictionary* dict) { mITSDict = dict; }
   void process(const o2::globaltracking::RecoContainer& data);
   void setUseMC(bool mc) { mUseMC = mc; }
   void init();
@@ -127,10 +137,13 @@ class MatchCosmics
   std::vector<TrackSeed> mSeeds;
   std::vector<MatchRecord> mRecords;
   std::vector<int> mWinners;
-  std::unique_ptr<o2::gpu::TPCFastTransform> mTPCTransform; ///< TPC cluster transformation
-  std::unique_ptr<o2::itsmft::TopologyDictionary> mITSDict; // cluster patterns dictionary
-
+  const o2::itsmft::TopologyDictionary* mITSDict = nullptr; // cluster patterns dictionary
+  o2::gpu::CorrectionMapsHelper* mTPCCorrMapsHelper = nullptr;
   int mTFCount = 0;
+  float mTPCVDriftRef = -1.; ///< TPC nominal drift speed in cm/microseconds
+  float mTPCVDriftCorrFact = 1.; ///< TPC nominal correction factort (wrt ref)
+  float mTPCVDrift = -1.;    ///< TPC drift speed in cm/microseconds
+  float mTPCDriftTimeOffset = 0.; ///< drift time offset in mus
   float mTPCTBinMUS = 0.; ///< TPC time bin duration in microseconds
   float mBz = 0;          ///< nominal Bz
   bool mFieldON = true;

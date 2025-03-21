@@ -17,6 +17,7 @@
 #include "DetectorsBase/MaterialManager.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "Field/MagneticField.h"
+#include "Framework/TMessageSerializer.h"
 #include "TString.h" // for TString
 #include "TGeoManager.h"
 
@@ -30,6 +31,7 @@ using namespace o2::base;
 using namespace o2::detectors;
 
 Float_t Detector::mDensityFactor = 1.0;
+std::vector<int> o2::base::Detector::sDetId2HitBitIndex{}; // initialize empty vector
 
 Detector::Detector() : FairDetector(), mMapMaterial(), mMapMedium() {}
 Detector::Detector(const char* name, Bool_t Active)
@@ -123,7 +125,7 @@ void Detector::SetSpecialPhysicsCuts()
   // we try to read an external text file supposed to be installed
   // in a standard directory
   // ${O2_ROOT}/share/Detectors/DETECTORNAME/simulation/data/simcuts.dat
-  LOG(INFO) << "Setting special cuts for " << GetName();
+  LOG(info) << "Setting special cuts for " << GetName();
   const char* aliceO2env = std::getenv("O2_ROOT");
   std::string inputFile;
   if (aliceO2env) {
@@ -153,20 +155,24 @@ void Detector::initFieldTrackingParams(int& integration, float& maxfield)
       return;
     }
   }
-  LOG(INFO) << "No magnetic field found; using default tracking values " << integration << " " << maxfield
+  LOG(info) << "No magnetic field found; using default tracking values " << integration << " " << maxfield
             << " to initialize media\n";
 }
 
 TClonesArray* Detector::GetCollection(int) const
 {
-  LOG(WARNING) << "GetCollection interface no longer supported";
-  LOG(WARNING) << "Use the GetHits function on invidiual detectors";
+  LOG(warning) << "GetCollection interface no longer supported";
+  LOG(warning) << "Use the GetHits function on invidiual detectors";
   return nullptr;
 }
 
 void Detector::addAlignableVolumes() const
 {
-  LOG(WARNING) << "Alignable volumes are not yet defined for " << GetName();
+  LOG(warning) << "Alignable volumes are not yet defined for " << GetName();
+}
+
+void Detector::fillParallelWorld() const
+{
 }
 
 int Detector::registerSensitiveVolumeAndGetVolID(TGeoVolume const* vol)
@@ -176,7 +182,7 @@ int Detector::registerSensitiveVolumeAndGetVolID(TGeoVolume const* vol)
   // retrieve the VMC Monte Carlo ID for this volume
   const int volid = TVirtualMC::GetMC()->VolId(vol->GetName());
   if (volid <= 0) {
-    LOG(ERROR) << "Could not retrieve VMC volume ID for " << vol->GetName();
+    LOG(error) << "Could not retrieve VMC volume ID for " << vol->GetName();
   }
   return volid;
 }
@@ -186,32 +192,35 @@ int Detector::registerSensitiveVolumeAndGetVolID(std::string const& name)
   // we need to fetch the TGeoVolume which is needed for FairRoot
   auto vol = gGeoManager->GetVolume(name.c_str());
   if (!vol) {
-    LOG(ERROR) << "Volume " << name << " not found in geometry; Cannot register sensitive volume";
+    LOG(error) << "Volume " << name << " not found in geometry; Cannot register sensitive volume";
     return -1;
   }
   return registerSensitiveVolumeAndGetVolID(vol);
 }
 
-#include <FairMQMessage.h>
-#include <FairMQParts.h>
-#include <FairMQChannel.h>
-namespace o2
-{
-namespace base
+#include <fairmq/Message.h>
+#include <fairmq/Parts.h>
+#include <fairmq/Channel.h>
+namespace o2::base
 {
 // this goes into the source
-void attachMessageBufferToParts(FairMQParts& parts, FairMQChannel& channel, void* data, size_t size,
-                                void (*free_func)(void* data, void* hint), void* hint)
+void attachMessageBufferToParts(fair::mq::Parts& parts, fair::mq::Channel& channel, void* data, TClass* cl)
 {
-  std::unique_ptr<FairMQMessage> message(channel.NewMessage(data, size, free_func, hint));
+  auto msg = channel.Transport()->CreateMessage(4096, fair::mq::Alignment{64});
+  // This will serialize the data directly into the message buffer, without any further
+  // buffer or copying. Notice how the message will have 8 bytes of header and then
+  // the serialized data as TBufferFile. In principle one could construct a serialized TMessage payload
+  // however I did not manage to get it to work for every case.
+  o2::framework::FairOutputTBuffer buffer(*msg);
+  o2::framework::TMessageSerializer::serialize(buffer, data, cl);
+  parts.AddPart(std::move(msg));
+}
+void attachDetIDHeaderMessage(int id, fair::mq::Channel& channel, fair::mq::Parts& parts)
+{
+  std::unique_ptr<fair::mq::Message> message(channel.NewSimpleMessage(id));
   parts.AddPart(std::move(message));
 }
-void attachDetIDHeaderMessage(int id, FairMQChannel& channel, FairMQParts& parts)
-{
-  std::unique_ptr<FairMQMessage> message(channel.NewSimpleMessage(id));
-  parts.AddPart(std::move(message));
-}
-void attachShmMessage(void* hits_ptr, FairMQChannel& channel, FairMQParts& parts, bool* busy_ptr)
+void attachShmMessage(void* hits_ptr, fair::mq::Channel& channel, fair::mq::Parts& parts, bool* busy_ptr)
 {
   struct shmcontext {
     int id;
@@ -221,14 +230,14 @@ void attachShmMessage(void* hits_ptr, FairMQChannel& channel, FairMQParts& parts
 
   auto& instance = o2::utils::ShmManager::Instance();
   shmcontext info{instance.getShmID(), hits_ptr, busy_ptr};
-  LOG(DEBUG) << "-- SHM SEND --";
-  LOG(DEBUG) << "-- OBJ PTR -- " << info.object_ptr << " ";
+  LOG(debug) << "-- SHM SEND --";
+  LOG(debug) << "-- OBJ PTR -- " << info.object_ptr << " ";
   assert(instance.isPointerOk(info.object_ptr));
 
-  std::unique_ptr<FairMQMessage> message(channel.NewSimpleMessage(info));
+  std::unique_ptr<fair::mq::Message> message(channel.NewSimpleMessage(info));
   parts.AddPart(std::move(message));
 }
-void* decodeShmCore(FairMQParts& dataparts, int index, bool*& busy)
+void* decodeShmCore(fair::mq::Parts& dataparts, int index, bool*& busy)
 {
   auto rawmessage = std::move(dataparts.At(index));
   struct shmcontext {
@@ -243,19 +252,16 @@ void* decodeShmCore(FairMQParts& dataparts, int index, bool*& busy)
   return info->object_ptr;
 }
 
-void* decodeTMessageCore(FairMQParts& dataparts, int index)
+void* decodeTMessageCore(fair::mq::Parts& dataparts, int index)
 {
-  class TMessageWrapper : public TMessage
-  {
-   public:
-    TMessageWrapper(void* buf, Int_t len) : TMessage(buf, len) { ResetBit(kIsOwner); }
-    ~TMessageWrapper() override = default;
-  };
   auto rawmessage = std::move(dataparts.At(index));
-  auto message = std::make_unique<TMessageWrapper>(rawmessage->GetData(), rawmessage->GetSize());
-  return message.get()->ReadObjectAny(message.get()->GetClass());
+  o2::framework::FairInputTBuffer buffer((char*)rawmessage->GetData(), rawmessage->GetSize());
+  buffer.InitMap();
+  auto* cl = buffer.ReadClass();
+  buffer.SetBufferOffset(0);
+  buffer.ResetMap();
+  return buffer.ReadObjectAny(cl);
 }
 
-} // namespace base
-} // namespace o2
+} // namespace o2::base
 ClassImp(o2::base::Detector);

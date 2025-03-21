@@ -12,14 +12,15 @@
 /// @author Sandro Wenzel
 
 #include "O2SimDevice.h"
+#include "SimSetup/SimSetup.h"
 #include <fairmq/DeviceRunner.h>
 #include <boost/program_options.hpp>
 #include <memory>
 #include <string>
-#include <FairMQChannel.h>
-#include <FairMQLogger.h>
-#include <FairMQParts.h>
-#include <FairMQTransportFactory.h>
+#include <fairmq/Channel.h>
+#include <fairlogger/Logger.h>
+#include <fairmq/Parts.h>
+#include <fairmq/TransportFactory.h>
 #include <TStopwatch.h>
 #include <sys/wait.h>
 #include <pthread.h> // to set cpu affinity
@@ -37,26 +38,39 @@ std::vector<int> gChildProcesses; // global vector of child pids
 int gMasterProcess = -1;
 int gDriverProcess = -1;
 
+// a handler for error/termination signals
 void sigaction_handler(int signal, siginfo_t* signal_info, void*)
 {
   auto pid = getpid();
-  LOG(INFO) << pid << " caught signal " << signal << " from source " << signal_info->si_pid;
+  LOG(info) << pid << " caught signal " << signal << " from source " << signal_info->si_pid;
   auto groupid = getpgrp();
-  if (pid == gMasterProcess) {
-    killpg(pid, signal); // master kills whole process group
+  if (pid == gMasterProcess && signal_info->si_pid != gDriverProcess) {
+    // master worker forwards signal to whole worker process group
+    // (do this only if not coming from gDriverProcess since this uses killpg and already affected all children)
+    killpg(pid, signal);
   } else {
     if (signal_info->si_pid != gDriverProcess) {
-      // forward to master if coming internally
+      // forward to master worker if coming internally
       kill(groupid, signal);
     }
   }
-  if (signal_info->si_pid == gDriverProcess) {
-    _exit(0); // external requests are not treated as error
-  }
-  if (signal == SIGTERM) {
-    // normal termination is not error
+
+  if (signal_info->si_pid == gDriverProcess || signal == SIGTERM) {
+    // signal was sent from driver process --> not error
+    // or it was a standard SIGTERM
+
+    // need to wait for potential children before exiting itself
+    // ... in order to have correct resource accounting
+    int status, cpid;
+    while ((cpid = wait(&status))) {
+      if (cpid == -1) {
+        break;
+      }
+    }
+    o2::SimSetup::shutdown();
     _exit(0);
   }
+
   // we treat internal signal interruption as an error
   // because only ordinary termination is good in the context of the distributed system
   _exit(128 + signal);
@@ -73,8 +87,8 @@ void CustomCleanup(void* data, void* hint) { delete static_cast<std::string*>(hi
 bool initializeSim(std::string transport, std::string address, std::unique_ptr<FairRunSim>& simptr)
 {
   // This needs an already running PrimaryServer
-  auto factory = FairMQTransportFactory::CreateTransportFactory(transport);
-  auto channel = FairMQChannel{"o2sim-primserv-info", "req", factory};
+  auto factory = fair::mq::TransportFactory::CreateTransportFactory(transport);
+  auto channel = fair::mq::Channel{"o2sim-primserv-info", "req", factory};
   channel.Connect(address);
   channel.Validate();
 
@@ -87,12 +101,12 @@ o2::devices::O2SimDevice* getDevice()
   auto vmc = TVirtualMC::GetMC();
 
   if (app == nullptr) {
-    LOG(WARNING) << "no vmc application found at this stage";
+    LOG(warning) << "no vmc application found at this stage";
   }
   return new o2::devices::O2SimDevice(app, vmc);
 }
 
-FairMQDevice* getDevice(const FairMQProgOptions& config)
+fair::mq::Device* getDevice(const fair::mq::ProgOptions& config)
 {
   return getDevice();
 }
@@ -112,7 +126,7 @@ int initAndRunDevice(int argc, char* argv[])
     });
 
     runner.AddHook<InstantiateDevice>([](DeviceRunner& r) {
-      r.fDevice = std::unique_ptr<FairMQDevice>{getDevice(r.fConfig)};
+      r.fDevice = std::unique_ptr<fair::mq::Device>{getDevice(r.fConfig)};
     });
 
     return runner.Run();
@@ -129,24 +143,24 @@ int initAndRunDevice(int argc, char* argv[])
 
 struct KernelSetup {
   o2::devices::O2SimDevice* sim = nullptr;
-  FairMQChannel* primchannel = nullptr;
-  FairMQChannel* datachannel = nullptr;
-  FairMQChannel* primstatuschannel = nullptr;
+  fair::mq::Channel* primchannel = nullptr;
+  fair::mq::Channel* datachannel = nullptr;
+  fair::mq::Channel* primstatuschannel = nullptr;
   int workerID = -1;
 };
 
 KernelSetup initSim(std::string transport, std::string primaddress, std::string primstatusaddress, std::string mergeraddress, int workerID)
 {
-  auto factory = FairMQTransportFactory::CreateTransportFactory(transport);
-  auto primchannel = new FairMQChannel{"primary-get", "req", factory};
+  auto factory = fair::mq::TransportFactory::CreateTransportFactory(transport);
+  auto primchannel = new fair::mq::Channel{"primary-get", "req", factory};
   primchannel->Connect(primaddress);
   primchannel->Validate();
 
-  auto prim_status_channel = new FairMQChannel{"o2sim-primserv-info", "req", factory};
+  auto prim_status_channel = new fair::mq::Channel{"o2sim-primserv-info", "req", factory};
   prim_status_channel->Connect(primstatusaddress);
   prim_status_channel->Validate();
 
-  auto datachannel = new FairMQChannel{"simdata", "push", factory};
+  auto datachannel = new fair::mq::Channel{"simdata", "push", factory};
   datachannel->Connect(mergeraddress);
   datachannel->Validate();
   // the channels are setup
@@ -163,7 +177,8 @@ int runSim(KernelSetup setup)
   // the simplified runloop
   while (setup.sim->Kernel(setup.workerID, *setup.primchannel, *setup.datachannel, setup.primstatuschannel)) {
   }
-  LOG(INFO) << "[W" << setup.workerID << "] simulation is done";
+  doLogInfo(setup.workerID, "simulation is done");
+  o2::SimSetup::shutdown();
   return 0;
 }
 
@@ -184,53 +199,59 @@ void pinToCPU(unsigned int cpuid)
 
     auto s = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
     if (s != 0) {
-      LOG(WARNING) << "FAILED TO SET PTHREAD AFFINITY";
+      LOG(warning) << "FAILED TO SET PTHREAD AFFINITY";
     }
 
     /* Check the actual affinity mask assigned to the thread */
     s = pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
     if (s != 0) {
-      LOG(WARNING) << "FAILED TO GET PTHREAD AFFINITY";
+      LOG(warning) << "FAILED TO GET PTHREAD AFFINITY";
     }
 
     for (int j = 0; j < CPU_SETSIZE; j++) {
       if (CPU_ISSET(j, &cpuset)) {
-        LOG(INFO) << "ENABLED CPU " << j;
+        LOG(info) << "ENABLED CPU " << j;
       }
     }
 #else
-    LOG(WARN) << "CPU AFFINITY NOT IMPLEMENTED ON APPLE";
+    LOG(warn) << "CPU AFFINITY NOT IMPLEMENTED ON APPLE";
 #endif
   }
 }
 
-bool waitForControlInput()
+bool waitForControlInput(int workerID)
 {
-  auto factory = FairMQTransportFactory::CreateTransportFactory("zeromq");
-  auto channel = FairMQChannel{"o2sim-control", "sub", factory};
-  auto controlsocketname = getenv("ALICE_O2SIMCONTROL");
-  LOG(DEBUG) << "AWAITING CONTROL ON SOCKETNAME " << controlsocketname;
-  channel.Connect(std::string(controlsocketname));
-  channel.Validate();
-  std::unique_ptr<FairMQMessage> reply(channel.NewMessage());
+  static bool initialized = false;
+  static fair::mq::Channel channel;
+  if (!initialized) {
+    // we do the channel connect and initialization only once
+    // (reducing the chances that we might miss a control message from the master)
+    static auto factory = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+    channel = fair::mq::Channel{"o2sim-control", "sub", factory};
+    auto controlsocketname = getenv("ALICE_O2SIMCONTROL");
+    channel.Connect(std::string(controlsocketname));
+    channel.Validate();
+    initialized = true;
+  }
+  std::unique_ptr<fair::mq::Message> reply(channel.NewMessage());
 
-  LOG(DEBUG) << "WAITING FOR INPUT";
+  doLogInfo(workerID, "Listening for master control input");
   if (channel.Receive(reply) > 0) {
     auto data = reply->GetData();
     auto size = reply->GetSize();
 
     std::string command(reinterpret_cast<char const*>(data), size);
-    LOG(INFO) << "message: " << command;
+    doLogInfo(workerID, "Received control message: " + command);
 
     o2::conf::SimReconfigData reconfig;
     o2::conf::parseSimReconfigFromString(command, reconfig);
     if (reconfig.stop) {
-      LOG(INFO) << "Stop asked, shutting down";
+      doLogInfo(workerID, "Stop asked, shutting down");
       return false;
     }
-    LOG(INFO) << "Processing " << reconfig.nEvents << " new events";
+    doLogInfo(workerID, "Asked to process " + std::to_string(reconfig.nEvents) + std::string(" new events"));
   } else {
-    LOG(INFO) << "NOTHING RECEIVED";
+    doLogInfo(workerID, "No control input received ");
   }
   return true;
 }
@@ -243,14 +264,20 @@ int main(int argc, char* argv[])
   act.sa_sigaction = &sigaction_handler;
   act.sa_flags = SA_SIGINFO; // <--- enable sigaction
 
-  std::vector<int> handledsignals = {SIGTERM, SIGINT, SIGQUIT, SIGSEGV, SIGBUS, SIGFPE}; // <--- may need to be completed
+  std::vector<int> handledsignals = {SIGTERM, SIGINT, SIGQUIT, SIGSEGV, SIGBUS, SIGFPE, SIGABRT}; // <--- may need to be completed
   // remember that SIGKILL can't be handled
   for (auto s : handledsignals) {
     if (sigaction(s, &act, nullptr)) {
-      LOG(ERROR) << "Could not install signal handler for " << s;
+      LOG(error) << "Could not install signal handler for " << s;
       exit(EXIT_FAILURE);
     }
   }
+
+  // set the fatal callback for the logger to not do a core dump (since this might interfere with process shutdown sequence
+  // since it calls ROOT::TSystem and further child processes)
+  fair::Logger::OnFatal([] { throw fair::FatalException("Fatal error occured. Exiting without core dump..."); });
+  // initialy set logger verbosity to medium
+  FairLogger::GetLogger()->SetLogVerbosityLevel("MEDIUM");
 
   // extract the path to FairMQ config
   bpo::options_description desc{"Options"};
@@ -327,22 +354,22 @@ int main(int argc, char* argv[])
       }
     }
 
-    LOG(INFO) << "Parsed primary server address " << serveraddress;
-    LOG(INFO) << "Parsed primary server status address " << serverstatus_address;
-    LOG(INFO) << "Parsed merger address " << mergeraddress;
+    LOG(info) << "Parsed primary server address " << serveraddress;
+    LOG(info) << "Parsed primary server status address " << serverstatus_address;
+    LOG(info) << "Parsed merger address " << mergeraddress;
     if (serveraddress.empty() || mergeraddress.empty()) {
       throw std::runtime_error("Could not determine server or merger URLs.");
     }
     // This is a solution based on initializing the simulation once
     // and then fork the process to share the simulation memory across
-    // many processes. Here we are not using FairMQDevices and just setup
+    // many processes. Here we are not using fair::mq::Devices and just setup
     // some channels manually and do our own runloop.
 
     // we init the simulation first
     std::unique_ptr<FairRunSim> simrun;
     // TODO: take the addresses from somewhere else
     if (!initializeSim("zeromq", serverstatus_address, simrun)) {
-      LOG(ERROR) << "Could not initialize simulation";
+      LOG(error) << "Could not initialize simulation";
       return 1;
     }
 
@@ -352,7 +379,7 @@ int main(int argc, char* argv[])
     if (f) {
       nworkers = static_cast<unsigned int>(std::stoi(f));
     }
-    LOG(INFO) << "Running with " << nworkers << " sim workers ";
+    LOG(info) << "Running with " << nworkers << " sim workers ";
 
     gMasterProcess = getpid();
     gDriverProcess = getppid();
@@ -364,17 +391,17 @@ int main(int argc, char* argv[])
         // Each worker can publish its progress/state on a ZMQ channel.
         // We actually use a push/pull mechanism to collect all messages in the
         // master worker which can then publish using PUB/SUB.
-        // auto factory = FairMQTransportFactory::CreateTransportFactory("zeromq");
+        // auto factory = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
         auto collectAndPubThreadFunction = [driverPID, &pubchannel]() {
           auto collectorchannel = o2::simpubsub::createPUBChannel(o2::simpubsub::getPublishAddress("o2sim-workerinternal", driverPID), "pull");
-          std::unique_ptr<FairMQMessage> msg(collectorchannel.NewMessage());
+          std::unique_ptr<fair::mq::Message> msg(collectorchannel.NewMessage());
 
           while (true) {
             if (collectorchannel.Receive(msg) > 0) {
               auto data = msg->GetData();
               auto size = msg->GetSize();
               std::string text(reinterpret_cast<char const*>(data), size);
-              // LOG(INFO) << "Collector message: " << text;
+              // LOG(info) << "Collector message: " << text;
               o2::simpubsub::publishMessage(pubchannel, text);
             }
           }
@@ -405,14 +432,14 @@ int main(int argc, char* argv[])
           runSim(kernelSetup);
 
           if (conf.asService()) {
-            LOG(INFO) << "IN SERVICE MODE WAITING";
+            LOG(info) << "IN SERVICE MODE WAITING";
             o2::simpubsub::publishMessage(pushchannel, o2::simpubsub::simStatusString(worker.str(), "STATUS", "AWAITING INPUT"));
-            more = waitForControlInput();
-            usleep(100); // --> why?
+            more = waitForControlInput(kernelSetup.workerID);
+            usleep(100); // --> why? (probably to give the server some chance to come to a "serving" state)
           } else {
             o2::simpubsub::publishMessage(pushchannel, o2::simpubsub::simStatusString(worker.str(), "STATUS", "TERMINATING"));
 
-            LOG(INFO) << "FINISHING";
+            LOG(info) << "FINISHING";
             more = false;
           }
         }
@@ -426,11 +453,16 @@ int main(int argc, char* argv[])
         gChildProcesses.push_back(pid);
       }
     }
-    int status;
-    wait(&status); /* only the parent waits */
+    int status, cpid;
+    while ((cpid = wait(&status))) {
+      // LOG(info) << "normal wait " << cpid << " returned ";
+      if (cpid == -1) {
+        break;
+      }
+    }
     _exit(0);
   } else {
-    // This the solution where we setup an ordinary FairMQDevice
+    // This the solution where we setup an ordinary fair::mq::Device
     // (each if which will setup its own simulation). Parallelism
     // is achieved outside by instantiating multiple device processes.
     _exit(initAndRunDevice(argc, argv));

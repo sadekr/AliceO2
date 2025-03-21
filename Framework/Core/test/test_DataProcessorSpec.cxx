@@ -9,27 +9,26 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#define BOOST_TEST_MODULE Test Framework DataProcessorSpec
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
-
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 #include "Framework/DataProcessorSpec.h"
+#include "Framework/DataProcessorSpecHelpers.h"
+#include "Framework/ConfigParamSpec.h"
 
-BOOST_AUTO_TEST_CASE(TestServiceRegistry)
+TEST_CASE("TestDataProcessorSpecHelpers")
 {
   using namespace o2::framework;
-  DataProcessorSpec spec{"test",
-                         {},
-                         {},
-                         AlgorithmSpec{[](ProcessingContext& ctx) {}},
-                         {ConfigParamSpec{
+  DataProcessorSpec spec{.name = "test",
+                         .algorithm = AlgorithmSpec{[](ProcessingContext& ctx) {}},
+                         .options = {ConfigParamSpec{
                            "channel-config",
                            VariantType::String,
                            "name=foo,type=sub,method=connect,address=tcp://localhost:5450,rateLogging=1",
                            {"Out-of-band channel config"}}},
-                         {},
-                         {DataProcessorLabel{"label"}}};
+                         .labels = {DataProcessorLabel{"label"},
+                                    DataProcessorLabel{"label3"}}};
 
-  BOOST_CHECK_EQUAL(spec.labels.size(), 1);
+  REQUIRE(spec.labels.size() == 2);
+  REQUIRE(DataProcessorSpecHelpers::hasLabel(spec, "label") == true);
+  REQUIRE(DataProcessorSpecHelpers::hasLabel(spec, "label2") == false);
+  REQUIRE(DataProcessorSpecHelpers::hasLabel(spec, "label3") == true);
 }

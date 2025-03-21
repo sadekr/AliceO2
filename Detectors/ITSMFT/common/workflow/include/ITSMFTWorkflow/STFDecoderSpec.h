@@ -30,6 +30,10 @@ using namespace o2::framework;
 
 namespace o2
 {
+namespace base
+{
+class GRPGeomRequest;
+}
 namespace itsmft
 {
 class Clusterer;
@@ -39,7 +43,10 @@ struct STFDecoderInp {
   bool doPatterns = true;
   bool doDigits = false;
   bool doCalib = false;
+  bool doSquashing = false;
   bool askSTFDist = true;
+  bool allowReporting = true;
+  bool verifyDecoder = false;
   o2::header::DataOrigin origin{"NIL"};
   std::string deviceName{};
   std::string inputSpec{};
@@ -49,14 +56,19 @@ template <class Mapping>
 class STFDecoder : public Task
 {
  public:
-  STFDecoder(const STFDecoderInp& inp);
+  STFDecoder(const STFDecoderInp& inp, std::shared_ptr<o2::base::GRPGeomRequest> gr);
   STFDecoder() = default;
   ~STFDecoder() override = default;
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
-  void endOfStream(EndOfStreamContext& ec) final;
+  void endOfStream(EndOfStreamContext& ec) final { finalize(); }
+  void stop() final { finalize(); }
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
+  void updateTimeDependentParams(ProcessingContext& pc);
+  void finalize();
+  void reset();
   std::unique_ptr<o2::itsmft::Clusterer> setupClusterer(const std::string& dictName);
   TStopwatch mTimer;
   bool mDoClusters = false;
@@ -64,19 +76,29 @@ class STFDecoder : public Task
   bool mDoDigits = false;
   bool mDoCalibData = false;
   bool mUnmutExtraLanes = false;
+  bool mFinalizeDone = false;
+  bool mAllowReporting = true;
+  bool mApplyNoiseMap = true;
+  bool mUseClusterDictionary = true;
+  bool mVerifyDecoder = false;
+  bool mDumpFrom1stPipeline = false;
+  int mDumpOnError = 0;
   int mNThreads = 1;
   int mVerbosity = 0;
+  long mROFErrRepIntervalMS = 0;
   size_t mTFCounter = 0;
   size_t mEstNDig = 0;
   size_t mEstNClus = 0;
   size_t mEstNClusPatt = 0;
   size_t mEstNCalib = 0;
   size_t mEstNROF = 0;
+  size_t mMaxRawDumpsSize = 0;
+  size_t mRawDumpedSize = 0;
+  std::string mInputSpec;
   std::string mSelfName;
-  std::string mDictName;
-  std::string mNoiseName;
   std::unique_ptr<RawPixelDecoder<Mapping>> mDecoder;
   std::unique_ptr<Clusterer> mClusterer;
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
 };
 
 using STFDecoderITS = STFDecoder<ChipMappingITS>;

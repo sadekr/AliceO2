@@ -19,8 +19,10 @@
 #include "Framework/Logger.h"
 #include "DPLUtils/MakeRootTreeWriterSpec.h"
 #include "TPCWorkflow/RecoWorkflow.h"
+#include "TPCWorkflow/TPCTriggerWriterSpec.h"
 #include "TPCReaderWorkflow/PublisherSpec.h"
 #include "TPCWorkflow/ClustererSpec.h"
+#include "TPCWorkflow/TPCScalerSpec.h"
 #include "TPCWorkflow/ClusterDecoderRawSpec.h"
 #include "GPUWorkflow/GPUWorkflowSpec.h"
 #include "TPCWorkflow/EntropyEncoderSpec.h"
@@ -33,13 +35,16 @@
 #include "DataFormatsTPC/TPCSectorHeader.h"
 #include "DataFormatsTPC/CompressedClusters.h"
 #include "DataFormatsTPC/ZeroSuppression.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 #include "SimulationDataFormat/IOMCTruthContainerView.h"
 #include "SimulationDataFormat/ConstMCTruthContainer.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "DataFormatsTPC/Helpers.h"
 #include "DataFormatsTPC/ZeroSuppression.h"
 #include "TPCReaderWorkflow/ClusterReaderSpec.h"
-
+#include "TPCReaderWorkflow/TriggerReaderSpec.h"
+#include "TPCCalibration/CorrectionMapsLoader.h"
+#include "CTPWorkflowIO/DigitReaderSpec.h"
 #include <string>
 #include <stdexcept>
 #include <fstream>
@@ -60,6 +65,8 @@ namespace tpc
 {
 namespace reco_workflow
 {
+
+static std::shared_ptr<o2::gpu::GPURecoWorkflowSpec> gTask;
 
 using namespace framework;
 
@@ -88,11 +95,12 @@ const std::unordered_map<std::string, OutputType> OutputMap{
   {"send-clusters-per-sector", OutputType::SendClustersPerSector},
   {"zsraw", OutputType::ZSRaw},
   {"qa", OutputType::QA},
-  {"no-shared-cluster-map", OutputType::NoSharedClusterMap}};
+  {"no-shared-cluster-map", OutputType::NoSharedClusterMap},
+  {"tpc-triggers", OutputType::TPCTriggers}};
 
 framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vector<int> const& tpcSectors, unsigned long tpcSectorMask, std::vector<int> const& laneConfiguration,
-                                    bool propagateMC, unsigned nLanes, std::string const& cfgInput, std::string const& cfgOutput, bool disableRootInput,
-                                    int caClusterer, int zsOnTheFly, bool askDISTSTF)
+                                    const o2::tpc::CorrectionMapsLoaderGloOpts& sclOpts, bool propagateMC, unsigned nLanes, std::string const& cfgInput, std::string const& cfgOutput, bool disableRootInput,
+                                    int caClusterer, int zsOnTheFly, bool askDISTSTF, bool selIR, bool filteredInp, int deadMapSources, bool useMCTimeGain)
 {
   InputType inputType;
   try {
@@ -109,6 +117,10 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   auto isEnabled = [&outputTypes](OutputType type) {
     return std::find(outputTypes.begin(), outputTypes.end(), type) != outputTypes.end();
   };
+
+  if (filteredInp && !(inputType == InputType::PassThrough && isEnabled(OutputType::Tracks) && isEnabled(OutputType::Clusters) && isEnabled(OutputType::SendClustersPerSector))) {
+    throw std::invalid_argument("filtered-input option must be provided only with pass-through input and clusters,tracks,send-clusters-per-sector output");
+  }
 
   bool decompressTPC = inputType == InputType::CompClustersCTF || inputType == InputType::CompClusters;
   // Disable not applicable settings depending on TPC input, no need to disable manually
@@ -155,13 +167,12 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
       auto storedlabels = reinterpret_cast<o2::dataformats::IOMCTruthContainerView const*>(data);
       o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel> flatlabels;
       storedlabels->copyandflatten(flatlabels);
-      //LOG(INFO) << "PUBLISHING CONST LABELS " << flatlabels.getNElements();
+      // LOG(info) << "PUBLISHING CONST LABELS " << flatlabels.getNElements();
       context.outputs().snapshot(output, flatlabels);
       return true;
     }
     return false;
   }};
-
   if (!disableRootInput || inputType == InputType::PassThrough) {
     // The OutputSpec of the PublisherSpec is configured depending on the input
     // type. Note that the configuration of the dispatch trigger in the main file
@@ -182,6 +193,12 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
                                                            laneConfiguration,
                                                            &hook},
                                                          propagateMC));
+      if (sclOpts.needTPCScalersWorkflow()) { // for standalone tpc-reco workflow
+        specs.emplace_back(o2::tpc::getTPCScalerSpec(sclOpts.lumiType == 2, sclOpts.enableMShapeCorrection));
+      }
+      if (sclOpts.requestCTPLumi) { // need CTP digits (lumi) reader
+        specs.emplace_back(o2::ctp::getDigitsReaderSpec(false));
+      }
     } else if (inputType == InputType::ClustersHardware) {
       specs.emplace_back(o2::tpc::getPublisherSpec(PublisherConf{
                                                      "tpc-clusterhardware-reader",
@@ -197,6 +214,15 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
                                                    propagateMC));
     } else if (inputType == InputType::Clusters) {
       specs.emplace_back(o2::tpc::getClusterReaderSpec(propagateMC, &tpcSectors, &laneConfiguration));
+      if (!getenv("DPL_DISABLE_TPC_TRIGGER_READER") || atoi(getenv("DPL_DISABLE_TPC_TRIGGER_READER")) != 1) {
+        specs.emplace_back(o2::tpc::getTPCTriggerReaderSpec());
+      }
+      if (sclOpts.needTPCScalersWorkflow()) { // for standalone tpc-reco workflow
+        specs.emplace_back(o2::tpc::getTPCScalerSpec(sclOpts.lumiType == 2, sclOpts.enableMShapeCorrection));
+      }
+      if (sclOpts.requestCTPLumi) { // need CTP digits (lumi) reader
+        specs.emplace_back(o2::ctp::getDigitsReaderSpec(false));
+      }
     } else if (inputType == InputType::CompClusters) {
       // TODO: need to check if we want to store the MC labels alongside with compressed clusters
       // for the moment reading of labels is disabled (last parameter is false)
@@ -222,8 +248,8 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   // ClusterDecoderRawSpec
   bool produceCompClusters = isEnabled(OutputType::CompClusters);
   bool produceTracks = isEnabled(OutputType::Tracks);
-  bool runTracker = (produceTracks || produceCompClusters || (isEnabled(OutputType::Clusters) && caClusterer)) && inputType != InputType::CompClustersFlat;
-  bool runHWDecoder = !caClusterer && (runTracker || isEnabled(OutputType::Clusters));
+  bool runGPUReco = (produceTracks || produceCompClusters || (isEnabled(OutputType::Clusters) && caClusterer) || inputType == InputType::CompClustersCTF) && inputType != InputType::CompClustersFlat;
+  bool runHWDecoder = !caClusterer && (runGPUReco || isEnabled(OutputType::Clusters));
   bool runClusterer = !caClusterer && (runHWDecoder || isEnabled(OutputType::ClustersHardware));
   bool zsDecoder = inputType == InputType::ZSRaw;
   bool runClusterEncoder = isEnabled(OutputType::EncodedClusters);
@@ -231,14 +257,14 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   // input matrix
   runClusterer &= inputType == InputType::Digitizer || inputType == InputType::Digits;
   runHWDecoder &= runClusterer || inputType == InputType::ClustersHardware;
-  runTracker &= caClusterer || runHWDecoder || inputType == InputType::Clusters || decompressTPC;
+  runGPUReco &= caClusterer || runHWDecoder || inputType == InputType::Clusters || decompressTPC;
 
   bool outRaw = inputType == InputType::Digits && isEnabled(OutputType::ZSRaw) && !isEnabled(OutputType::DisableWriter);
-  //bool runZSDecode = inputType == InputType::ZSRaw;
+  // bool runZSDecode = inputType == InputType::ZSRaw;
   bool zsToDigit = inputType == InputType::ZSRaw && isEnabled(OutputType::Digits);
 
   if (inputType == InputType::PassThrough) {
-    runTracker = runHWDecoder = runClusterer = runClusterEncoder = zsToDigit = false;
+    runGPUReco = runHWDecoder = runClusterer = runClusterEncoder = zsToDigit = false;
   }
 
   WorkflowSpec parallelProcessors;
@@ -359,7 +385,8 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   if (isEnabled(OutputType::Digits) && !isEnabled(OutputType::DisableWriter)) {
     using DigitOutputType = std::vector<o2::tpc::Digit>;
     specs.push_back(makeWriterSpec("tpc-digits-writer",
-                                   inputType == InputType::ZSRaw ? "tpc-zs-digits.root" : inputType == InputType::Digits ? "tpc-filtered-digits.root" : "tpcdigits.root",
+                                   inputType == InputType::ZSRaw ? "tpc-zs-digits.root" : inputType == InputType::Digits ? "tpc-filtered-digits.root"
+                                                                                                                         : "tpcdigits.root",
                                    "o2sim",
                                    BranchDefinition<DigitOutputType>{InputSpec{"data", "TPC", "DIGITS", 0},
                                                                      "TPCDigit",
@@ -394,16 +421,20 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   if (isEnabled(OutputType::Clusters) && !isEnabled(OutputType::DisableWriter)) {
     // if the caClusterer is enabled, only one data set with the full TPC is produced, and the writer
     // is configured to write one single branch
-    specs.push_back(makeWriterSpec("tpc-native-cluster-writer",
-                                   inputType == InputType::Clusters ? "tpc-filtered-native-clusters.root" : "tpc-native-clusters.root",
+    specs.push_back(makeWriterSpec(filteredInp ? "tpc-native-cluster-writer_filtered" : "tpc-native-cluster-writer",
+                                   (inputType == InputType::Clusters || filteredInp) ? "tpc-filtered-native-clusters.root" : "tpc-native-clusters.root",
                                    "tpcrec",
-                                   BranchDefinition<const char*>{InputSpec{"data", ConcreteDataTypeMatcher{"TPC", "CLUSTERNATIVE"}},
+                                   BranchDefinition<const char*>{InputSpec{"data", ConcreteDataTypeMatcher{"TPC", filteredInp ? o2::header::DataDescription("CLUSTERNATIVEF") : o2::header::DataDescription("CLUSTERNATIVE")}},
                                                                  "TPCClusterNative",
                                                                  "databranch"},
-                                   BranchDefinition<std::vector<char>>{InputSpec{"mc", ConcreteDataTypeMatcher{"TPC", "CLNATIVEMCLBL"}},
+                                   BranchDefinition<std::vector<char>>{InputSpec{"mc", ConcreteDataTypeMatcher{"TPC", filteredInp ? o2::header::DataDescription("CLNATIVEMCLBLF") : o2::header::DataDescription("CLNATIVEMCLBL")}},
                                                                        "TPCClusterNativeMCTruth",
                                                                        "mcbranch", fillLabels},
                                    (caClusterer || decompressTPC || inputType == InputType::PassThrough) && !isEnabled(OutputType::SendClustersPerSector)));
+  }
+
+  if ((isEnabled(OutputType::TPCTriggers) || caClusterer) && !isEnabled(OutputType::DisableWriter)) {
+    specs.push_back(o2::tpc::getTPCTriggerWriterSpec());
   }
 
   if (zsOnTheFly) {
@@ -419,8 +450,13 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   // tracker process
   //
   // selected by output type 'tracks'
-  if (runTracker) {
-    o2::gpu::gpuworkflow::Config cfg;
+  if (runGPUReco) {
+    o2::gpu::GPURecoWorkflowSpec::Config cfg;
+    cfg.runTPCTracking = true;
+    cfg.lumiScaleType = sclOpts.lumiType;
+    cfg.lumiScaleMode = sclOpts.lumiMode;
+    cfg.enableMShape = sclOpts.enableMShapeCorrection;
+    cfg.enableCTPLumi = sclOpts.requestCTPLumi;
     cfg.decompressTPC = decompressTPC;
     cfg.decompressTPCFromROOT = decompressTPC && inputType == InputType::CompClusters;
     cfg.caClusterer = caClusterer;
@@ -435,7 +471,25 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
     cfg.processMC = propagateMC;
     cfg.sendClustersPerSector = isEnabled(OutputType::SendClustersPerSector);
     cfg.askDISTSTF = askDISTSTF;
-    specs.emplace_back(o2::gpu::getGPURecoWorkflowSpec(policyData, cfg, tpcSectors, tpcSectorMask, "tpc-tracker"));
+    cfg.tpcTriggerHandling = isEnabled(OutputType::TPCTriggers) || cfg.caClusterer;
+    cfg.tpcDeadMapSources = deadMapSources;
+    cfg.tpcUseMCTimeGain = useMCTimeGain;
+
+    Inputs ggInputs;
+    auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false, true, false, true, true, o2::base::GRPGeomRequest::Aligned, ggInputs, true);
+
+    auto task = std::make_shared<o2::gpu::GPURecoWorkflowSpec>(policyData, cfg, tpcSectors, tpcSectorMask, ggRequest);
+    gTask = task;
+    Inputs taskInputs = task->inputs();
+    Options taskOptions = task->options();
+    std::move(ggInputs.begin(), ggInputs.end(), std::back_inserter(taskInputs));
+
+    specs.emplace_back(DataProcessorSpec{
+      "tpc-tracker",
+      taskInputs,
+      task->outputs(),
+      AlgorithmSpec{adoptTask<o2::gpu::GPURecoWorkflowSpec>(task)},
+      taskOptions});
   }
 
   //////////////////////////////////////////////////////////////////////////////////////////////
@@ -444,7 +498,7 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
   //
   // selected by output type 'encoded-clusters'
   if (runClusterEncoder) {
-    specs.emplace_back(o2::tpc::getEntropyEncoderSpec(!runTracker && inputType != InputType::CompClustersFlat));
+    specs.emplace_back(o2::tpc::getEntropyEncoderSpec(!runGPUReco && inputType != InputType::CompClustersFlat, selIR));
   }
 
   //////////////////////////////////////////////////////////////////////////////////////////////
@@ -456,29 +510,29 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
     // defining the track writer process using the generic RootTreeWriter and generator tool
     //
     // defaults
-    const char* processName = "tpc-track-writer";
-    const char* defaultFileName = "tpctracks.root";
+    const char* processName = filteredInp ? "tpc-track-writer_filtered" : "tpc-track-writer";
+    const char* defaultFileName = filteredInp ? "tpctracks_filtered.root" : "tpctracks.root";
     const char* defaultTreeName = "tpcrec";
 
-    //branch definitions for RootTreeWriter spec
+    // branch definitions for RootTreeWriter spec
     using TrackOutputType = std::vector<o2::tpc::TrackTPC>;
 
     using ClusRefsOutputType = std::vector<o2::tpc::TPCClRefElem>;
     // a spectator callback which will be invoked by the tree writer with the extracted object
     // we are using it for printing a log message
     auto logger = BranchDefinition<TrackOutputType>::Spectator([](TrackOutputType const& tracks) {
-      LOG(INFO) << "writing " << tracks.size() << " track(s)";
+      LOG(info) << "writing " << tracks.size() << " track(s)";
     });
-    auto tracksdef = BranchDefinition<TrackOutputType>{InputSpec{"inputTracks", "TPC", "TRACKS", 0},           //
-                                                       "TPCTracks", "track-branch-name",                       //
-                                                       1,                                                      //
-                                                       logger};                                                //
-    auto clrefdef = BranchDefinition<ClusRefsOutputType>{InputSpec{"inputClusRef", "TPC", "CLUSREFS", 0},      //
-                                                         "ClusRefs", "trackclusref-branch-name"};              //
-    auto mcdef = BranchDefinition<std::vector<o2::MCCompLabel>>{InputSpec{"mcinput", "TPC", "TRACKSMCLBL", 0}, //
-                                                                "TPCTracksMCTruth",                            //
-                                                                (propagateMC ? 1 : 0),                         //
-                                                                "trackmc-branch-name"};                        //
+    auto tracksdef = BranchDefinition<TrackOutputType>{InputSpec{"inputTracks", "TPC", filteredInp ? o2::header::DataDescription("TRACKSF") : o2::header::DataDescription("TRACKS"), 0},                //
+                                                       "TPCTracks", "track-branch-name",                                                                                                                //
+                                                       1,                                                                                                                                               //
+                                                       logger};                                                                                                                                         //
+    auto clrefdef = BranchDefinition<ClusRefsOutputType>{InputSpec{"inputClusRef", "TPC", filteredInp ? o2::header::DataDescription("CLUSREFSF") : o2::header::DataDescription("CLUSREFS"), 0},         //
+                                                         "ClusRefs", "trackclusref-branch-name"};                                                                                                       //
+    auto mcdef = BranchDefinition<std::vector<o2::MCCompLabel>>{InputSpec{"mcinput", "TPC", filteredInp ? o2::header::DataDescription("TRACKSMCLBLF") : o2::header::DataDescription("TRACKSMCLBL"), 0}, //
+                                                                "TPCTracksMCTruth",                                                                                                                     //
+                                                                (propagateMC ? 1 : 0),                                                                                                                  //
+                                                                "trackmc-branch-name"};                                                                                                                 //
 
     // depending on the MC propagation flag, branch definition for MC labels is disabled
     specs.push_back(MakeRootTreeWriterSpec(processName, defaultFileName, defaultTreeName,
@@ -499,16 +553,23 @@ framework::WorkflowSpec getWorkflow(CompletionPolicyData* policyData, std::vecto
     const char* defaultFileName = "tpc-compclusters.root";
     const char* defaultTreeName = "tpcrec";
 
-    //branch definitions for RootTreeWriter spec
+    // branch definitions for RootTreeWriter spec
     using CCluSerializedType = ROOTSerialized<CompressedClustersROOT>;
     auto ccldef = BranchDefinition<CCluSerializedType>{InputSpec{"inputCompCl", "TPC", "COMPCLUSTERS"}, //
                                                        "TPCCompClusters_0", "compcluster-branch-name"}; //
 
-    specs.push_back(MakeRootTreeWriterSpec(processName, defaultFileName, defaultTreeName,            //
-                                           std::move(ccldef))());                                    //
+    specs.push_back(MakeRootTreeWriterSpec(processName, defaultFileName, defaultTreeName, //
+                                           std::move(ccldef))());                         //
   }
 
   return std::move(specs);
+}
+
+void cleanupCallback()
+{
+  if (gTask) {
+    gTask->deinitialize();
+  }
 }
 
 } // end namespace reco_workflow

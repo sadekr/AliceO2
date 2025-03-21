@@ -17,18 +17,11 @@
 
 // Pull in several O2 headers with basic data types, or load a header with empty fake classes if O2 headers not available
 
-#if defined(GPUCA_HAVE_O2HEADERS) && (!defined(__OPENCL__) || defined(__OPENCLCPP__))
 #include "DataFormatsTPC/ClusterNative.h"
 #include "DataFormatsTPC/Digit.h"
 #include "DetectorsBase/MatLayerCylSet.h"
 #include "DetectorsBase/Propagator.h"
 #include "TRDBase/GeometryFlat.h"
-#else
-#include "GPUO2FakeClasses.h"
-#endif
-
-#if !defined(__OPENCL__) || defined(__OPENCLCPP__)
 #include "GPUdEdxInfo.h"
-#endif
 
 #endif

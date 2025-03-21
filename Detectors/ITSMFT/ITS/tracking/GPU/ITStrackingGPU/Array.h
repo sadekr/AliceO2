@@ -17,18 +17,12 @@
 #define ITSTRACKINGGPU_ARRAY_H_
 
 #include "GPUCommonDef.h"
-#ifdef __HIPCC__
-#include <hip/hip_runtime.h>
-#endif
 
 namespace o2
 {
 namespace its
 {
 namespace gpu
-{
-
-namespace
 {
 template <typename T, size_t Size>
 struct ArrayTraits final {
@@ -44,20 +38,13 @@ struct ArrayTraits final {
     return const_cast<T*>(internalArray);
   }
 };
-} // namespace
 
 template <typename T, size_t Size>
 struct Array final {
 
   void copy(const Array<T, Size>& t)
   {
-#ifdef __OPENCL__
-    for (size_t i{0}; i < Size; ++i) {
-      InternalArray[i] = t[i];
-    }
-#else
     memcpy(InternalArray, t.data(), Size * sizeof(T));
-#endif
   }
 
   GPUhd() T* data() noexcept { return const_cast<T*>(InternalArray); }

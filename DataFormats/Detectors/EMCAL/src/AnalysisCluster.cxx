@@ -11,7 +11,7 @@
 
 /// \file AnalysisCluster.cxx
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include <gsl/span>
 #include <array>
 #include <TLorentzVector.h>
@@ -44,7 +44,7 @@ TLorentzVector AnalysisCluster::getMomentum(std::array<const float, 3> vertex) c
   if (r > 0) {
     p.SetPxPyPzE(mEnergy * pos[0] / r, mEnergy * pos[1] / r, mEnergy * pos[2] / r, mEnergy);
   } else {
-    LOG(INFO) << "Null cluster radius, momentum calculation not possible";
+    LOG(info) << "Null cluster radius, momentum calculation not possible";
   }
 
   return p;

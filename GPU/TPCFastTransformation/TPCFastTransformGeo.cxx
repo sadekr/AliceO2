@@ -17,18 +17,19 @@
 #include "TPCFastTransformGeo.h"
 #include "FlatObject.h"
 #include "GPUCommonMath.h"
+#include "GPUCommonLogger.h"
 
 #if !defined(GPUCA_GPUCODE)
 #include <iostream>
 #endif
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 TPCFastTransformGeo::TPCFastTransformGeo()
 {
   // Default Constructor: creates an empty uninitialized object
   double dAlpha = 2. * M_PI / (NumberOfSlicesA);
-  for (int i = 0; i < NumberOfSlices; i++) {
+  for (int32_t i = 0; i < NumberOfSlices; i++) {
     SliceInfo& s = mSliceInfos[i];
     double alpha = dAlpha * (i + 0.5);
     s.sinAlpha = sin(alpha);
@@ -36,12 +37,12 @@ TPCFastTransformGeo::TPCFastTransformGeo()
   }
   mSliceInfos[NumberOfSlices] = SliceInfo{0.f, 0.f};
 
-  for (int i = 0; i < MaxNumberOfRows + 1; i++) {
+  for (int32_t i = 0; i < MaxNumberOfRows + 1; i++) {
     mRowInfos[i] = RowInfo{0.f, -1, 0.f, 0.f, 0.f, 0.f};
   }
 }
 
-void TPCFastTransformGeo::startConstruction(int numberOfRows)
+void TPCFastTransformGeo::startConstruction(int32_t numberOfRows)
 {
   /// Starts the construction procedure
 
@@ -58,7 +59,7 @@ void TPCFastTransformGeo::startConstruction(int numberOfRows)
   mScaleSVtoVsideA = 0.f;
   mScaleSVtoVsideC = 0.f;
 
-  for (int i = 0; i < MaxNumberOfRows; i++) {
+  for (int32_t i = 0; i < MaxNumberOfRows; i++) {
     mRowInfos[i] = RowInfo{0.f, -1, 0.f, 0.f, 0.f, 0.f};
   }
 }
@@ -89,7 +90,7 @@ void TPCFastTransformGeo::setTPCalignmentZ(float tpcAlignmentZ)
   mConstructionMask |= ConstructionState::AlignmentIsSet;
 }
 
-void TPCFastTransformGeo::setTPCrow(int iRow, float x, int nPads, float padWidth)
+void TPCFastTransformGeo::setTPCrow(int32_t iRow, float x, int32_t nPads, float padWidth)
 {
   /// Initializes a TPC row
   assert(mConstructionMask & ConstructionState::InProgress);
@@ -124,34 +125,34 @@ void TPCFastTransformGeo::finishConstruction()
   assert(mConstructionMask & ConstructionState::GeometryIsSet);  // geometry is  set
   assert(mConstructionMask & ConstructionState::AlignmentIsSet); // alignment is  set
 
-  for (int i = 0; i < mNumberOfRows; i++) { // all TPC rows are initialized
+  for (int32_t i = 0; i < mNumberOfRows; i++) { // all TPC rows are initialized
     assert(getRowInfo(i).maxPad > 0);
   }
 
-  mConstructionMask = (unsigned int)ConstructionState::Constructed; // clear all other construction flags
+  mConstructionMask = (uint32_t)ConstructionState::Constructed; // clear all other construction flags
 }
 
 void TPCFastTransformGeo::print() const
 {
 /// Prints the geometry
 #if !defined(GPUCA_GPUCODE)
-  std::cout << "TPC Fast Transformation Geometry: " << std::endl;
-  std::cout << "mNumberOfRows = " << mNumberOfRows << std::endl;
-  std::cout << "mTPCzLengthA = " << mTPCzLengthA << std::endl;
-  std::cout << "mTPCzLengthC = " << mTPCzLengthC << std::endl;
-  std::cout << "mTPCalignmentZ = " << mTPCalignmentZ << std::endl;
-  std::cout << "TPC Rows : " << std::endl;
-  for (int i = 0; i < mNumberOfRows; i++) {
-    std::cout << " tpc row " << i << ": x = " << mRowInfos[i].x << " maxPad = " << mRowInfos[i].maxPad << " padWidth = " << mRowInfos[i].padWidth << std::endl;
+  LOG(info) << "TPC Fast Transformation Geometry: ";
+  LOG(info) << "mNumberOfRows = " << mNumberOfRows;
+  LOG(info) << "mTPCzLengthA = " << mTPCzLengthA;
+  LOG(info) << "mTPCzLengthC = " << mTPCzLengthC;
+  LOG(info) << "mTPCalignmentZ = " << mTPCalignmentZ;
+  LOG(info) << "TPC Rows : ";
+  for (int32_t i = 0; i < mNumberOfRows; i++) {
+    LOG(info) << " tpc row " << i << ": x = " << mRowInfos[i].x << " maxPad = " << mRowInfos[i].maxPad << " padWidth = " << mRowInfos[i].padWidth;
   }
 #endif
 }
 
-int TPCFastTransformGeo::test(int slice, int row, float ly, float lz) const
+int32_t TPCFastTransformGeo::test(int32_t slice, int32_t row, float ly, float lz) const
 {
   /// Check consistency of the class
 
-  int error = 0;
+  int32_t error = 0;
 
   if (!isConstructed()) {
     error = -1;
@@ -167,7 +168,7 @@ int TPCFastTransformGeo::test(int slice, int row, float ly, float lz) const
   convGlobalToLocal(slice, gx, gy, gz, lx1, ly1, lz1);
 
   if (fabs(lx1 - lx) > 1.e-4 || fabs(ly1 - ly) > 1.e-4 || fabs(lz1 - lz) > 1.e-7) {
-    std::cout << "Error local <-> global: x " << lx << " dx " << lx1 - lx << " y " << ly << " dy " << ly1 - ly << " z " << lz << " dz " << lz1 - lz << std::endl;
+    LOG(info) << "Error local <-> global: x " << lx << " dx " << lx1 - lx << " y " << ly << " dy " << ly1 - ly << " z " << lz << " dz " << lz1 - lz;
     error = -3;
   }
   float u = 0.f, v = 0.f;
@@ -175,7 +176,7 @@ int TPCFastTransformGeo::test(int slice, int row, float ly, float lz) const
   convUVtoLocal(slice, u, v, ly1, lz1);
 
   if (fabs(ly1 - ly) + fabs(lz1 - lz) > 1.e-6) {
-    std::cout << "Error local <-> UV: y " << ly << " dy " << ly1 - ly << " z " << lz << " dz " << lz1 - lz << std::endl;
+    LOG(info) << "Error local <-> UV: y " << ly << " dy " << ly1 - ly << " z " << lz << " dz " << lz1 - lz;
     error = -4;
   }
 
@@ -184,7 +185,7 @@ int TPCFastTransformGeo::test(int slice, int row, float ly, float lz) const
   convUVtoScaledUV(slice, row, u, v, su, sv);
 
   if (su < 0.f || su > 1.f) {
-    std::cout << "Error scaled U range: u " << u << " su " << su << std::endl;
+    LOG(info) << "Error scaled U range: u " << u << " su " << su;
     error = -5;
   }
 
@@ -192,28 +193,27 @@ int TPCFastTransformGeo::test(int slice, int row, float ly, float lz) const
   convScaledUVtoUV(slice, row, su, sv, u1, v1);
 
   if (fabs(u1 - u) > 1.e-4 || fabs(v1 - v) > 1.e-4) {
-    std::cout << "Error UV<->scaled UV: u " << u << " du " << u1 - u << " v " << v << " dv " << v1 - v << std::endl;
+    LOG(info) << "Error UV<->scaled UV: u " << u << " du " << u1 - u << " v " << v << " dv " << v1 - v;
     error = -6;
   }
 
-  float pad = 0.f;
-  convUtoPad(row, u, pad);
-  convPadToU(row, pad, u1);
+  float pad = convUtoPad(row, u);
+  u1 = convPadToU(row, pad);
 
   if (fabs(u1 - u) > 1.e-5) {
-    std::cout << "Error U<->Pad: u " << u << " pad " << pad << " du " << u1 - u << std::endl;
+    LOG(info) << "Error U<->Pad: u " << u << " pad " << pad << " du " << u1 - u;
     error = -7;
   }
 
 #if !defined(GPUCA_GPUCODE)
   if (error != 0) {
-    std::cout << "TPC Fast Transformation Geometry: Internal ERROR " << error << std::endl;
+    LOG(info) << "TPC Fast Transformation Geometry: Internal ERROR " << error;
   }
 #endif
   return error;
 }
 
-int TPCFastTransformGeo::test() const
+int32_t TPCFastTransformGeo::test() const
 {
   /// Check consistency of the class
 

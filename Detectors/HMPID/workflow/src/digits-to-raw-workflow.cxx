@@ -26,15 +26,13 @@
 #include "Framework/ConfigParamSpec.h"
 #include "Framework/Variant.h"
 #include "CommonUtils/ConfigurableParam.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
 
-// customize the completion policy
-void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
 {
-  using o2::framework::CompletionPolicy;
-  using o2::framework::CompletionPolicyHelpers;
-  policies.push_back(o2::framework::CompletionPolicyHelpers::defineByName("digit-hmpid-write", CompletionPolicy::CompletionOp::Consume));
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
 }
 
 // we need to add workflow options before including Framework/runDataProcessing
@@ -42,7 +40,6 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 {
   std::string keyvaluehelp("Semicolon separated key=value strings ...");
   workflowOptions.push_back(o2::framework::ConfigParamSpec{"configKeyValues", o2::framework::VariantType::String, "", {keyvaluehelp}});
-
   o2::raw::HBFUtilsInitializer::addConfigOption(workflowOptions);
 }
 
@@ -59,7 +56,7 @@ WorkflowSpec defineDataProcessing(const ConfigContext& configcontext)
   DataProcessorSpec consumer = o2::hmpid::getDigitsToRawSpec();
   specs.push_back(consumer);
 
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(configcontext, specs);
 
   return specs;

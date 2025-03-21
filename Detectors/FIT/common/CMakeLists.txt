@@ -9,6 +9,8 @@
 # granted to it by virtue of its status as an Intergovernmental Organization
 # or submit itself to any jurisdiction.
 
-# add_subdirectory(simulation)
-
 add_subdirectory(calibration)
+add_subdirectory(dcsmonitoring)
+if(BUILD_TESTING)
+    add_subdirectory(dcsmonitoring/macros)
+endif()

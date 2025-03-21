@@ -19,7 +19,7 @@
 
 #include "Spline1DSpec.h"
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -109,9 +109,9 @@ namespace gpu
 ///   f[0] = x*x+3.f; // F(x)
 ///  };
 ///
-///  const int nKnots = 3;
+///  const int32_t nKnots = 3;
 ///
-///  int knots[nKnots] = {0, 1, 5}; // relative(!) knot positions
+///  int32_t knots[nKnots] = {0, 1, 5}; // relative(!) knot positions
 ///
 ///  Spline1D<float,1> spline( nKnots, knots ); // create 1-dimensional spline with the knots
 ///
@@ -134,7 +134,7 @@ namespace gpu
 ///    YdimT = 0 : the number of Y dimensions will be set in the runtime
 ///    YdimT < 0 : the number of Y dimensions will be set in the runtime, and it will not exceed abs(YdimT)
 ///
-template <typename DataT, int YdimT = 0>
+template <typename DataT, int32_t YdimT = 0>
 class Spline1D
   : public Spline1DSpec<DataT, YdimT, SplineUtil::getSpec(YdimT)>
 {
@@ -149,6 +149,11 @@ class Spline1D
   using TBase::TBase; // inherit constructors
 
   /// Assignment operator
+  Spline1D() = default;
+  Spline1D(const Spline1D& v) : TBase(v)
+  {
+    TVeryBase::cloneFromObject(v, nullptr);
+  }
   Spline1D& operator=(const Spline1D& v)
   {
     TVeryBase::cloneFromObject(v, nullptr);
@@ -156,11 +161,11 @@ class Spline1D
   }
 #else
   /// Disable constructors for the GPU implementation
-  Spline1D() CON_DELETE;
-  Spline1D(const Spline1D&) CON_DELETE;
+  Spline1D() = delete;
+  Spline1D(const Spline1D&) = delete;
 #endif
 
-#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE) && !defined(GPUCA_ALIROOT_LIB)
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
   /// read a class object from the file
   static Spline1D* readFromFile(TFile& inpf, const char* name)
   {
@@ -168,12 +173,10 @@ class Spline1D
   }
 #endif
 
-#ifndef GPUCA_ALIROOT_LIB
   ClassDefNV(Spline1D, 0);
-#endif
 };
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

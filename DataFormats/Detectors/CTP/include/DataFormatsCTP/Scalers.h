@@ -19,6 +19,7 @@
 #include "DataFormatsCTP/Digits.h"
 #include <map>
 #include <bitset>
+#include <ctime>
 
 namespace o2
 {
@@ -27,6 +28,14 @@ namespace ctp
 /// raw scalers produced by CTP and send to O2 either via
 /// - ZeroMQ published at CTP control machine
 /// - CTPreadout to FLP
+struct errorCounters {
+  errorCounters() = default;
+  void printStream(std::ostream& stream) const;
+  uint32_t lmB = 0, l0B = 0, l1B = 0, lmA = 0, l0A = 0, l1A = 0;       // decreasing counters
+  uint32_t lmBlmA = 0, lmAl0B = 0, l0Bl0A = 0, l0Al1B = 0, l1Bl1A = 0; // between levels countres
+  uint32_t lmBlmAd1 = 0, lmAl0Bd1 = 0, l0Bl0Ad1 = 0, l0Al1Bd1 = 0, l1Bl1Ad1 = 0; // between levels countres - diff =1 - just warning
+  uint32_t MAXPRINT = 3;
+};
 struct CTPScalerRaw {
   CTPScalerRaw() = default;
   uint32_t classIndex;
@@ -51,53 +60,131 @@ struct CTPScalerO2 {
   uint64_t l1Before;
   uint64_t l1After;
   void printStream(std::ostream& stream) const;
+  void printFromZero(std::ostream& stream, CTPScalerO2& scaler0) const;
   ClassDefNV(CTPScalerO2, 1);
 };
 struct CTPScalerRecordRaw {
   CTPScalerRecordRaw() = default;
   o2::InteractionRecord intRecord;
-  uint32_t seconds;
-  uint32_t microSeconds;
+  double_t epochTime;
   std::vector<CTPScalerRaw> scalers;
+  // std::vector<uint32_t> scalersDets;
+  std::vector<uint32_t> scalersInps;
   void printStream(std::ostream& stream) const;
-  ClassDefNV(CTPScalerRecordRaw, 1);
+  ClassDefNV(CTPScalerRecordRaw, 4);
 };
 struct CTPScalerRecordO2 {
   CTPScalerRecordO2() = default;
   o2::InteractionRecord intRecord;
-  uint32_t seconds;
-  uint32_t microSeconds;
+  double_t epochTime;
   std::vector<CTPScalerO2> scalers;
+  // std::vector<uint64_t> scalersDets;
+  std::vector<uint64_t> scalersInps;
   void printStream(std::ostream& stream) const;
-  ClassDefNV(CTPScalerRecordO2, 1);
+  void printFromZero(std::ostream& stream, CTPScalerRecordO2& record0) const;
+  ClassDefNV(CTPScalerRecordO2, 4);
 };
 class CTPRunScalers
 {
  public:
+  //
+  // static constexpr uint32_t NCOUNTERS = 1052;
+  // v1
+  // static constexpr uint32_t NCOUNTERS = 1070;
+  // v2 - orbitid added at the end
+  static constexpr uint32_t NCOUNTERSv2 = 1071;
+  static constexpr uint32_t NCOUNTERS = 1085;
+  static std::vector<std::string> scalerNames;
   CTPRunScalers() = default;
   void printStream(std::ostream& stream) const;
+  void printO2(std::ostream& stream) const;
+  void printFromZero(std::ostream& stream) const;
   void printClasses(std::ostream& stream) const;
   std::vector<uint32_t> getClassIndexes() const;
+  uint32_t getRunNumber() { return mRunNumber; };
+  int getScalerIndexForClass(uint32_t cls) const;
+  std::vector<CTPScalerRecordO2>& getScalerRecordO2() { return mScalerRecordO2; };
+  std::vector<CTPScalerRecordRaw>& getScalerRecordRaw() { return mScalerRecordRaw; };
+  void setEpochTime(std::time_t tt, int index) { mScalerRecordRaw[index].epochTime = tt; };
   int readScalers(const std::string& rawscalers);
   int convertRawToO2();
-  int checkConsistency(const CTPScalerO2& scal0, const CTPScalerO2& scal1) const;
-  int checkConsistency(const CTPScalerRecordO2& rec0, const CTPScalerRecordO2& rec1) const;
+  int checkConsistency(const CTPScalerO2& scal0, const CTPScalerO2& scal1, errorCounters& eCnts) const;
+  int checkConsistency(const CTPScalerRecordO2& rec0, const CTPScalerRecordO2& rec1, errorCounters& eCnts) const;
+  void setClassMask(std::bitset<CTP_NCLASSES> classMask) { mClassMask = classMask; };
+  void setDetectorMask(o2::detectors::DetID::mask_t mask) { mDetectorMask = mask; };
+  void setRunNumber(uint32_t rnumber) { mRunNumber = rnumber; };
+  void addScalerRacordRaw(CTPScalerRecordRaw& scalerrecordraw) { mScalerRecordRaw.push_back(scalerrecordraw); };
+  int printRates();
+  int printIntegrals();
+  int printInputRateAndIntegral(int inp);
+  int printClassBRateAndIntegralII(int icls);
+  int printClassBRateAndIntegral(int iclsinscalers);
+  //
+  int addOrbitOffset(uint32_t offset);
+  //
+  void printLMBRateVsT() const; // prints LMB interaction rate vs time for debugging
+  // returns the pair of global (levelled) interaction rate, as well as interpolated
+  // rate in Hz at a certain orbit number within the run
+  std::pair<double, double> getRate(uint32_t orbit, int classindex, int type, bool qc = 0) const;
+
+  /// same with absolute  timestamp (not orbit) as argument
+  std::pair<double, double> getRateGivenT(double timestamp, int classindex, int type, bool qc = 0) const;
+
+  /// retrieves integral for class
+  std::array<uint64_t, 7> getIntegralForClass(int i) const
+  {
+    return {
+      mScalerRecordO2[0].scalers[i].classIndex,
+      mScalerRecordO2[mScalerRecordO2.size() - 1].scalers[i].lmBefore - mScalerRecordO2[0].scalers[i].lmBefore,
+      mScalerRecordO2[mScalerRecordO2.size() - 1].scalers[i].lmAfter - mScalerRecordO2[0].scalers[i].lmAfter,
+      mScalerRecordO2[mScalerRecordO2.size() - 1].scalers[i].l0Before - mScalerRecordO2[0].scalers[i].l0Before,
+      mScalerRecordO2[mScalerRecordO2.size() - 1].scalers[i].l0After - mScalerRecordO2[0].scalers[i].l0After,
+      mScalerRecordO2[mScalerRecordO2.size() - 1].scalers[i].l1Before - mScalerRecordO2[0].scalers[i].l1Before,
+      mScalerRecordO2[mScalerRecordO2.size() - 1].scalers[i].l1After - mScalerRecordO2[0].scalers[i].l1After,
+    };
+  }
+  /// retrieves integral - same interface as getRate, no pileup correction
+  uint64_t getLumiNoPuCorr(int classindex, int type) const;
+  /// retrieves vector of counters - same interface as getRate, needed for
+  std::vector<std::pair<double_t, double_t>> getRatesForIndex(int classindex, int type) const;
+  /// retrieves time boundaries of this scaler object from O2 scalers
+  std::pair<unsigned long, unsigned long> getTimeLimit() const
+  {
+    return std::make_pair((unsigned long)mScalerRecordO2[0].epochTime * 1000, (unsigned long)mScalerRecordO2[mScalerRecordO2.size() - 1].epochTime * 1000);
+  }
+  /// retrieves time boundaries of this scaler object from Raw: should be same as from O2 and can be used without convertRawToO2 call
+  std::pair<unsigned long, unsigned long> getTimeLimitFromRaw() const
+  {
+    return std::make_pair((unsigned long)mScalerRecordRaw[0].epochTime * 1000, (unsigned long)mScalerRecordRaw[mScalerRecordRaw.size() - 1].epochTime * 1000);
+  }
+  /// retrieves orbit boundaries of this scaler object from O2
+  std::pair<unsigned long, unsigned long> getOrbitLimit() const
+  {
+    return std::make_pair((unsigned long)mScalerRecordO2[0].intRecord.orbit, (unsigned long)mScalerRecordO2[mScalerRecordO2.size() - 1].intRecord.orbit);
+  }
+  /// retrieves orbit boundaries of this scaler object from Raw: should be same as from O2 and can be used without convertRawToO2 call
+  std::pair<unsigned long, unsigned long> getOrbitLimitFromRaw() const
+  {
+    return std::make_pair((unsigned long)mScalerRecordRaw[0].intRecord.orbit, (unsigned long)mScalerRecordRaw[mScalerRecordRaw.size() - 1].intRecord.orbit);
+  }
 
  private:
   // map from class index to overflow
   // overflow counts how many time class scalerers overflowed
   typedef std::map<uint32_t, std::array<uint32_t, 6>> overflows_t;
-  int mVersion;
-  uint32_t mRunNumber;
+  int mVersion = 0;
+  uint32_t mRunNumber = 0;
   // using class mask for all class index related stuff
   std::bitset<CTP_NCLASSES> mClassMask;
+  o2::detectors::DetID::mask_t mDetectorMask;
   std::vector<CTPScalerRecordRaw> mScalerRecordRaw;
   std::vector<CTPScalerRecordO2> mScalerRecordO2;
-  int processScalerLine(const std::string& line, int& level, int& nclasses);
-  int copyRawToO2ScalerRecord(const CTPScalerRecordRaw& rawrec, CTPScalerRecordO2& o2rec, overflows_t& classesoverflows);
+  int processScalerLine(const std::string& line, int& level, uint32_t& nclasses);
+  int copyRawToO2ScalerRecord(const CTPScalerRecordRaw& rawrec, CTPScalerRecordO2& o2rec, overflows_t& classesoverflows, std::array<uint32_t, 48>& overflows);
   int updateOverflows(const CTPScalerRecordRaw& rec0, const CTPScalerRecordRaw& rec1, overflows_t& classesoverflows) const;
   int updateOverflows(const CTPScalerRaw& scal0, const CTPScalerRaw& scal1, std::array<uint32_t, 6>& overflow) const;
-  ClassDefNV(CTPRunScalers, 1);
+  int updateOverflowsInps(const CTPScalerRecordRaw& rec0, const CTPScalerRecordRaw& rec1, std::array<uint32_t, 48>& overflow) const;
+  ClassDefNV(CTPRunScalers, 2);
 };
 } // namespace ctp
 } // namespace o2

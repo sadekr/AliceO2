@@ -14,13 +14,13 @@
 ///
 /// \author Philippe Pillot, Subatech
 
-#ifndef ALICEO2_MCH_TRACK_H_
-#define ALICEO2_MCH_TRACK_H_
+#ifndef O2_MCH_TRACK_H_
+#define O2_MCH_TRACK_H_
 
 #include <list>
 #include <memory>
 
-#include "MCHTracking/Cluster.h"
+#include "DataFormatsMCH/Cluster.h"
 #include "MCHTracking/TrackParam.h"
 
 namespace o2
@@ -109,4 +109,4 @@ class Track
 } // namespace mch
 } // namespace o2
 
-#endif // ALICEO2_MCH_TRACK_H_
+#endif // O2_MCH_TRACK_H_

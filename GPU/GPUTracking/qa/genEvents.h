@@ -17,9 +17,7 @@
 
 #include "GPUCommonDef.h"
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 class GPUChainTracking;
 struct GPUParam;
@@ -30,10 +28,10 @@ class genEvents
  public:
   genEvents(GPUChainTracking* rec) {}
   void InitEventGenerator() {}
-  int GenerateEvent(const GPUParam& sliceParam, char* filename) { return 1; }
+  int32_t GenerateEvent(const GPUParam& sectorParam, char* filename) { return 1; }
   void FinishEventGenerator() {}
 
-  static void RunEventGenerator(GPUChainTracking* rec){};
+  static void RunEventGenerator(GPUChainTracking* rec) {};
 };
 
 #else
@@ -43,39 +41,38 @@ class genEvents
  public:
   genEvents(GPUChainTracking* rec) : mRec(rec) {}
   void InitEventGenerator();
-  int GenerateEvent(const GPUParam& sliceParam, char* filename);
+  int32_t GenerateEvent(const GPUParam& sectorParam, char* filename);
   void FinishEventGenerator();
 
   static void RunEventGenerator(GPUChainTracking* rec);
 
  private:
-  int GetSlice(double GlobalPhi);
-  int GetDSlice(double LocalPhi);
-  double GetSliceAngle(int iSlice);
-  int RecalculateSlice(GPUTPCGMPhysicalTrackModel& t, int& iSlice);
+  int32_t GetSector(double GlobalPhi);
+  int32_t GetDSector(double LocalPhi);
+  double GetSectorAngle(int32_t iSector);
+  int32_t RecalculateSector(GPUTPCGMPhysicalTrackModel& t, int32_t& iSector);
   double GetGaus(double sigma);
 
   TH1F* mClusterError[3][2] = {{nullptr, nullptr}, {nullptr, nullptr}, {nullptr, nullptr}};
 
   struct GenCluster {
-    int sector;
-    int row;
-    int mcID;
+    int32_t sector;
+    int32_t row;
+    int32_t mcID;
     float x;
     float y;
     float z;
-    unsigned int id;
+    uint32_t id;
   };
 
   const double mTwoPi = 2 * M_PI;
-  const double mSliceDAngle = mTwoPi / 18.;
-  const double mSliceAngleOffset = mSliceDAngle / 2;
+  const double mSectorDAngle = mTwoPi / 18.;
+  const double mSectorAngleOffset = mSectorDAngle / 2;
 
   GPUChainTracking* mRec;
 };
 
 #endif
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

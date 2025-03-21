@@ -11,14 +11,16 @@
 
 #include <string>
 
-#include <FairMQDevice.h>
+#include <fairmq/Device.h>
 #include "Headers/DataHeader.h"
 #include "Framework/Logger.h"
 #include "Framework/ProcessingContext.h"
+#include "Framework/TimingInfo.h"
 #include "Framework/RawDeviceService.h"
 #include "Framework/DataRefUtils.h"
 #include "Framework/InputRecord.h"
 #include "Framework/ServiceRegistry.h"
+#include "CommonConstants/LHCConstants.h"
 
 #include "TPCWorkflow/ProcessingHelpers.h"
 
@@ -31,16 +33,21 @@ uint64_t processing_helpers::getRunNumber(ProcessingContext& pc)
   const std::string NAStr = "NA";
 
   uint64_t run = 0;
-  const auto dh = DataRefUtils::getHeader<o2::header::DataHeader*>(pc.inputs().getFirstValid(true));
-  if (dh->runNumber != 0) {
-    run = dh->runNumber;
+  const auto& tinfo = pc.services().get<o2::framework::TimingInfo>();
+  if (tinfo.runNumber != 0) {
+    run = tinfo.runNumber;
   }
   // check runNumber with FMQ property, if set, override DH number
   {
     auto runNStr = pc.services().get<RawDeviceService>().device()->fConfig->GetProperty<std::string>("runNumber", NAStr);
     if (runNStr != NAStr) {
       size_t nc = 0;
-      auto runNProp = std::stol(runNStr, &nc);
+      long runNProp = 0;
+      try {
+        runNProp = std::stol(runNStr, &nc);
+      } catch (...) {
+        nc = (size_t)-1; // makes the next check fail if stol throws when it cannot parse the number
+      }
       if (nc != runNStr.size()) {
         LOGP(error, "Property runNumber={} is provided but is not a number, ignoring", runNStr);
       } else {
@@ -50,4 +57,42 @@ uint64_t processing_helpers::getRunNumber(ProcessingContext& pc)
   }
 
   return run;
+}
+
+uint32_t processing_helpers::getCurrentTF(o2::framework::ProcessingContext& pc)
+{
+  return pc.services().get<o2::framework::TimingInfo>().tfCounter;
+}
+
+uint32_t processing_helpers::getFirstTForbit(o2::framework::ProcessingContext& pc)
+{
+  return pc.services().get<o2::framework::TimingInfo>().firstTForbit;
+}
+
+uint64_t processing_helpers::getCreationTime(o2::framework::ProcessingContext& pc)
+{
+  return pc.services().get<o2::framework::TimingInfo>().creation;
+}
+
+uint64_t processing_helpers::getTimeStamp(o2::framework::ProcessingContext& pc, const Long64_t orbitReset)
+{
+  return getTimeStamp(orbitReset, getFirstTForbit(pc));
+}
+
+uint64_t processing_helpers::getTimeStamp(const Long64_t orbitReset, const uint32_t tfOrbitFirst)
+{
+  const long tPrec = orbitReset + tfOrbitFirst * o2::constants::lhc::LHCOrbitMUS; // microsecond-precise time stamp
+  return tPrec;
+}
+
+uint64_t processing_helpers::getTimeStamp(o2::framework::ProcessingContext& pc)
+{
+  return getTimeStamp(pc, getOrbitReset(pc));
+}
+
+Long64_t processing_helpers::getOrbitReset(o2::framework::ProcessingContext& pc)
+{
+  auto tv = pc.inputs().get<std::vector<Long64_t>*>("orbitreset");
+  const auto orbitReset = tv->front();
+  return orbitReset;
 }

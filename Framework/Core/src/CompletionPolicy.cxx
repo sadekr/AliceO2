@@ -25,8 +25,12 @@ std::vector<CompletionPolicy>
   CompletionPolicy::createDefaultPolicies()
 {
   return {
-    CompletionPolicyHelpers::defineByNameOrigin("internal-dpl-aod-writer", "TFN", CompletionOp::Consume),
-    CompletionPolicyHelpers::defineByName("internal-dpl-injected-dummy-sink", CompletionOp::Discard),
+    CompletionPolicyHelpers::consumeWhenAllOrdered("internal-dpl-aod-writer"),
+#if __has_include(<fairmq/shmem/Message.h>)
+    CompletionPolicyHelpers::consumeWhenAnyZeroCount("internal-dpl-injected-dummy-sink", [](DeviceSpec const& s) { return s.name.find("internal-dpl-injected-dummy-sink") != std::string::npos; }),
+#else
+    CompletionPolicyHelpers::consumeWhenAny("internal-dpl-injected-dummy-sink", [](DeviceSpec const& s) { return s.name.find("internal-dpl-injected-dummy-sink") != std::string::npos; }),
+#endif
     CompletionPolicyHelpers::consumeWhenAll()};
 }
 
@@ -47,6 +51,13 @@ std::ostream& operator<<(std::ostream& oss, CompletionPolicy::CompletionOp const
       break;
     case CompletionPolicy::CompletionOp::ConsumeExisting:
       oss << "consumeExisting";
+      break;
+    case CompletionPolicy::CompletionOp::ConsumeAndRescan:
+      oss << "consumeAndRescan";
+      break;
+    case CompletionPolicy::CompletionOp::Retry:
+      oss << "retry";
+      break;
   };
   return oss;
 }

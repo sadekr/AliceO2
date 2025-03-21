@@ -18,26 +18,26 @@
 #pragma link C++ class o2::fv0::Hit + ;
 #pragma link C++ class vector < o2::fv0::Hit> + ;
 #pragma link C++ class o2::fv0::MCLabel + ;
+#include "SimulationDataFormat/MCTruthContainer.h"
+#pragma link C++ class o2::dataformats::MCTruthContainer < o2::fv0::MCLabel> + ;
 
 #pragma link C++ class o2::fv0::ChannelData + ;
-#pragma link C++ class o2::fv0::BCData + ;
-#pragma link C++ class o2::fv0::Triggers + ;
+#pragma link C++ class o2::fv0::Digit + ;
 #pragma link C++ class o2::fv0::DetTrigInput + ;
 #pragma link C++ class std::vector < o2::fv0::ChannelData> + ;
-#pragma link C++ class std::vector < o2::fv0::Triggers> + ;
 #pragma link C++ class std::vector < o2::fv0::DetTrigInput> + ;
-#pragma link C++ class std::vector < o2::fv0::BCData> + ;
-
-#pragma link C++ class o2::fv0::RawEventData + ;
-#pragma link C++ class o2::fv0::Topo + ;
+#pragma link C++ class std::vector < o2::fv0::Digit> + ;
 
 #pragma link C++ class o2::fv0::CTFHeader + ;
 #pragma link C++ class o2::fv0::CTF + ;
-#pragma link C++ class o2::ctf::EncodedBlocks < o2::fv0::CTFHeader, 6, uint32_t> + ;
+#pragma link C++ class o2::ctf::EncodedBlocks < o2::fv0::CTFHeader, 8, uint32_t> + ;
 
 #pragma link C++ class o2::fv0::RecPoints + ;
 #pragma link C++ class vector < o2::fv0::RecPoints> + ;
 #pragma link C++ class o2::fv0::ChannelDataFloat + ;
 #pragma link C++ class vector < o2::fv0::ChannelDataFloat> + ;
+
+#pragma link C++ class o2::fv0::FV0CalibrationInfoObject + ;
+#pragma link C++ class o2::fv0::FV0ChannelTimeCalibrationObject + ;
 
 #endif

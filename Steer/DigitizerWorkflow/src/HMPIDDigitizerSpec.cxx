@@ -30,10 +30,10 @@
 #include "DetectorsBase/BaseDPLDigitizer.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include <SimConfig/DigiParams.h>
+#include "DetectorsRaw/HBFUtils.h"
 
 using namespace o2::framework;
 using SubSpecificationType = o2::framework::DataAllocator::SubSpecificationType;
-
 
 namespace o2
 {
@@ -55,16 +55,24 @@ class HMPIDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
     if (finished) {
       return;
     }
-    LOG(INFO) << "Doing HMPID digitization";
+    LOG(info) << "Doing HMPID digitization";
 
     // read collision context from input
     auto context = pc.inputs().get<o2::steer::DigitizationContext*>("collisioncontext");
+
+    if (context->hasTriggerInput()) {
+      auto ctpdigits = context->getCTPDigits();
+      LOG(info) << "Yes, we have CTP digits";
+      LOG(info) << "We have " << ctpdigits->size() << " digits";
+    } else {
+      LOG(info) << "No trigger input available ... selftriggering";
+    }
 
     context->initSimChains(o2::detectors::DetID::HMP, mSimChains);
 
     auto& irecords = context->getEventRecords();
     for (auto& record : irecords) {
-      LOG(INFO) << "HMPID TIME RECEIVED " << record.getTimeNS();
+      LOG(info) << "HMPID TIME RECEIVED " << record.getTimeNS();
     }
 
     auto& eventParts = context->getEventParts();
@@ -77,60 +85,70 @@ class HMPIDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
       mDigits.clear();
       mLabels.clear();
       mDigitizer.flush(mDigits);
-      LOG(INFO) << "HMPID flushed " << mDigits.size() << " digits at this time ";
-      LOG(INFO) << "NUMBER OF LABEL OBTAINED " << mLabels.getNElements();
+      LOG(info) << "HMPID flushed " << mDigits.size() << " digits at this time ";
+      LOG(info) << "NUMBER OF LABEL OBTAINED " << mLabels.getNElements();
       int32_t first = digitsAccum.size(); // this is the first
       std::copy(mDigits.begin(), mDigits.end(), std::back_inserter(digitsAccum));
       labelAccum.mergeAtBack(mLabels);
 
       // save info for the triggers accepted
-      LOG(INFO) << "Trigger  Orbit :" << mDigitizer.getOrbit() << "  BC:" << mDigitizer.getBc();
+      LOG(info) << "Trigger  Orbit :" << mDigitizer.getOrbit() << "  BC:" << mDigitizer.getBc();
       mIntRecord.push_back(o2::hmpid::Trigger(o2::InteractionRecord(mDigitizer.getBc(), mDigitizer.getOrbit()), first, digitsAccum.size() - first));
     };
+
+    // the interaction record marking the timeframe start
+    auto firstTF = InteractionTimeRecord(o2::raw::HBFUtils::Instance().getFirstSampledTFIR(), 0);
 
     // loop over all composite collisions given from context
     // (aka loop over all the interaction records)
     for (int collID = 0; collID < irecords.size(); ++collID) {
+      // Note: Very crude filter to neglect collisions coming before
+      // the first interaction record of the timeframe. Remove this, once these collisions can be handled
+      // within the digitization routine. Collisions before this timeframe might impact digits of this timeframe.
+      // See https://its.cern.ch/jira/browse/O2-5395.
+      if (irecords[collID] < firstTF) {
+        LOG(info) << "Too early: Not digitizing collision " << collID;
+        continue;
+      }
+
       // try to start new readout cycle by setting the trigger time
       auto triggeraccepted = mDigitizer.setTriggerTime(irecords[collID].getTimeNS());
       if (triggeraccepted) {
-        flushDigitsAndLabels(); // flush previous readout cycle
-      }
-      auto withinactivetime = mDigitizer.setEventTime(irecords[collID].getTimeNS());
-      if (withinactivetime) {
-        // for each collision, loop over the constituents event and source IDs
-        // (background signal merging is basically taking place here)
-        for (auto& part : eventParts[collID]) {
-          mDigitizer.setEventID(part.entryID);
-          mDigitizer.setSrcID(part.sourceID);
+        auto withinactivetime = mDigitizer.setEventTime(irecords[collID].getTimeNS());
+        if (withinactivetime) {
+          // for each collision, loop over the constituents event and source IDs
+          // (background signal merging is basically taking place here)
+          for (auto& part : eventParts[collID]) {
+            mDigitizer.setEventID(part.entryID);
+            mDigitizer.setSrcID(part.sourceID);
 
-          // get the hits for this event and this source
-          std::vector<o2::hmpid::HitType> hits;
-          context->retrieveHits(mSimChains, "HMPHit", part.sourceID, part.entryID, &hits);
-          LOG(INFO) << "For collision " << collID << " eventID " << part.entryID << " found HMP " << hits.size() << " hits ";
+            // get the hits for this event and this source
+            std::vector<o2::hmpid::HitType> hits;
+            context->retrieveHits(mSimChains, "HMPHit", part.sourceID, part.entryID, &hits);
+            LOG(info) << "For collision " << collID << " eventID " << part.entryID << " found HMP " << hits.size() << " hits ";
 
-          mDigitizer.setLabelContainer(&mLabels);
-          mLabels.clear();
-          mDigits.clear();
+            mDigitizer.setLabelContainer(&mLabels);
+            mLabels.clear();
+            mDigits.clear();
 
-          mDigitizer.process(hits, mDigits);
+            mDigitizer.process(hits, mDigits);
+          }
+
+          flushDigitsAndLabels(); // flush previous readout cycle
+        } else {
+          LOG(info) << "COLLISION " << collID << "FALLS WITHIN A DEAD TIME";
         }
-
-      } else {
-        LOG(INFO) << "COLLISION " << collID << "FALLS WITHIN A DEAD TIME";
       }
     }
-    // final flushing step; getting everything not yet written out
-    flushDigitsAndLabels();
 
     // send out to next stage
-    pc.outputs().snapshot(Output{"HMP", "DIGITS", 0, Lifetime::Timeframe}, digitsAccum);
-    pc.outputs().snapshot(Output{"HMP", "INTRECORDS", 0, Lifetime::Timeframe}, mIntRecord);
+    pc.outputs().snapshot(Output{"HMP", "DIGITS", 0}, digitsAccum);
+    pc.outputs().snapshot(Output{"HMP", "INTRECORDS", 0}, mIntRecord);
     if (pc.outputs().isAllowed({"HMP", "DIGITLBL", 0})) {
-      pc.outputs().snapshot(Output{"HMP", "DIGITLBL", 0, Lifetime::Timeframe}, labelAccum);
+      pc.outputs().snapshot(Output{"HMP", "DIGITLBL", 0}, labelAccum);
     }
-    LOG(INFO) << "HMP: Sending ROMode= " << mROMode << " to GRPUpdater";
-    pc.outputs().snapshot(Output{"HMP", "ROMode", 0, Lifetime::Timeframe}, mROMode);
+    LOG(info) << "HMP: Sending ROMode= " << mROMode << " to GRPUpdater";
+    pc.outputs().snapshot(Output{"HMP", "ROMode", 0}, mROMode);
 
     // we should be only called once; tell DPL that this process is ready to exit
     pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
@@ -145,7 +163,7 @@ class HMPIDDPLDigitizerTask : public o2::base::BaseDPLDigitizer
   std::vector<o2::hmpid::Trigger> mIntRecord;
 
   // RS: at the moment using hardcoded flag for continuous readout
-  o2::parameters::GRPObject::ROMode mROMode = o2::parameters::GRPObject::CONTINUOUS; // readout mode
+  o2::parameters::GRPObject::ROMode mROMode = o2::parameters::GRPObject::PRESENT; // readout mode
 };
 
 o2::framework::DataProcessorSpec getHMPIDDigitizerSpec(int channel, bool mctruth)

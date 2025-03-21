@@ -16,9 +16,6 @@
 #define GPUO2INTERFACE_H
 
 // Some defines denoting that we are compiling for O2
-#ifndef GPUCA_HAVE_O2HEADERS
-#define GPUCA_HAVE_O2HEADERS
-#endif
 #ifndef GPUCA_TPC_GEOMETRY_O2
 #define GPUCA_TPC_GEOMETRY_O2
 #endif
@@ -27,25 +24,44 @@
 #endif
 
 #include <memory>
+#include <array>
 #include <vector>
 #include "GPUCommonDef.h"
 #include "GPUDataTypes.h"
+
+namespace o2::base
+{
+template <typename value_T>
+class PropagatorImpl;
+using Propagator = PropagatorImpl<float>;
+} // namespace o2::base
 namespace o2::tpc
 {
 struct ClusterNativeAccess;
 struct ClusterNative;
-template <class T>
-class CalDet;
 } // namespace o2::tpc
+
+namespace o2::its
+{
+class TrackerTraits;
+class VertexerTraits;
+class TimeFrame;
+} // namespace o2::its
 
 namespace o2::gpu
 {
 class GPUReconstruction;
 class GPUChainTracking;
+class GPUChainITS;
 struct GPUO2InterfaceConfiguration;
 struct GPUInterfaceOutputs;
+struct GPUInterfaceInputUpdate;
 struct GPUTrackingOutputs;
 struct GPUConstantMem;
+struct GPUNewCalibValues;
+
+struct GPUO2Interface_processingContext;
+struct GPUO2Interface_Internals;
 
 class GPUO2Interface
 {
@@ -53,24 +69,24 @@ class GPUO2Interface
   GPUO2Interface();
   ~GPUO2Interface();
 
-  int Initialize(const GPUO2InterfaceConfiguration& config);
+  int32_t Initialize(const GPUO2InterfaceConfiguration& config);
   void Deinitialize();
 
-  int RunTracking(GPUTrackingInOutPointers* data, GPUInterfaceOutputs* outputs = nullptr);
-  void Clear(bool clearOutputs);
+  int32_t RunTracking(GPUTrackingInOutPointers* data, GPUInterfaceOutputs* outputs = nullptr, uint32_t iThread = 0, GPUInterfaceInputUpdate* inputUpdateCallback = nullptr);
+  void Clear(bool clearOutputs, uint32_t iThread = 0);
+  void DumpEvent(int32_t nEvent, GPUTrackingInOutPointers* data);
+  void DumpSettings();
+
+  void GetITSTraits(o2::its::TrackerTraits*& trackerTraits, o2::its::VertexerTraits*& vertexerTraits, o2::its::TimeFrame*& timeFrame);
+  const o2::base::Propagator* GetDeviceO2Propagator(int32_t iThread = 0) const;
+  void UseGPUPolynomialFieldInPropagator(o2::base::Propagator* prop) const;
 
   // Updates all calibration objects that are != nullptr in newCalib
-  int UpdateCalibration(const GPUCalibObjectsConst& newCalib);
+  int32_t UpdateCalibration(const GPUCalibObjectsConst& newCalib, const GPUNewCalibValues& newVals, uint32_t iThread = 0);
 
-  bool GetParamContinuous() { return (mContinuous); }
-  void GetClusterErrors2(int row, float z, float sinPhi, float DzDs, short clusterState, float& ErrY2, float& ErrZ2) const;
-
-  static std::unique_ptr<TPCPadGainCalib> getPadGainCalibDefault();
-  static std::unique_ptr<TPCPadGainCalib> getPadGainCalib(const o2::tpc::CalDet<float>& in);
-  static std::unique_ptr<TPCdEdxCalibrationSplines> getdEdxCalibrationSplinesDefault();
-
-  int registerMemoryForGPU(const void* ptr, size_t size);
-  int unregisterMemoryForGPU(const void* ptr);
+  int32_t registerMemoryForGPU(const void* ptr, size_t size);
+  int32_t unregisterMemoryForGPU(const void* ptr);
+  void setErrorCodeOutput(std::vector<std::array<uint32_t, 4>>* v);
 
   const GPUO2InterfaceConfiguration& getConfig() const { return *mConfig; }
 
@@ -78,13 +94,14 @@ class GPUO2Interface
   GPUO2Interface(const GPUO2Interface&);
   GPUO2Interface& operator=(const GPUO2Interface&);
 
-  bool mInitialized = false;
   bool mContinuous = false;
 
-  std::unique_ptr<GPUReconstruction> mRec;              //!
-  GPUChainTracking* mChain = nullptr;                   //!
-  std::unique_ptr<GPUO2InterfaceConfiguration> mConfig; //!
-  std::unique_ptr<GPUTrackingOutputs> mOutputRegions;   //!
+  uint32_t mNContexts = 0;
+  std::unique_ptr<GPUO2Interface_processingContext[]> mCtx;
+
+  std::unique_ptr<GPUO2InterfaceConfiguration> mConfig;
+  GPUChainITS* mChainITS = nullptr;
+  std::unique_ptr<GPUO2Interface_Internals> mInternals;
 };
 } // namespace o2::gpu
 

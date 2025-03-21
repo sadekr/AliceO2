@@ -15,6 +15,7 @@
 
 #include <fmt/format.h>
 #include <chrono>
+#include "Framework/TimingInfo.h"
 #include "DataFormatsGlobalTracking/RecoContainerCreateTracksVariadic.h"
 #include "CommonDataFormat/TimeStamp.h"
 #include "CommonDataFormat/IRFrame.h"
@@ -22,17 +23,28 @@
 #include "ReconstructionDataFormats/VtxTrackRef.h"
 #include "ReconstructionDataFormats/PrimaryVertex.h"
 #include "SimulationDataFormat/MCEventLabel.h"
+#include "ReconstructionDataFormats/DecayNBodyIndex.h"
 #include "ReconstructionDataFormats/V0.h"
 #include "ReconstructionDataFormats/Cascade.h"
+#include "ReconstructionDataFormats/Decay3Body.h"
+#include "ReconstructionDataFormats/StrangeTrack.h"
 #include "ReconstructionDataFormats/VtxTrackIndex.h"
 #include "ReconstructionDataFormats/VtxTrackRef.h"
 #include "ReconstructionDataFormats/TrackCosmics.h"
+#include "ReconstructionDataFormats/TrackMCHMID.h"
 #include "DataFormatsITSMFT/TrkClusRef.h"
+#include "DataFormatsITSMFT/TopologyDictionary.h"
+#include "ITSMFTBase/DPLAlpideParam.h"
 // FIXME: ideally, the data formats definition should be independent of the framework
 // collectData is using the input of ProcessingContext to extract the first valid
 // header and the TF orbit from it
 #include "Framework/ProcessingContext.h"
 #include "Framework/DataRefUtils.h"
+#include "Framework/CCDBParamSpec.h"
+
+#ifdef ENABLE_UPGRADES
+#include "ITS3Reconstruction/TopologyDictionary.h"
+#endif
 
 using namespace o2::globaltracking;
 using namespace o2::framework;
@@ -62,6 +74,7 @@ void DataRequest::requestITSTracks(bool mc)
   addInput({"trackITS", "ITS", "TRACKS", 0, Lifetime::Timeframe});
   addInput({"trackITSROF", "ITS", "ITSTrackROF", 0, Lifetime::Timeframe});
   addInput({"trackITSClIdx", "ITS", "TRACKCLSID", 0, Lifetime::Timeframe});
+  addInput({"alpparITS", "ITS", "ALPIDEPARAM", 0, Lifetime::Condition, ccdbParamSpec("ITS/Config/AlpideParam")});
   if (mc) {
     addInput({"trackITSMCTR", "ITS", "TRACKSMCTR", 0, Lifetime::Timeframe});
   }
@@ -73,6 +86,7 @@ void DataRequest::requestMFTTracks(bool mc)
   addInput({"trackMFT", "MFT", "TRACKS", 0, Lifetime::Timeframe});
   addInput({"trackMFTROF", "MFT", "MFTTrackROF", 0, Lifetime::Timeframe});
   addInput({"trackMFTClIdx", "MFT", "TRACKCLSID", 0, Lifetime::Timeframe});
+  addInput({"alpparMFT", "MFT", "ALPIDEPARAM", 0, Lifetime::Condition, ccdbParamSpec("MFT/Config/AlpideParam")});
   if (mc) {
     addInput({"trackMFTMCTR", "MFT", "TRACKSMCTR", 0, Lifetime::Timeframe});
   }
@@ -109,6 +123,7 @@ void DataRequest::requestTPCTracks(bool mc)
   addInput({"trackTPCClRefs", "TPC", "CLUSREFS", 0, Lifetime::Timeframe});
   if (requestMap.find("clusTPC") != requestMap.end()) {
     addInput({"clusTPCshmap", "TPC", "CLSHAREDMAP", 0, Lifetime::Timeframe});
+    addInput({"clusTPCoccmap", "TPC", "TPCOCCUPANCYMAP", 0, Lifetime::Timeframe});
   }
   if (mc) {
     addInput({"trackTPCMCTR", "TPC", "TRACKSMCLBL", 0, Lifetime::Timeframe});
@@ -135,6 +150,21 @@ void DataRequest::requestGlobalFwdTracks(bool mc)
     addInput({"MCTruth", "GLO", "GLFWD_MC", 0, Lifetime::Timeframe});
   }
   requestMap["fwdtracks"] = mc;
+}
+
+void DataRequest::requestMFTMCHMatches(bool mc)
+{
+  addInput({"matchMFTMCH", "GLO", "MTC_MFTMCH", 0, Lifetime::Timeframe});
+  requestMap["matchMFTMCH"] = mc;
+}
+
+void DataRequest::requestMCHMIDMatches(bool mc)
+{
+  addInput({"matchMCHMID", "GLO", "MTC_MCHMID", 0, Lifetime::Timeframe});
+  if (mc) {
+    addInput({"matchMCHMID_MCTR", "GLO", "MCMTC_MCHMID", 0, Lifetime::Timeframe});
+  }
+  requestMap["matchMCHMID"] = mc;
 }
 
 void DataRequest::requestTPCTOFTracks(bool mc)
@@ -201,17 +231,36 @@ void DataRequest::requestITSClusters(bool mc)
   addInput({"clusITS", "ITS", "COMPCLUSTERS", 0, Lifetime::Timeframe});
   addInput({"clusITSPatt", "ITS", "PATTERNS", 0, Lifetime::Timeframe});
   addInput({"clusITSROF", "ITS", "CLUSTERSROF", 0, Lifetime::Timeframe});
+  addInput({"alpparITS", "ITS", "ALPIDEPARAM", 0, Lifetime::Condition, ccdbParamSpec("ITS/Config/AlpideParam")});
   if (mc) {
     addInput({"clusITSMC", "ITS", "CLUSTERSMCTR", 0, Lifetime::Timeframe});
   }
+  addInput({"cldictITS", "ITS", "CLUSDICT", 0, Lifetime::Condition, ccdbParamSpec("ITS/Calib/ClusterDictionary")});
   requestMap["clusITS"] = mc;
 }
+
+#ifdef ENABLE_UPGRADES
+void DataRequest::requestIT3Clusters(bool mc)
+{
+  addInput({"clusITS", "ITS", "COMPCLUSTERS", 0, Lifetime::Timeframe});
+  addInput({"clusITSPatt", "ITS", "PATTERNS", 0, Lifetime::Timeframe});
+  addInput({"clusITSROF", "ITS", "CLUSTERSROF", 0, Lifetime::Timeframe});
+  addInput({"alpparITS", "ITS", "ALPIDEPARAM", 0, Lifetime::Condition, ccdbParamSpec("ITS/Config/AlpideParam")});
+  if (mc) {
+    addInput({"clusITSMC", "ITS", "CLUSTERSMCTR", 0, Lifetime::Timeframe});
+  }
+  addInput({"cldictIT3", "IT3", "CLUSDICT", 0, Lifetime::Condition, ccdbParamSpec("IT3/Calib/ClusterDictionary")});
+  requestMap["clusIT3"] = mc;
+}
+#endif
 
 void DataRequest::requestMFTClusters(bool mc)
 {
   addInput({"clusMFT", "MFT", "COMPCLUSTERS", 0, Lifetime::Timeframe});
   addInput({"clusMFTPatt", "MFT", "PATTERNS", 0, Lifetime::Timeframe});
   addInput({"clusMFTROF", "MFT", "CLUSTERSROF", 0, Lifetime::Timeframe});
+  addInput({"cldictMFT", "MFT", "CLUSDICT", 0, Lifetime::Condition, ccdbParamSpec("MFT/Calib/ClusterDictionary")});
+  addInput({"alpparMFT", "MFT", "ALPIDEPARAM", 0, Lifetime::Condition, ccdbParamSpec("MFT/Config/AlpideParam")});
   if (mc) {
     addInput({"clusMFTMC", "MFT", "CLUSTERSMCTR", 0, Lifetime::Timeframe});
   }
@@ -221,13 +270,23 @@ void DataRequest::requestMFTClusters(bool mc)
 void DataRequest::requestTPCClusters(bool mc)
 {
   addInput({"clusTPC", ConcreteDataTypeMatcher{"TPC", "CLUSTERNATIVE"}, Lifetime::Timeframe});
+  if (!getenv("DPL_DISABLE_TPC_TRIGGER_READER") || atoi(getenv("DPL_DISABLE_TPC_TRIGGER_READER")) != 1) {
+    requestTPCTriggers();
+  }
   if (requestMap.find("trackTPC") != requestMap.end()) {
     addInput({"clusTPCshmap", "TPC", "CLSHAREDMAP", 0, Lifetime::Timeframe});
+    addInput({"clusTPCoccmap", "TPC", "TPCOCCUPANCYMAP", 0, Lifetime::Timeframe});
   }
   if (mc) {
     addInput({"clusTPCMC", ConcreteDataTypeMatcher{"TPC", "CLNATIVEMCLBL"}, Lifetime::Timeframe});
   }
   requestMap["clusTPC"] = mc;
+}
+
+void DataRequest::requestTPCTriggers()
+{
+  addInput({"trigTPC", "TPC", "TRIGGERWORDS", 0, Lifetime::Timeframe});
+  requestMap["trigTPC"] = false;
 }
 
 void DataRequest::requestTOFClusters(bool mc)
@@ -237,6 +296,44 @@ void DataRequest::requestTOFClusters(bool mc)
     addInput({"tofclusterlabel", "TOF", "CLUSTERSMCTR", 0, Lifetime::Timeframe});
   }
   requestMap["clusTOF"] = mc;
+}
+
+void DataRequest::requestMCHClusters(bool mc)
+{
+  if (mc) {
+    LOG(warn) << "MCH global clusters do not support MC lables, disabling";
+    mc = false;
+  }
+  addInput({"clusMCH", "MCH", "GLOBALCLUSTERS", 0, Lifetime::Timeframe});
+  addInput({"clusMCHROF", "MCH", "CLUSTERROFS", 0, Lifetime::Timeframe});
+  if (mc) {
+    addInput({"clusMCHMC", "MCH", "CLUSTERLABELS", 0, Lifetime::Timeframe});
+  }
+  requestMap["clusMCH"] = mc;
+}
+
+void DataRequest::requestHMPClusters(bool mc)
+{
+  if (mc) { // RS: remove this once labels will be available
+    LOG(warn) << "HMP clusters do not support MC lables, disabling";
+    mc = false;
+  }
+  addInput({"hmpidcluster", "HMP", "CLUSTERS", 0, Lifetime::Timeframe});
+  addInput({"hmpidtriggers", "HMP", "INTRECORDS1", 0, Lifetime::Timeframe});
+  if (mc) {
+    addInput({"hmpidclusterlabel", "HMP", "CLUSTERSMCTR", 0, Lifetime::Timeframe});
+  }
+  requestMap["clusHMP"] = mc;
+}
+
+void DataRequest::requestMIDClusters(bool mc)
+{
+  addInput({"clusMID", "MID", "CLUSTERS", 0, Lifetime::Timeframe});
+  addInput({"clusMIDROF", "MID", "CLUSTERSROF", 0, Lifetime::Timeframe});
+  if (mc) {
+    addInput({"clusMIDMC", "MID", "CLUSTERSLABELS", 0, Lifetime::Timeframe});
+  }
+  requestMap["clusMID"] = mc;
 }
 
 void DataRequest::requestTRDTracklets(bool mc)
@@ -256,7 +353,7 @@ void DataRequest::requestFT0RecPoints(bool mc)
   addInput({"ft0recpoints", "FT0", "RECPOINTS", 0, Lifetime::Timeframe});
   addInput({"ft0channels", "FT0", "RECCHDATA", 0, Lifetime::Timeframe});
   if (mc) {
-    LOG(ERROR) << "FT0 RecPoint does not support MC truth";
+    LOG(error) << "FT0 RecPoint does not support MC truth";
   }
   requestMap["FT0"] = false;
 }
@@ -266,7 +363,7 @@ void DataRequest::requestFV0RecPoints(bool mc)
   addInput({"fv0recpoints", "FV0", "RECPOINTS", 0, Lifetime::Timeframe});
   addInput({"fv0channels", "FV0", "RECCHDATA", 0, Lifetime::Timeframe});
   if (mc) {
-    LOG(ERROR) << "FV0 RecPoint does not support MC truth";
+    LOG(error) << "FV0 RecPoint does not support MC truth";
   }
   requestMap["FV0"] = false;
 }
@@ -276,7 +373,7 @@ void DataRequest::requestFDDRecPoints(bool mc)
   addInput({"fddrecpoints", "FDD", "RECPOINTS", 0, Lifetime::Timeframe});
   addInput({"fddchannels", "FDD", "RECCHDATA", 0, Lifetime::Timeframe});
   if (mc) {
-    LOG(ERROR) << "FDD RecPoint does not support MC truth";
+    LOG(error) << "FDD RecPoint does not support MC truth";
   }
   requestMap["FDD"] = false;
 }
@@ -288,7 +385,7 @@ void DataRequest::requestZDCRecEvents(bool mc)
   addInput({"zdctdcdata", "ZDC", "TDCDATA", 0, Lifetime::Timeframe});
   addInput({"zdcinfo", "ZDC", "INFO", 0, Lifetime::Timeframe});
   if (mc) {
-    LOG(ERROR) << "ZDC RecEvent does not support MC truth";
+    LOG(error) << "ZDC RecEvent does not support MC truth";
   }
   requestMap["ZDC"] = false;
 }
@@ -302,7 +399,7 @@ void DataRequest::requestCoscmicTracks(bool mc)
   requestMap["Cosmics"] = mc;
 }
 
-void DataRequest::requestPrimaryVertertices(bool mc)
+void DataRequest::requestPrimaryVertices(bool mc)
 {
   addInput({"pvtx", "GLO", "PVTX", 0, Lifetime::Timeframe});
   addInput({"pvtx_trmtc", "GLO", "PVTX_TRMTC", 0, Lifetime::Timeframe});    // global ids of associated tracks
@@ -313,7 +410,7 @@ void DataRequest::requestPrimaryVertertices(bool mc)
   requestMap["PVertex"] = mc;
 }
 
-void DataRequest::requestPrimaryVerterticesTMP(bool mc) // primary vertices before global vertex-track matching
+void DataRequest::requestPrimaryVerticesTMP(bool mc) // primary vertices before global vertex-track matching
 {
   addInput({"pvtx", "GLO", "PVTX", 0, Lifetime::Timeframe});
   addInput({"pvtx_cont", "GLO", "PVTX_CONTID", 0, Lifetime::Timeframe});        // global ids of contributors
@@ -324,21 +421,36 @@ void DataRequest::requestPrimaryVerterticesTMP(bool mc) // primary vertices befo
   requestMap["PVertexTMP"] = mc;
 }
 
-void DataRequest::requestSecondaryVertertices(bool)
+void DataRequest::requestSecondaryVertices(bool)
 {
+  addInput({"v0sIdx", "GLO", "V0S_IDX", 0, Lifetime::Timeframe});
   addInput({"v0s", "GLO", "V0S", 0, Lifetime::Timeframe});
   addInput({"p2v0s", "GLO", "PVTX_V0REFS", 0, Lifetime::Timeframe});
+  addInput({"cascsIdx", "GLO", "CASCS_IDX", 0, Lifetime::Timeframe});
   addInput({"cascs", "GLO", "CASCS", 0, Lifetime::Timeframe});
   addInput({"p2cascs", "GLO", "PVTX_CASCREFS", 0, Lifetime::Timeframe});
+  addInput({"decay3bodyIdx", "GLO", "DECAYS3BODY_IDX", 0, Lifetime::Timeframe});
+  addInput({"decay3body", "GLO", "DECAYS3BODY", 0, Lifetime::Timeframe});
+  addInput({"p2decay3body", "GLO", "PVTX_3BODYREFS", 0, Lifetime::Timeframe});
   requestMap["SVertex"] = false; // no MC provided for secondary vertices
+}
+
+void DataRequest::requestStrangeTracks(bool mc)
+{
+  addInput({"strangetracks", "GLO", "STRANGETRACKS", 0, Lifetime::Timeframe});
+  if (mc) {
+    addInput({"strack_mc", "GLO", "STRANGETRACKS_MC", 0, Lifetime::Timeframe});
+  }
+  requestMap["STracker"] = mc; // no MC for the time being
 }
 
 void DataRequest::requestCTPDigits(bool mc)
 {
   addInput({"CTPDigits", "CTP", "DIGITS", 0, Lifetime::Timeframe});
+  addInput({"CTPLumi", "CTP", "LUMI", 0, Lifetime::Timeframe});
   if (mc) {
-    LOG(WARNING) << "MC truth not implemented for CTP";
-    //addInput({"CTPDigitsMC", "CTP", "DIGITSMCTR", 0, Lifetime::Timeframe});
+    LOG(warning) << "MC truth not implemented for CTP";
+    // addInput({"CTPDigitsMC", "CTP", "DIGITSMCTR", 0, Lifetime::Timeframe});
   }
   requestMap["CTPDigits"] = false;
 }
@@ -366,11 +478,20 @@ void DataRequest::requestPHOSCells(bool mc)
 void DataRequest::requestEMCALCells(bool mc)
 {
   addInput({"EMCCells", "EMC", "CELLS", 0, Lifetime::Timeframe});
-  addInput({"EMCTriggers", "EMC", "CELLTRIGREC", 0, Lifetime::Timeframe});
+  addInput({"EMCTriggers", "EMC", "CELLSTRGR", 0, Lifetime::Timeframe});
   if (mc) {
     addInput({"EMCCellsMC", "EMC", "CELLSMCTR", 0, Lifetime::Timeframe});
   }
   requestMap["EMCCells"] = mc;
+}
+
+void DataRequest::requestHMPMatches(bool mc)
+{
+  addInput({"matchHMP", "HMP", "MATCHES", 0, Lifetime::Timeframe});
+  if (mc) {
+    addInput({"clsHMP_GLO_MCTR", "HMP", "MCLABELS", 0, Lifetime::Timeframe});
+  }
+  requestMap["matchHMP"] = mc;
 }
 
 void DataRequest::requestTracks(GTrackID::mask_t src, bool useMC)
@@ -382,7 +503,7 @@ void DataRequest::requestTracks(GTrackID::mask_t src, bool useMC)
   if (src[GTrackID::MFT]) {
     requestMFTTracks(useMC);
   }
-  if (src[GTrackID::MCH]) {
+  if (src[GTrackID::MCH] || src[GTrackID::MCHMID]) {
     requestMCHTracks(useMC);
   }
   if (src[GTrackID::MID]) {
@@ -396,6 +517,9 @@ void DataRequest::requestTracks(GTrackID::mask_t src, bool useMC)
   }
   if (src[GTrackID::MFTMCH]) {
     requestGlobalFwdTracks(useMC);
+  }
+  if (src[GTrackID::MCHMID]) {
+    requestMCHMIDMatches(useMC);
   }
   if (src[GTrackID::TPCTOF]) {
     requestTPCTOFTracks(useMC);
@@ -425,31 +549,6 @@ void DataRequest::requestTracks(GTrackID::mask_t src, bool useMC)
   if (GTrackID::includesDet(DetID::CTP, src)) {
     requestCTPDigits(false); // RS FIXME: at the moment does not support MC
   }
-}
-
-void DataRequest::requestClusters(GTrackID::mask_t src, bool useMC)
-{
-  // request clusters for detectors of the sources probided by the mask
-
-  // clusters needed for refits
-  if (GTrackID::includesDet(DetID::ITS, src)) {
-    requestITSClusters(useMC);
-  }
-  if (GTrackID::includesDet(DetID::MFT, src)) {
-    requestMFTClusters(useMC);
-  }
-  if (GTrackID::includesDet(DetID::TPC, src)) {
-    requestTPCClusters(useMC);
-  }
-  if (GTrackID::includesDet(DetID::TOF, src)) {
-    requestTOFClusters(useMC);
-  }
-  if (GTrackID::includesDet(DetID::TRD, src)) {
-    requestTRDTracklets(useMC);
-  }
-  if (GTrackID::includesDet(DetID::CTP, src)) {
-    requestCTPDigits(false); // RS FIXME: at the moment does not support MC
-  }
   if (GTrackID::includesDet(DetID::CPV, src)) {
     requestCPVClusters(useMC);
   }
@@ -459,6 +558,51 @@ void DataRequest::requestClusters(GTrackID::mask_t src, bool useMC)
   if (GTrackID::includesDet(DetID::EMC, src)) {
     requestEMCALCells(useMC);
   }
+  if (GTrackID::includesDet(DetID::HMP, src)) {
+    requestHMPClusters(useMC);
+  }
+  if (src[GTrackID::HMP]) {
+    requestHMPMatches(useMC);
+  }
+}
+
+void DataRequest::requestClusters(GTrackID::mask_t src, bool useMC, DetID::mask_t skipDetClusters)
+{
+  // request clusters for detectors of the sources probided by the mask
+  // clusters needed for refits
+  if (GTrackID::includesDet(DetID::ITS, src) && !skipDetClusters[DetID::ITS]) {
+    requestITSClusters(useMC);
+  }
+  if (GTrackID::includesDet(DetID::MFT, src) && !skipDetClusters[DetID::MFT]) {
+    requestMFTClusters(useMC);
+  }
+  if (GTrackID::includesDet(DetID::TPC, src) && !skipDetClusters[DetID::TPC]) {
+    requestTPCClusters(useMC);
+  }
+  if (GTrackID::includesDet(DetID::TOF, src) && !skipDetClusters[DetID::TOF]) {
+    requestTOFClusters(useMC);
+  }
+  if (GTrackID::includesDet(DetID::TRD, src) && !skipDetClusters[DetID::TRD]) {
+    requestTRDTracklets(useMC);
+  }
+  if (GTrackID::includesDet(DetID::CTP, src) && !skipDetClusters[DetID::CTP]) {
+    requestCTPDigits(false); // RS FIXME: at the moment does not support MC
+  }
+  if (GTrackID::includesDet(DetID::CPV, src) && !skipDetClusters[DetID::CPV]) {
+    requestCPVClusters(useMC);
+  }
+  if (GTrackID::includesDet(DetID::PHS, src) && !skipDetClusters[DetID::PHS]) {
+    requestPHOSCells(useMC);
+  }
+  if (GTrackID::includesDet(DetID::EMC, src) && !skipDetClusters[DetID::EMC]) {
+    requestEMCALCells(useMC);
+  }
+  if (GTrackID::includesDet(DetID::MCH, src) && !skipDetClusters[DetID::MCH]) {
+    requestMCHClusters(useMC);
+  }
+  if (GTrackID::includesDet(DetID::HMP, src) && !skipDetClusters[DetID::HMP]) {
+    requestHMPClusters(useMC);
+  }
 }
 
 //__________________________________________________________________
@@ -466,8 +610,7 @@ void RecoContainer::collectData(ProcessingContext& pc, const DataRequest& reques
 {
   auto& reqMap = requests.requestMap;
 
-  const auto* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(pc.inputs().getFirstValid(true));
-  startIR = {0, dh->firstTForbit};
+  startIR = {0, pc.services().get<o2::framework::TimingInfo>().firstTForbit};
 
   auto req = reqMap.find("trackITS");
   if (req != reqMap.end()) {
@@ -502,6 +645,16 @@ void RecoContainer::collectData(ProcessingContext& pc, const DataRequest& reques
   req = reqMap.find("fwdtracks");
   if (req != reqMap.end()) {
     addGlobalFwdTracks(pc, req->second);
+  }
+
+  req = reqMap.find("matchMFTMCH");
+  if (req != reqMap.end()) {
+    addMFTMCHMatches(pc, req->second);
+  }
+
+  req = reqMap.find("matchMCHMID");
+  if (req != reqMap.end()) {
+    addMCHMIDMatches(pc, req->second);
   }
 
   req = reqMap.find("trackITSTPCTRD");
@@ -539,6 +692,13 @@ void RecoContainer::collectData(ProcessingContext& pc, const DataRequest& reques
     addITSClusters(pc, req->second);
   }
 
+#ifdef ENABLE_UPGRADES
+  req = reqMap.find("clusIT3");
+  if (req != reqMap.end()) {
+    addIT3Clusters(pc, req->second);
+  }
+#endif
+
   req = reqMap.find("clusMFT");
   if (req != reqMap.end()) {
     addMFTClusters(pc, req->second);
@@ -546,12 +706,23 @@ void RecoContainer::collectData(ProcessingContext& pc, const DataRequest& reques
 
   req = reqMap.find("clusTPC");
   if (req != reqMap.end()) {
-    addTPCClusters(pc, req->second, reqMap.find("trackTPC") != reqMap.end());
+    auto tracksON = reqMap.find("trackTPC") != reqMap.end();
+    addTPCClusters(pc, req->second, tracksON, tracksON);
+  }
+
+  req = reqMap.find("trigTPC");
+  if (req != reqMap.end()) {
+    addTPCTriggers(pc);
   }
 
   req = reqMap.find("clusTOF");
   if (req != reqMap.end()) {
     addTOFClusters(pc, req->second);
+  }
+
+  req = reqMap.find("clusHMP");
+  if (req != reqMap.end()) {
+    addHMPClusters(pc, req->second);
   }
 
   req = reqMap.find("CTPDigits");
@@ -572,6 +743,16 @@ void RecoContainer::collectData(ProcessingContext& pc, const DataRequest& reques
   req = reqMap.find("EMCCells");
   if (req != reqMap.end()) {
     addEMCALCells(pc, req->second);
+  }
+
+  req = reqMap.find("clusMCH");
+  if (req != reqMap.end()) {
+    addMCHClusters(pc, req->second);
+  }
+
+  req = reqMap.find("clusMID");
+  if (req != reqMap.end()) {
+    addMIDClusters(pc, req->second);
   }
 
   req = reqMap.find("FT0");
@@ -619,46 +800,65 @@ void RecoContainer::collectData(ProcessingContext& pc, const DataRequest& reques
     addSVertices(pc, req->second);
   }
 
+  req = reqMap.find("STracker");
+  if (req != reqMap.end()) {
+    addStrangeTracks(pc, req->second);
+  }
+
   req = reqMap.find("IRFramesITS");
   if (req != reqMap.end()) {
     addIRFramesITS(pc);
+  }
+  req = reqMap.find("matchHMP");
+  if (req != reqMap.end()) {
+    addHMPMatches(pc, req->second);
   }
 }
 
 //____________________________________________________________
 void RecoContainer::addSVertices(ProcessingContext& pc, bool)
 {
+  svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::V0Index>>("v0sIdx"), V0SIDX);
   svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::V0>>("v0s"), V0S);
   svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::RangeReference<int, int>>>("p2v0s"), PVTX_V0REFS);
+  svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::CascadeIndex>>("cascsIdx"), CASCSIDX);
   svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::Cascade>>("cascs"), CASCS);
   svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::RangeReference<int, int>>>("p2cascs"), PVTX_CASCREFS);
+  svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::Decay3BodyIndex>>("decay3bodyIdx"), DECAY3BODYIDX);
+  svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::Decay3Body>>("decay3body"), DECAY3BODY);
+  svtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::RangeReference<int, int>>>("p2decay3body"), PVTX_3BODYREFS);
   // no mc
 }
 
 //____________________________________________________________
 void RecoContainer::addPVertices(ProcessingContext& pc, bool mc)
 {
-  if (!pvtxPool.isLoaded(PVTX)) { // in case was loaded via addPVerticesTMP
-    pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::PrimaryVertex>>("pvtx"), PVTX);
-  }
+  pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::PrimaryVertex>>("pvtx"), PVTX);
   pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::VtxTrackIndex>>("pvtx_trmtc"), PVTX_TRMTC);
   pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::VtxTrackRef>>("pvtx_tref"), PVTX_TRMTCREFS);
 
-  if (mc && !pvtxPool.isLoaded(PVTX_MCTR)) { // in case was loaded via addPVerticesTMP
+  if (mc) { // in case was loaded via addPVerticesTMP
     pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::MCEventLabel>>("pvtx_mc"), PVTX_MCTR);
+  }
+}
+
+//____________________________________________________________
+void RecoContainer::addStrangeTracks(ProcessingContext& pc, bool mc)
+{
+  strkPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::StrangeTrack>>("strangetracks"), STRACK);
+  if (mc) {
+    strkPool.registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("strack_mc"), STRACK_MC);
   }
 }
 
 //____________________________________________________________
 void RecoContainer::addPVerticesTMP(ProcessingContext& pc, bool mc)
 {
-  if (!pvtxPool.isLoaded(PVTX)) { // in case was loaded via addPVertices
-    pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::PrimaryVertex>>("pvtx"), PVTX);
-  }
+  pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::PrimaryVertex>>("pvtx"), PVTX);
   pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::VtxTrackIndex>>("pvtx_cont"), PVTX_CONTID);
   pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::dataformats::VtxTrackRef>>("pvtx_contref"), PVTX_CONTIDREFS);
 
-  if (mc && !pvtxPool.isLoaded(PVTX_MCTR)) { // in case was loaded via addPVertices
+  if (mc) { // in case was loaded via addPVertices
     pvtxPool.registerContainer(pc.inputs().get<gsl::span<o2::MCEventLabel>>("pvtx_mc"), PVTX_MCTR);
   }
 }
@@ -675,6 +875,9 @@ void RecoContainer::addCosmicTracks(ProcessingContext& pc, bool mc)
 //____________________________________________________________
 void RecoContainer::addITSTracks(ProcessingContext& pc, bool mc)
 {
+  if (pc.services().get<o2::framework::TimingInfo>().globalRunNumberChanged) {            // this params need to be queried only once
+    pc.inputs().get<o2::itsmft::DPLAlpideParam<o2::detectors::DetID::ITS>*>("alpparITS"); // note: configurable param does not need finaliseCCDB
+  }
   commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<o2::its::TrackITS>>("trackITS"), TRACKS);
   commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<int>>("trackITSClIdx"), INDICES);
   commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::ROFRecord>>("trackITSROF"), TRACKREFS);
@@ -692,6 +895,9 @@ void RecoContainer::addIRFramesITS(ProcessingContext& pc)
 //____________________________________________________________
 void RecoContainer::addMFTTracks(ProcessingContext& pc, bool mc)
 {
+  if (pc.services().get<o2::framework::TimingInfo>().globalRunNumberChanged) {            // this params need to be queried only once
+    pc.inputs().get<o2::itsmft::DPLAlpideParam<o2::detectors::DetID::MFT>*>("alpparMFT"); // note: configurable param does not need finaliseCCDB
+  }
   commonPool[GTrackID::MFT].registerContainer(pc.inputs().get<gsl::span<o2::mft::TrackMFT>>("trackMFT"), TRACKS);
   commonPool[GTrackID::MFT].registerContainer(pc.inputs().get<gsl::span<int>>("trackMFTClIdx"), INDICES);
   commonPool[GTrackID::MFT].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::ROFRecord>>("trackMFTROF"), TRACKREFS);
@@ -705,7 +911,7 @@ void RecoContainer::addMCHTracks(ProcessingContext& pc, bool mc)
 {
   commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::mch::TrackMCH>>("trackMCH"), TRACKS);
   commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::mch::ROFRecord>>("trackMCHROF"), TRACKREFS);
-  commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::mch::ClusterStruct>>("trackMCHTRACKCLUSTERS"), CLUSREFS);
+  commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::mch::Cluster>>("trackMCHTRACKCLUSTERS"), INDICES);
   if (mc) {
     commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("trackMCHMCTR"), MCLABELS);
   }
@@ -716,7 +922,7 @@ void RecoContainer::addMIDTracks(ProcessingContext& pc, bool mc)
 {
   commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::Track>>("trackMID"), TRACKS);
   commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::ROFRecord>>("trackMIDROF"), TRACKREFS);
-  commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::Cluster3D>>("trackMIDTRACKCLUSTERS"), CLUSREFS);
+  commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::Cluster>>("trackMIDTRACKCLUSTERS"), INDICES);
   commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::ROFRecord>>("trackClMIDROF"), MATCHES);
   if (mc) {
     commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("trackMIDMCTR"), MCLABELS);
@@ -728,6 +934,12 @@ void RecoContainer::addMIDTracks(ProcessingContext& pc, bool mc)
 const o2::dataformats::MCTruthContainer<o2::mid::MCClusterLabel>* RecoContainer::getMIDTracksClusterMCLabels() const
 {
   return mcMIDTrackClusters.get();
+}
+
+//________________________________________________________
+const o2::dataformats::MCTruthContainer<o2::mid::MCClusterLabel>* RecoContainer::getMIDClustersMCLabels() const
+{
+  return mcMIDClusters.get();
 }
 
 //____________________________________________________________
@@ -758,6 +970,21 @@ void RecoContainer::addGlobalFwdTracks(ProcessingContext& pc, bool mc)
   commonPool[GTrackID::MFTMCH].registerContainer(pc.inputs().get<gsl::span<o2d::GlobalFwdTrack>>("fwdtracks"), TRACKS);
   if (mc) {
     commonPool[GTrackID::MFTMCH].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("MCTruth"), MCLABELS);
+  }
+}
+
+//__________________________________________________________
+void RecoContainer::addMFTMCHMatches(ProcessingContext& pc, bool mc)
+{
+  commonPool[GTrackID::MFTMCH].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoFwd>>("matchMFTMCH"), MATCHES);
+}
+
+//__________________________________________________________
+void RecoContainer::addMCHMIDMatches(ProcessingContext& pc, bool mc)
+{
+  commonPool[GTrackID::MCHMID].registerContainer(pc.inputs().get<gsl::span<o2d::TrackMCHMID>>("matchMCHMID"), MATCHES);
+  if (mc) {
+    commonPool[GTrackID::MCHMID].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("matchMCHMID_MCTR"), MCLABELS);
   }
 }
 
@@ -796,7 +1023,7 @@ void RecoContainer::addTPCTOFTracks(ProcessingContext& pc, bool mc)
 //__________________________________________________________
 void RecoContainer::addTOFMatchesITSTPC(ProcessingContext& pc, bool mc)
 {
-  commonPool[GTrackID::ITSTPCTOF].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoTOF>>("matchITSTPCTOF"), MATCHES); //only ITS/TPC : TOF match info, no real tracks
+  commonPool[GTrackID::ITSTPCTOF].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoTOF>>("matchITSTPCTOF"), MATCHES); // only ITS/TPC : TOF match info, no real tracks
   if (mc) {
     commonPool[GTrackID::ITSTPCTOF].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("clsTOF_GLO_MCTR"), MCLABELS);
   }
@@ -804,7 +1031,7 @@ void RecoContainer::addTOFMatchesITSTPC(ProcessingContext& pc, bool mc)
 //__________________________________________________________
 void RecoContainer::addTOFMatchesTPCTRD(ProcessingContext& pc, bool mc)
 {
-  commonPool[GTrackID::TPCTRDTOF].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoTOF>>("matchTPCTRDTOF"), MATCHES); //only ITS/TPC : TOF match info, no real tracks
+  commonPool[GTrackID::TPCTRDTOF].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoTOF>>("matchTPCTRDTOF"), MATCHES); // only ITS/TPC : TOF match info, no real tracks
   if (mc) {
     commonPool[GTrackID::TPCTRDTOF].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("clsTOF_GLO2_MCTR"), MCLABELS);
   }
@@ -812,14 +1039,28 @@ void RecoContainer::addTOFMatchesTPCTRD(ProcessingContext& pc, bool mc)
 //__________________________________________________________
 void RecoContainer::addTOFMatchesITSTPCTRD(ProcessingContext& pc, bool mc)
 {
-  commonPool[GTrackID::ITSTPCTRDTOF].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoTOF>>("matchITSTPCTRDTOF"), MATCHES); //only ITS/TPC : TOF match info, no real tracks
+  commonPool[GTrackID::ITSTPCTRDTOF].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoTOF>>("matchITSTPCTRDTOF"), MATCHES); // only ITS/TPC : TOF match info, no real tracks
   if (mc) {
     commonPool[GTrackID::ITSTPCTRDTOF].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("clsTOF_GLO3_MCTR"), MCLABELS);
   }
 }
+
+//__________________________________________________________
+void RecoContainer::addHMPMatches(ProcessingContext& pc, bool mc)
+{
+  commonPool[GTrackID::HMP].registerContainer(pc.inputs().get<gsl::span<o2d::MatchInfoHMP>>("matchHMP"), MATCHES); //  HMPID match info, no real tracks
+  if (mc) {
+    commonPool[GTrackID::HMP].registerContainer(pc.inputs().get<gsl::span<o2::MCCompLabel>>("clsHMP_GLO_MCTR"), MCLABELS);
+  }
+}
+
 //__________________________________________________________
 void RecoContainer::addITSClusters(ProcessingContext& pc, bool mc)
 {
+  if (pc.services().get<o2::framework::TimingInfo>().globalRunNumberChanged) {            // this params need to be queried only once
+    pc.inputs().get<o2::itsmft::TopologyDictionary*>("cldictITS");                        // just to trigger the finaliseCCDB
+    pc.inputs().get<o2::itsmft::DPLAlpideParam<o2::detectors::DetID::ITS>*>("alpparITS"); // note: configurable param does not need finaliseCCDB
+  }
   commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::ROFRecord>>("clusITSROF"), CLUSREFS);
   commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::CompClusterExt>>("clusITS"), CLUSTERS);
   commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<unsigned char>>("clusITSPatt"), PATTERNS);
@@ -828,21 +1069,53 @@ void RecoContainer::addITSClusters(ProcessingContext& pc, bool mc)
   }
 }
 
+#ifdef ENABLE_UPGRADES
+void RecoContainer::addIT3Clusters(ProcessingContext& pc, bool mc)
+{
+  if (pc.services().get<o2::framework::TimingInfo>().globalRunNumberChanged) {            // this params need to be queried only once
+    pc.inputs().get<o2::itsmft::DPLAlpideParam<o2::detectors::DetID::ITS>*>("alpparITS"); // note: configurable param does not need finaliseCCDB
+    pc.inputs().get<o2::its3::TopologyDictionary*>("cldictIT3");                          // just to trigger the finaliseCCDB
+  }
+  commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::ROFRecord>>("clusITSROF"), CLUSREFS);
+  commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::CompClusterExt>>("clusITS"), CLUSTERS);
+  commonPool[GTrackID::ITS].registerContainer(pc.inputs().get<gsl::span<unsigned char>>("clusITSPatt"), PATTERNS);
+  if (mc) {
+    mcITSClusters = pc.inputs().get<const dataformats::MCTruthContainer<MCCompLabel>*>("clusITSMC");
+  }
+}
+#endif
+
 //__________________________________________________________
 void RecoContainer::addMFTClusters(ProcessingContext& pc, bool mc)
 {
+  if (pc.services().get<o2::framework::TimingInfo>().globalRunNumberChanged) {            // this params need to be queried only once
+    pc.inputs().get<o2::itsmft::TopologyDictionary*>("cldictMFT");                        // just to trigger the finaliseCCDB
+    pc.inputs().get<o2::itsmft::DPLAlpideParam<o2::detectors::DetID::MFT>*>("alpparMFT"); // note: configurable param does not need finaliseCCDB
+  }
   commonPool[GTrackID::MFT].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::ROFRecord>>("clusMFTROF"), CLUSREFS);
   commonPool[GTrackID::MFT].registerContainer(pc.inputs().get<gsl::span<o2::itsmft::CompClusterExt>>("clusMFT"), CLUSTERS);
   commonPool[GTrackID::MFT].registerContainer(pc.inputs().get<gsl::span<unsigned char>>("clusMFTPatt"), PATTERNS);
+  if (mc) {
+    mcITSClusters = pc.inputs().get<const dataformats::MCTruthContainer<MCCompLabel>*>("clusMFTMC");
+  }
 }
 
 //__________________________________________________________
-void RecoContainer::addTPCClusters(ProcessingContext& pc, bool mc, bool shmap)
+void RecoContainer::addTPCClusters(ProcessingContext& pc, bool mc, bool shmap, bool occmap)
 {
   inputsTPCclusters = o2::tpc::getWorkflowTPCInput(pc, 0, mc);
   if (shmap) {
     clusterShMapTPC = pc.inputs().get<gsl::span<unsigned char>>("clusTPCshmap");
   }
+  if (occmap) {
+    occupancyMapTPC = pc.inputs().get<gsl::span<unsigned int>>("clusTPCoccmap");
+  }
+}
+
+//__________________________________________________________
+void RecoContainer::addTPCTriggers(ProcessingContext& pc)
+{
+  commonPool[GTrackID::TPC].registerContainer(pc.inputs().get<gsl::span<o2::tpc::TriggerInfoDLBZS>>("trigTPC"), MATCHES);
 }
 
 //__________________________________________________________
@@ -861,9 +1134,41 @@ void RecoContainer::addTOFClusters(ProcessingContext& pc, bool mc)
 }
 
 //__________________________________________________________
+void RecoContainer::addHMPClusters(ProcessingContext& pc, bool mc)
+{
+  commonPool[GTrackID::HMP].registerContainer(pc.inputs().get<gsl::span<o2::hmpid::Cluster>>("hmpidcluster"), CLUSTERS);
+  commonPool[GTrackID::HMP].registerContainer(pc.inputs().get<gsl::span<o2::hmpid::Trigger>>("hmpidtriggers"), CLUSREFS);
+  if (mc) {
+    mcHMPClusters = pc.inputs().get<const dataformats::MCTruthContainer<MCCompLabel>*>("hmpidclusterlabel");
+  }
+}
+//__________________________________________________________
+void RecoContainer::addMCHClusters(ProcessingContext& pc, bool mc)
+{
+  commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::mch::ROFRecord>>("clusMCHROF"), CLUSREFS);
+  commonPool[GTrackID::MCH].registerContainer(pc.inputs().get<gsl::span<o2::mch::Cluster>>("clusMCH"), CLUSTERS);
+  if (mc) {
+    mcMCHClusters = pc.inputs().get<const dataformats::MCTruthContainer<MCCompLabel>*>("clusMCHMC");
+  }
+}
+
+//__________________________________________________________
+void RecoContainer::addMIDClusters(ProcessingContext& pc, bool mc)
+{
+  commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::ROFRecord>>("clusMIDROF"), CLUSREFS);
+  commonPool[GTrackID::MID].registerContainer(pc.inputs().get<gsl::span<o2::mid::Cluster>>("clusMID"), CLUSTERS);
+  if (mc) {
+    mcMIDClusters = pc.inputs().get<const dataformats::MCTruthContainer<o2::mid::MCClusterLabel>*>("clusMIDMC");
+  }
+}
+
+//__________________________________________________________
 void RecoContainer::addCTPDigits(ProcessingContext& pc, bool mc)
 {
   commonPool[GTrackID::CTP].registerContainer(pc.inputs().get<gsl::span<o2::ctp::CTPDigit>>("CTPDigits"), CLUSTERS);
+  if (pc.inputs().get<gsl::span<char>>("CTPLumi").size() == sizeof(o2::ctp::LumiInfo)) {
+    mCTPLumi = pc.inputs().get<o2::ctp::LumiInfo>("CTPLumi");
+  }
   if (mc) {
     //  pc.inputs().get<const dataformats::MCTruthContainer<MCCompLabel>*>("CTPDigitsMC");
   }
@@ -906,7 +1211,7 @@ void RecoContainer::addFT0RecPoints(ProcessingContext& pc, bool mc)
   commonPool[GTrackID::FT0].registerContainer(pc.inputs().get<gsl::span<o2::ft0::ChannelDataFloat>>("ft0channels"), CLUSTERS);
 
   if (mc) {
-    LOG(ERROR) << "FT0 RecPoint does not support MC truth";
+    LOG(error) << "FT0 RecPoint does not support MC truth";
   }
 }
 
@@ -917,7 +1222,7 @@ void RecoContainer::addFV0RecPoints(ProcessingContext& pc, bool mc)
   commonPool[GTrackID::FV0].registerContainer(pc.inputs().get<gsl::span<o2::fv0::ChannelDataFloat>>("fv0channels"), CLUSTERS);
 
   if (mc) {
-    LOG(ERROR) << "FV0 RecPoint does not support MC truth";
+    LOG(error) << "FV0 RecPoint does not support MC truth";
   }
 }
 
@@ -928,7 +1233,7 @@ void RecoContainer::addFDDRecPoints(ProcessingContext& pc, bool mc)
   commonPool[GTrackID::FDD].registerContainer(pc.inputs().get<gsl::span<o2::fdd::ChannelDataFloat>>("fddchannels"), CLUSTERS);
 
   if (mc) {
-    LOG(ERROR) << "FDD RecPoint does not support MC truth";
+    LOG(error) << "FDD RecPoint does not support MC truth";
   }
 }
 
@@ -941,7 +1246,7 @@ void RecoContainer::addZDCRecEvents(ProcessingContext& pc, bool mc)
   commonPool[GTrackID::ZDC].registerContainer(pc.inputs().get<gsl::span<uint16_t>>("zdcinfo"), PATTERNS);
 
   if (mc) {
-    LOG(ERROR) << "ZDC RecEvent does not support MC truth";
+    LOG(error) << "ZDC RecEvent does not support MC truth";
   }
 }
 
@@ -962,7 +1267,16 @@ gsl::span<const o2::trd::CalibratedTracklet> RecoContainer::getTRDCalibratedTrac
 
 gsl::span<const o2::trd::TriggerRecord> RecoContainer::getTRDTriggerRecords() const
 {
-  return inputsTRD->mTriggerRecords;
+  static int countWarnings = 0;
+  if (inputsTRD == nullptr) {
+    if (countWarnings < 1) {
+      LOG(warning) << "No TRD triggers";
+      countWarnings++;
+    }
+    return gsl::span<const o2::trd::TriggerRecord>();
+  } else {
+    return inputsTRD->mTriggerRecords;
+  }
 }
 
 const o2::dataformats::MCTruthContainer<o2::MCCompLabel>* RecoContainer::getTRDTrackletsMCLabels() const
@@ -986,6 +1300,16 @@ const o2::track::TrackParCov& RecoContainer::getTrackParamOut(GTrackID gidx) con
     return getTrack<o2d::TrackTPCITS>(getTOFMatch(gidx).getTrackRef()).getParamOut();
   } else if (trSrc == GTrackID::TPCTOF) {
     return getTrack<o2d::TrackTPCTOF>(gidx).getParamOut();
+  } else if (trSrc == GTrackID::ITSTPCTRDTOF) { // the physical tracks are in ITS-TPC-TRD, need to get reference from match info
+    return getTrack<o2::trd::TrackTRD>(getTOFMatch(gidx).getTrackRef()).getOuterParam();
+  }
+  if (trSrc == GTrackID::TPCTRDTOF) { // the physical tracks are in TPC-TRD, need to get reference from match info
+    return getTrack<o2::trd::TrackTRD>(getTOFMatch(gidx).getTrackRef()).getOuterParam();
+  } else if (trSrc == GTrackID::ITSTPCTRD) {
+    return getTrack<o2::trd::TrackTRD>(gidx).getOuterParam();
+  }
+  if (trSrc == GTrackID::TPCTRD) {
+    return getTrack<o2::trd::TrackTRD>(gidx).getOuterParam();
   } else if (trSrc == GTrackID::ITS) {
     return getTrack<o2::its::TrackITS>(gidx).getParamOut();
   } else if (trSrc == GTrackID::TPC) {
@@ -1074,16 +1398,19 @@ RecoContainer::GlobalIDSet RecoContainer::getSingleDetectorRefs(GTrackID gidx) c
     table[parent1.getRefITS().getSource()] = parent1.getRefITS();
     table[GTrackID::TPC] = parent1.getRefTPC();
     table[GTrackID::TRD] = gidx; // there is no standalone TRD track, so use the index for the ITSTPCTRD track array
-  }
-  if (src == GTrackID::ITSTPCTOF) {
-    const auto& parent0 = getTOFMatch(gidx); //ITS/TPC : TOF
+  } else if (src == GTrackID::TPCTRD) {
+    const auto& parent0 = getTPCTRDTrack<o2::trd::TrackTRD>(gidx);
+    table[GTrackID::TPC] = parent0.getRefGlobalTrackId();
+    table[GTrackID::TRD] = gidx; // there is no standalone TRD track, so use the index for the TPCTRD track array
+  } else if (src == GTrackID::ITSTPCTOF) {
+    const auto& parent0 = getTOFMatch(gidx); // ITS/TPC : TOF
     const auto& parent1 = getTPCITSTrack(parent0.getTrackRef());
     table[GTrackID::ITSTPC] = parent0.getTrackRef();
     table[GTrackID::TOF] = {unsigned(parent0.getIdxTOFCl()), GTrackID::TOF};
     table[GTrackID::TPC] = parent1.getRefTPC();
     table[parent1.getRefITS().getSource()] = parent1.getRefITS(); // ITS source might be an ITS track or ITSAB tracklet
   } else if (src == GTrackID::ITSTPCTRDTOF) {
-    const auto& parent0 = getTOFMatch(gidx); //ITS/TPC : TOF
+    const auto& parent0 = getTOFMatch(gidx); // ITS/TPC : TOF
     const auto& parent1 = getITSTPCTRDTrack<o2::trd::TrackTRD>(parent0.getTrackRef());
     const auto& parent2 = getTPCITSTrack(parent1.getRefGlobalTrackId());
     table[GTrackID::ITSTPCTRD] = parent0.getTrackRef();
@@ -1091,16 +1418,36 @@ RecoContainer::GlobalIDSet RecoContainer::getSingleDetectorRefs(GTrackID gidx) c
     table[GTrackID::TOF] = {unsigned(parent0.getIdxTOFCl()), GTrackID::TOF};
     table[GTrackID::TPC] = parent2.getRefTPC();
     table[parent2.getRefITS().getSource()] = parent2.getRefITS(); // ITS source might be an ITS track or ITSAB tracklet
+    table[GTrackID::TRD] = parent0.getTrackRef();                 // there is no standalone TRD track, so use the index for the ITSTPCTRD track array
+  } else if (src == GTrackID::TPCTRDTOF) {
+    const auto& parent0 = getTOFMatch(gidx); // TPCTRD : TOF
+    const auto& parent1 = getITSTPCTRDTrack<o2::trd::TrackTRD>(parent0.getTrackRef());
+    const auto& parent2 = getTPCITSTrack(parent1.getRefGlobalTrackId());
+    table[GTrackID::TPCTRD] = parent0.getTrackRef();
+    table[GTrackID::TPC] = parent1.getRefGlobalTrackId();
+    table[GTrackID::TOF] = {unsigned(parent0.getIdxTOFCl()), GTrackID::TOF};
+    table[GTrackID::TRD] = parent0.getTrackRef(); // there is no standalone TRD track, so use the index for the TPCTRD track array
   } else if (src == GTrackID::TPCTOF) {
-    const auto& parent0 = getTPCTOFMatch(gidx); //TPC : TOF
+    const auto& parent0 = getTPCTOFMatch(gidx); // TPC : TOF
     table[GTrackID::TOF] = {unsigned(parent0.getIdxTOFCl()), GTrackID::TOF};
     table[GTrackID::TPC] = parent0.getTrackRef();
   } else if (src == GTrackID::ITSTPC) {
     const auto& parent0 = getTPCITSTrack(gidx);
     table[GTrackID::TPC] = parent0.getRefTPC();
     table[parent0.getRefITS().getSource()] = parent0.getRefITS(); // ITS source might be an ITS track or ITSAB tracklet
+  } else if (src == GTrackID::MFTMCH || src == GTrackID::MFTMCHMID) {
+    const auto& parent0 = getGlobalFwdTrack(gidx);
+    table[GTrackID::MFT] = parent0.getMFTTrackID();
+    table[GTrackID::MCH] = parent0.getMCHTrackID();
+    if (parent0.getMIDTrackID() != -1) {
+      table[GTrackID::MID] = parent0.getMIDTrackID();
+    }
+  } else if (src == GTrackID::MCHMID) {
+    const auto& parent0 = getMCHMIDMatch(gidx);
+    table[GTrackID::MCH] = parent0.getMCHRef();
+    table[GTrackID::MID] = parent0.getMIDRef();
   }
-  return std::move(table);
+  return table;
 }
 
 //________________________________________________________
@@ -1114,17 +1461,24 @@ GTrackID RecoContainer::getTPCContributorGID(GTrackID gidx) const
     const auto& parent1 = getTPCITSTrack(parent0.getRefGlobalTrackId());
     return parent1.getRefTPC();
   } else if (src == GTrackID::ITSTPCTOF) {
-    const auto& parent0 = getTOFMatch(gidx); //ITS/TPC : TOF
+    const auto& parent0 = getTOFMatch(gidx); // ITS/TPC : TOF
     const auto& parent1 = getTPCITSTrack(parent0.getTrackRef());
     return parent1.getRefTPC();
   } else if (src == GTrackID::ITSTPCTRDTOF) {
-    const auto& parent0 = getTOFMatch(gidx); //ITS/TPC/TRD : TOF
+    const auto& parent0 = getTOFMatch(gidx); // ITS/TPC/TRD : TOF
     const auto& parent1 = getITSTPCTRDTrack<o2::trd::TrackTRD>(parent0.getTrackRef());
     const auto& parent2 = getTPCITSTrack(parent1.getRefGlobalTrackId());
     return parent2.getRefTPC();
   } else if (src == GTrackID::TPCTOF) {
-    const auto& parent0 = getTPCTOFMatch(gidx); //TPC : TOF
+    const auto& parent0 = getTPCTOFMatch(gidx); // TPC : TOF
     return parent0.getTrackRef();
+  } else if (src == GTrackID::TPCTRDTOF) {
+    const auto& parent0 = getTOFMatch(gidx); // TPC/TRD : TOF
+    const auto& parent1 = getTPCTRDTrack<o2::trd::TrackTRD>(parent0.getTrackRef());
+    return parent1.getRefGlobalTrackId();
+  } else if (src == GTrackID::TPCTRD) {
+    const auto& parent0 = getTPCTRDTrack<o2::trd::TrackTRD>(gidx);
+    return parent0.getRefGlobalTrackId();
   } else if (src == GTrackID::ITSTPC) {
     const auto& parent0 = getTPCITSTrack(gidx);
     return parent0.getRefTPC();
@@ -1143,11 +1497,11 @@ GTrackID RecoContainer::getITSContributorGID(GTrackID gidx) const
     const auto& parent1 = getTPCITSTrack(parent0.getRefGlobalTrackId());
     return parent1.getRefITS();
   } else if (src == GTrackID::ITSTPCTOF) {
-    const auto& parent0 = getTOFMatch(gidx); //ITS/TPC : TOF
+    const auto& parent0 = getTOFMatch(gidx); // ITS/TPC : TOF
     const auto& parent1 = getTPCITSTrack(parent0.getTrackRef());
     return parent1.getRefITS();
   } else if (src == GTrackID::ITSTPCTRDTOF) {
-    const auto& parent0 = getTOFMatch(gidx); //ITS/TPC : TOF
+    const auto& parent0 = getTOFMatch(gidx); // ITS/TPC : TOF
     const auto& parent1 = getITSTPCTRDTrack<o2::trd::TrackTRD>(parent0.getTrackRef());
     const auto& parent2 = getTPCITSTrack(parent1.getRefGlobalTrackId());
     return parent2.getRefITS();
@@ -1168,4 +1522,140 @@ const o2::dataformats::MCTruthContainer<o2::phos::MCLabel>* RecoContainer::getPH
 const o2::dataformats::MCTruthContainer<o2::emcal::MCLabel>* RecoContainer::getEMCALCellsMCLabels() const
 {
   return mcEMCCells.get();
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeITSTPCTRDTOF(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& match = getITSTPCTRDTOFMatches()[gid];
+  auto gidx = match.getTrackRef(); // this should be corresponding ITS-TPC-TRD track
+  //  const auto& tofCl = getTOFClusters()[match.getTOFClIndex()];
+  t = (match.getSignal() - match.getLTIntegralOut().getTOF(o2::track::PID::Pion)) * PS2MUS; // tof time in \mus, FIXME: account for time of flight to R TOF
+  tErr = 0.010f;
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeTPCTRDTOF(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& match = getTPCTRDTOFMatches()[gid];
+  auto gidx = match.getTrackRef(); // this should be corresponding ITS-TPC-TRD track
+  //  const auto& tofCl = getTOFClusters()[match.getTOFClIndex()];
+  t = (match.getSignal() - match.getLTIntegralOut().getTOF(o2::track::PID::Pion)) * PS2MUS; // tof time in \mus, FIXME: account for time of flight to R TOF
+  tErr = 0.010f;
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeITSTPCTOF(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& match = getITSTPCTOFMatches()[gid];
+  auto gidx = match.getTrackRef(); // this should be corresponding ITS-TPC track
+  //  const auto& tofCl = getTOFClusters()[match.getTOFClIndex()];
+  t = (match.getSignal() - match.getLTIntegralOut().getTOF(o2::track::PID::Pion)) * PS2MUS; // tof time in \mus, FIXME: account for time of flight to R TOF
+  tErr = 0.010f;
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeITSTPCTRD(GTrackID gid, float& t, float& tErr) const
+{
+  const auto trigITSTPCTRD = getITSTPCTRDTriggers();
+  // very slow: find the trigger this track belongs to
+  for (const auto& trig : trigITSTPCTRD) {
+    if (trig.getTrackRefs().getEntriesBound() > gid.getIndex()) {
+      t = trig.getBCData().differenceInBC(startIR) * o2::constants::lhc::LHCBunchSpacingMUS;
+      tErr = 5.e-3;
+      const auto& trc = getITSTPCTRDTracks<o2::trd::TrackTRD>()[gid];
+      if (trc.hasPileUpInfo()) { // distance to farthest collision within the pileup integration time
+        tErr += trc.getPileUpTimeErrorMUS();
+      }
+      return;
+    }
+  }
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeTPCTRD(GTrackID gid, float& t, float& tErr) const
+{
+  const auto trigTPCTRD = getITSTPCTRDTriggers();
+  // very slow: find the trigger this track belongs to
+  for (const auto& trig : trigTPCTRD) {
+    if (trig.getTrackRefs().getEntriesBound() > gid.getIndex()) {
+      t = trig.getBCData().differenceInBC(startIR) * o2::constants::lhc::LHCBunchSpacingMUS;
+      tErr = 5.e-3;
+      const auto& trc = getTPCTRDTracks<o2::trd::TrackTRD>()[gid];
+      if (trc.hasPileUpInfo()) { // distance to farthest collision within the pileup integration time
+        tErr += trc.getPileUpTimeErrorMUS();
+      }
+      return;
+    }
+  }
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeITSTPC(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& trc = getTPCITSTrack(gid);
+  t = trc.getTimeMUS().getTimeStamp();
+  tErr = trc.getTimeMUS().getTimeStampError();
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeTPCTOF(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& trc = getTPCTOFTrack(gid);
+  t = trc.getTimeMUS().getTimeStamp();
+  tErr = trc.getTimeMUS().getTimeStampError();
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeITS(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& rofrs = getITSTracksROFRecords();
+  for (const auto& rof : rofrs) { // slow
+    if (gid.getIndex() < rof.getFirstEntry() + rof.getNEntries()) {
+      t = rof.getBCData().differenceInBC(startIR) * o2::constants::lhc::LHCBunchSpacingMUS;
+      tErr = 0.5;
+      return;
+    }
+  }
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTimeTPC(GTrackID gid, float& t, float& tErr) const
+{
+  const auto& trc = getTPCTrack(gid);
+  t = trc.getTime0() + 0.5 * (trc.getDeltaTFwd() - trc.getDeltaTBwd());
+  tErr = 0.5 * (trc.getDeltaTFwd() + trc.getDeltaTBwd());
+}
+
+//________________________________________________________
+void RecoContainer::getTrackTime(GTrackID gid, float& t, float& tErr) const
+{
+  auto src = gid.getSource();
+  if (src == GTrackID::ITSTPCTRDTOF) {
+    return getTrackTimeITSTPCTRDTOF(gid, t, tErr);
+  }
+  if (src == GTrackID::TPCTRDTOF) {
+    return getTrackTimeTPCTRDTOF(gid, t, tErr);
+  }
+  if (src == GTrackID::ITSTPCTOF) {
+    return getTrackTimeITSTPCTOF(gid, t, tErr);
+  }
+  if (src == GTrackID::ITSTPCTRD) {
+    return getTrackTimeITSTPCTRD(gid, t, tErr);
+  }
+  if (src == GTrackID::TPCTRD) {
+    return getTrackTimeTPCTRD(gid, t, tErr);
+  }
+  if (src == GTrackID::ITSTPC) {
+    return getTrackTimeITSTPC(gid, t, tErr);
+  }
+  if (src == GTrackID::TPCTOF) {
+    return getTrackTimeTPCTOF(gid, t, tErr);
+  }
+  if (src == GTrackID::ITS) {
+    return getTrackTimeITS(gid, t, tErr);
+  }
+  if (src == GTrackID::TPC) {
+    return getTrackTimeTPC(gid, t, tErr);
+  }
 }

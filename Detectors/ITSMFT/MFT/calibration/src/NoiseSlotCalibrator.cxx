@@ -13,7 +13,7 @@
 
 #include "MFTCalibration/NoiseSlotCalibrator.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "TFile.h"
 #include "DataFormatsITSMFT/Digit.h"
 #include "DataFormatsITSMFT/ClusterPattern.h"
@@ -29,7 +29,7 @@ bool NoiseSlotCalibrator::processTimeFrame(calibration::TFType nTF,
                                            gsl::span<const o2::itsmft::Digit> const& digits,
                                            gsl::span<const o2::itsmft::ROFRecord> const& rofs)
 {
-  LOG(INFO) << "Processing TF# " << nTF;
+  LOG(detail) << "Processing TF# " << nTF;
 
   auto& slotTF = getSlotForTF(nTF);
   auto& noiseMap = *(slotTF.getContainer());
@@ -44,7 +44,7 @@ bool NoiseSlotCalibrator::processTimeFrame(calibration::TFType nTF,
       noiseMap.increaseNoiseCount(id, row, col);
     }
   }
-
+  noiseMap.addStrobes(rofs.size());
   mNumberOfStrobes += rofs.size();
   return hasEnoughData(slotTF);
 }
@@ -54,7 +54,7 @@ bool NoiseSlotCalibrator::processTimeFrame(calibration::TFType nTF,
                                            gsl::span<const unsigned char> const& patterns,
                                            gsl::span<const o2::itsmft::ROFRecord> const& rofs)
 {
-  LOG(INFO) << "Processing TF# " << nTF;
+  LOG(detail) << "Processing TF# " << nTF;
 
   auto& slotTF = getSlotForTF(nTF);
   auto& noiseMap = *(slotTF.getContainer());
@@ -107,7 +107,7 @@ bool NoiseSlotCalibrator::processTimeFrame(calibration::TFType nTF,
       }
     }
   }
-
+  noiseMap.addStrobes(rofs.size());
   mNumberOfStrobes += rofs.size();
   return hasEnoughData(slotTF);
 }
@@ -115,7 +115,7 @@ bool NoiseSlotCalibrator::processTimeFrame(calibration::TFType nTF,
 // Functions overloaded from the calibration framework
 bool NoiseSlotCalibrator::process(calibration::TFType tf, const gsl::span<const o2::itsmft::CompClusterExt> data)
 {
-  LOG(WARNING) << "Only 1-pix noise calibraton is possible !";
+  LOG(warning) << "Only 1-pix noise calibraton is possible !";
   return calibration::TimeSlotCalibration<o2::itsmft::CompClusterExt, o2::itsmft::NoiseMap>::process(tf, data);
 }
 
@@ -129,16 +129,16 @@ Slot& NoiseSlotCalibrator::emplaceNewSlot(bool front, calibration::TFType tstart
   return slot;
 }
 
-bool NoiseSlotCalibrator::hasEnoughData(const Slot&) const
+bool NoiseSlotCalibrator::hasEnoughData(const Slot& slot) const
 {
-  return (mNumberOfStrobes * mProbabilityThreshold >= mThreshold) ? true : false;
+  return slot.getContainer()->getNumberOfStrobes() > mMinROFs ? true : false;
 }
 
 void NoiseSlotCalibrator::finalizeSlot(Slot& slot)
 {
-  LOG(INFO) << "Number of processed strobes is " << mNumberOfStrobes;
   o2::itsmft::NoiseMap* map = slot.getContainer();
-  map->applyProbThreshold(mProbabilityThreshold, mNumberOfStrobes);
+  LOG(info) << "Number of processed strobes is " << map->getNumberOfStrobes();
+  map->applyProbThreshold(mProbabilityThreshold, map->getNumberOfStrobes(), mProbRelErr);
 }
 
 } // namespace mft

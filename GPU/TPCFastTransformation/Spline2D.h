@@ -22,14 +22,14 @@
 #include "FlatObject.h"
 #include "GPUCommonDef.h"
 
-#if !defined(__CINT__) && !defined(__ROOTCINT__) && !defined(GPUCA_GPUCODE) && !defined(GPUCA_NO_VC) && defined(__cplusplus) && __cplusplus >= 201703L
+#if !defined(__ROOTCLING__) && !defined(GPUCA_GPUCODE) && !defined(GPUCA_NO_VC)
 #include <Vc/Vc>
 #include <Vc/SimdArray>
 #endif
 
 class TFile;
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -47,10 +47,10 @@ namespace gpu
 ///  auto F = [&](double x1, double x2, double f[] ) {
 ///   f[0] = 1.f + x1 + x2*x2; // F(x1,x2)
 ///  };
-///  const int nKnotsU=2;
-///  const int nKnotsV=3;
-///  int knotsU[nKnotsU] = {0, 1};
-///  int knotsV[nKnotsV] = {0, 2, 5};
+///  const int32_t nKnotsU=2;
+///  const int32_t nKnotsV=3;
+///  int32_t knotsU[nKnotsU] = {0, 1};
+///  int32_t knotsV[nKnotsV] = {0, 2, 5};
 ///  Spline2D<float,1> spline(nKnotsU, knotsU, nKnotsV, knotsV ); // spline with 1-dimensional codomain
 ///  spline.approximateFunction(0., 1., 0.,1., F); //initialize spline to approximate F on [0., 1.]x[0., 1.] area
 ///  float S = spline.interpolate(.1, .3 ); // interpolated value at (.1,.3)
@@ -70,7 +70,7 @@ namespace gpu
 ///    YdimT = 0 : the number of Y dimensions will be set in the runtime
 ///    YdimT < 0 : the number of Y dimensions will be set in the runtime, and it will not exceed abs(YdimT)
 ///
-template <typename DataT, int YdimT = 0>
+template <typename DataT, int32_t YdimT = 0>
 class Spline2D
   : public Spline2DSpec<DataT, YdimT, SplineUtil::getSpec(YdimT)>
 {
@@ -92,11 +92,11 @@ class Spline2D
   }
 #else
   /// Disable constructors for the GPU implementation
-  Spline2D() CON_DELETE;
-  Spline2D(const Spline2D&) CON_DELETE;
+  Spline2D() = delete;
+  Spline2D(const Spline2D&) = delete;
 #endif
 
-#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE) && !defined(GPUCA_ALIROOT_LIB)
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
   /// read a class object from the file
   static Spline2D* readFromFile(TFile& inpf, const char* name)
   {
@@ -104,12 +104,10 @@ class Spline2D
   }
 #endif
 
-#ifndef GPUCA_ALIROOT_LIB
   ClassDefNV(Spline2D, 0);
-#endif
 };
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

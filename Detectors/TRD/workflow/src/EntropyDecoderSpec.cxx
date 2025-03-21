@@ -15,8 +15,10 @@
 
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
+#include "Framework/CCDBParamSpec.h"
 #include "TRDWorkflow/EntropyDecoderSpec.h"
 #include "TRDReconstruction/CTFCoder.h"
+#include "DataFormatsCTP/TriggerOffsetsParam.h"
 #include <TStopwatch.h>
 
 using namespace o2::framework;
@@ -29,69 +31,106 @@ namespace trd
 class EntropyDecoderSpec : public o2::framework::Task
 {
  public:
-  EntropyDecoderSpec();
+  EntropyDecoderSpec(int verbosity);
   ~EntropyDecoderSpec() override = default;
   void run(o2::framework::ProcessingContext& pc) final;
   void init(o2::framework::InitContext& ic) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   o2::trd::CTFCoder mCTFCoder;
+  bool mCorrectLML0 = false;
   TStopwatch mTimer;
 };
 
-EntropyDecoderSpec::EntropyDecoderSpec()
+EntropyDecoderSpec::EntropyDecoderSpec(int verbosity) : mCTFCoder(o2::ctf::CTFCoderBase::OpType::Decoder)
 {
   mTimer.Stop();
   mTimer.Reset();
+  mCTFCoder.setVerbosity(verbosity);
+  mCTFCoder.setSupportBCShifts(true);
+  mCTFCoder.setDictBinding("ctfdict_TRD");
+}
+
+void EntropyDecoderSpec::finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj)
+{
+  static int bcshift = 0;
+
+  if (mCTFCoder.finaliseCCDB<CTF>(matcher, obj) && mCorrectLML0) {
+    // check if the LM_L0 shift was updated
+    const auto& trigOffsParam = o2::ctp::TriggerOffsetsParam::Instance();
+    if (bcshift != trigOffsParam.LM_L0) {
+      bcshift = trigOffsParam.LM_L0;
+      auto customShift = trigOffsParam.customOffset[o2::detectors::DetID::TRD];
+      LOGP(info, "Decoded IRs will be corrected by {} BCs (LM_L0 {} + custom {}), discarded if become prior to 1st orbit", -(bcshift - customShift), -bcshift, customShift);
+      mCTFCoder.setBCShift(bcshift - customShift);
+    }
+    return;
+  }
 }
 
 void EntropyDecoderSpec::init(o2::framework::InitContext& ic)
 {
-  std::string dictPath = ic.options().get<std::string>("ctf-dict");
-  if (!dictPath.empty() && dictPath != "none") {
-    mCTFCoder.createCoders(dictPath, o2::ctf::CTFCoderBase::OpType::Decoder);
-  }
+  mCTFCoder.init<CTF>(ic);
+  mCorrectLML0 = ic.options().get<bool>("correct-trd-trigger-offset");
+
+  int checkBogus = ic.options().get<int>("bogus-trigger-rejection");
+  mCTFCoder.setCheckBogusTrig(checkBogus);
+  LOGP(info, "Bogus triggers rejection flag: {}", checkBogus);
 }
 
 void EntropyDecoderSpec::run(ProcessingContext& pc)
 {
   auto cput = mTimer.CpuTime();
   mTimer.Start(false);
+  o2::ctf::CTFIOSize iosize;
 
-  auto buff = pc.inputs().get<gsl::span<o2::ctf::BufferType>>("ctf");
+  mCTFCoder.updateTimeDependentParams(pc, true);
+  auto buff = pc.inputs().get<gsl::span<o2::ctf::BufferType>>("ctf_TRD");
 
   auto& triggers = pc.outputs().make<std::vector<TriggerRecord>>(OutputRef{"triggers"});
   auto& tracklets = pc.outputs().make<std::vector<Tracklet64>>(OutputRef{"tracklets"});
   auto& digits = pc.outputs().make<std::vector<Digit>>(OutputRef{"digits"});
 
   // since the buff is const, we cannot use EncodedBlocks::relocate directly, instead we wrap its data to another flat object
-  const auto ctfImage = o2::trd::CTF::getImage(buff.data());
-  mCTFCoder.decode(ctfImage, triggers, tracklets, digits);
-
+  if (buff.size()) {
+    const auto ctfImage = o2::trd::CTF::getImage(buff.data());
+    iosize = mCTFCoder.decode(ctfImage, triggers, tracklets, digits);
+  }
+  pc.outputs().snapshot({"ctfrep", 0}, iosize);
   mTimer.Stop();
-  LOG(INFO) << "Decoded " << tracklets.size() << " TRD tracklets and " << digits.size() << " digits in " << triggers.size() << " triggers in " << mTimer.CpuTime() - cput << " s";
+  LOG(info) << "Decoded " << tracklets.size() << " TRD tracklets and " << digits.size() << " digits in " << triggers.size() << " triggers, (" << iosize.asString() << ") in " << mTimer.CpuTime() - cput << " s";
 }
 
 void EntropyDecoderSpec::endOfStream(EndOfStreamContext& ec)
 {
-  LOGF(INFO, "TRD Entropy Decoding total timing: Cpu: %.3e Real: %.3e s in %d slots",
+  LOGF(info, "TRD Entropy Decoding total timing: Cpu: %.3e Real: %.3e s in %d slots",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
 }
 
-DataProcessorSpec getEntropyDecoderSpec()
+DataProcessorSpec getEntropyDecoderSpec(int verbosity, unsigned int sspec)
 {
   std::vector<OutputSpec> outputs{
     OutputSpec{{"triggers"}, "TRD", "TRKTRGRD", 0, Lifetime::Timeframe},
     OutputSpec{{"tracklets"}, "TRD", "TRACKLETS", 0, Lifetime::Timeframe},
-    OutputSpec{{"digits"}, "TRD", "DIGITS", 0, Lifetime::Timeframe}};
+    OutputSpec{{"digits"}, "TRD", "DIGITS", 0, Lifetime::Timeframe},
+    OutputSpec{{"ctfrep"}, "TRD", "CTFDECREP", 0, Lifetime::Timeframe}};
+
+  std::vector<InputSpec> inputs;
+  inputs.emplace_back("ctf_TRD", "TRD", "CTFDATA", sspec, Lifetime::Timeframe);
+  inputs.emplace_back("ctfdict_TRD", "TRD", "CTFDICT", 0, Lifetime::Condition, ccdbParamSpec("TRD/Calib/CTFDictionaryTree"));
+  inputs.emplace_back("trigoffset", "CTP", "Trig_Offset", 0, Lifetime::Condition, ccdbParamSpec("CTP/Config/TriggerOffsets"));
 
   return DataProcessorSpec{
     "trd-entropy-decoder",
-    Inputs{InputSpec{"ctf", "TRD", "CTFDATA", 0, Lifetime::Timeframe}},
+    inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<EntropyDecoderSpec>()},
-    Options{{"ctf-dict", VariantType::String, o2::base::NameConf::getCTFDictFileName(), {"File of CTF decoding dictionary"}}}};
+    AlgorithmSpec{adaptFromTask<EntropyDecoderSpec>(verbosity)},
+    Options{{"ctf-dict", VariantType::String, "ccdb", {"CTF dictionary: empty or ccdb=CCDB, none=no external dictionary otherwise: local filename"}},
+            {"correct-trd-trigger-offset", VariantType::Bool, false, {"Correct decoded IR by TriggerOffsetsParam::LM_L0"}},
+            {"bogus-trigger-rejection", VariantType::Int, 10, {">0 : discard, warn N times, <0 : warn only, =0: no check for triggers with no tracklets or bogus IR"}},
+            {"ans-version", VariantType::String, {"version of ans entropy coder implementation to use"}}}};
 }
 
 } // namespace trd

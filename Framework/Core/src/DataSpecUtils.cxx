@@ -12,11 +12,14 @@
 #include "Framework/DataDescriptorMatcher.h"
 #include "Framework/DataMatcherWalker.h"
 #include "Framework/VariantHelpers.h"
-#include "Framework/Logger.h"
 #include "Framework/RuntimeError.h"
+#include "Headers/DataHeaderHelpers.h"
 
+#include <fmt/format.h>
+#include <sstream>
 #include <cstring>
 #include <cinttypes>
+#include <regex>
 
 namespace o2::framework
 {
@@ -99,6 +102,22 @@ void DataSpecUtils::describe(char* buffer, size_t size, InputSpec const& spec)
     strncpy(buffer, ss.str().c_str(), size - 1);
   } else {
     throw runtime_error("Unsupported InputSpec");
+  }
+}
+
+void DataSpecUtils::describe(char* buffer, size_t size, OutputSpec const& spec)
+{
+  if (auto concrete = std::get_if<ConcreteDataMatcher>(&spec.matcher)) {
+    char origin[5];
+    origin[4] = 0;
+    char description[17];
+    description[16] = 0;
+    snprintf(buffer, size, "%s/%s/%" PRIu32, (strncpy(origin, concrete->origin.str, 4), origin),
+             (strncpy(description, concrete->description.str, 16), description), concrete->subSpec);
+  } else if (auto concrete = std::get_if<ConcreteDataTypeMatcher>(&spec.matcher)) {
+    fmt::format_to(buffer, "<matcher query: {}/{}>", concrete->origin, concrete->description);
+  } else {
+    throw runtime_error("Unsupported OutputSpec");
   }
 }
 
@@ -316,7 +335,8 @@ MatcherInfo extractMatcherInfo(DataDescriptorMatcher const& top)
         state.hasError = true;
         return VisitNone;
       }
-      if (action.node->getOp() == ops::Just) {
+      if (action.node->getOp() == ops::Just ||
+          action.node->getOp() == ops::Not) {
         return VisitLeft;
       }
       return VisitBoth;
@@ -394,6 +414,19 @@ ConcreteDataMatcher DataSpecUtils::asConcreteDataMatcher(InputSpec const& spec)
 ConcreteDataMatcher DataSpecUtils::asConcreteDataMatcher(OutputSpec const& spec)
 {
   return std::get<ConcreteDataMatcher>(spec.matcher);
+}
+
+std::optional<ConcreteDataMatcher> DataSpecUtils::asOptionalConcreteDataMatcher(OutputSpec const& spec)
+{
+  return std::visit(overloaded{
+                      [](ConcreteDataMatcher const& concrete) {
+                        return std::optional<ConcreteDataMatcher>{concrete};
+                      },
+                      [](DataDescriptorMatcher const& matcher) {
+                        return DataSpecUtils::optionalConcreteDataMatcherFrom(matcher);
+                      },
+                      [](auto const&) { return std::optional<ConcreteDataMatcher>{std::nullopt}; }},
+                    spec.matcher);
 }
 
 ConcreteDataTypeMatcher DataSpecUtils::asConcreteDataTypeMatcher(OutputSpec const& spec)
@@ -484,7 +517,7 @@ DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(ConcreteDataMatch
         SubSpecificationTypeValueMatcher{concrete.subSpec},
         std::make_unique<DataDescriptorMatcher>(DataDescriptorMatcher::Op::Just,
                                                 StartTimeValueMatcher{ContextRef{0}})))};
-  return std::move(matchEverything);
+  return matchEverything;
 }
 
 DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(ConcreteDataTypeMatcher const& dataType)
@@ -492,11 +525,12 @@ DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(ConcreteDataTypeM
   auto timeDescriptionMatcher = std::make_unique<DataDescriptorMatcher>(
     DataDescriptorMatcher::Op::And,
     DescriptionValueMatcher{dataType.description.as<std::string>()},
-    StartTimeValueMatcher(ContextRef{0}));
-  return std::move(DataDescriptorMatcher(
+    std::make_unique<DataDescriptorMatcher>(DataDescriptorMatcher::Op::Just,
+                                            StartTimeValueMatcher{ContextRef{0}}));
+  return DataDescriptorMatcher(
     DataDescriptorMatcher::Op::And,
     OriginValueMatcher{dataType.origin.as<std::string>()},
-    std::move(timeDescriptionMatcher)));
+    std::move(timeDescriptionMatcher));
 }
 
 DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(header::DataOrigin const& origin)
@@ -514,7 +548,7 @@ DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(header::DataOrigi
         SubSpecificationTypeValueMatcher{ContextRef{2}},
         std::make_unique<DataDescriptorMatcher>(DataDescriptorMatcher::Op::Just,
                                                 StartTimeValueMatcher{ContextRef{0}})))};
-  return std::move(matchOnlyOrigin);
+  return matchOnlyOrigin;
 }
 
 DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(header::DataDescription const& description)
@@ -532,7 +566,82 @@ DataDescriptorMatcher DataSpecUtils::dataDescriptorMatcherFrom(header::DataDescr
         SubSpecificationTypeValueMatcher{ContextRef{2}},
         std::make_unique<DataDescriptorMatcher>(DataDescriptorMatcher::Op::Just,
                                                 StartTimeValueMatcher{ContextRef{0}})))};
-  return std::move(matchOnlyOrigin);
+  return matchOnlyOrigin;
+}
+
+std::optional<framework::ConcreteDataMatcher> DataSpecUtils::optionalConcreteDataMatcherFrom(data_matcher::DataDescriptorMatcher const& matcher)
+{
+  using namespace data_matcher;
+  using ops = DataDescriptorMatcher::Op;
+
+  MatcherInfo state;
+  auto nodeWalker = overloaded{
+    [&state](EdgeActions::EnterNode action) {
+      if (state.hasError) {
+        return VisitNone;
+      }
+      // a ConcreteDataMatcher requires either 'and' or 'just'
+      // operations and we return the corresponding action for these
+      if (action.node->getOp() == ops::Just) {
+        return VisitLeft;
+      } else if (action.node->getOp() == ops::And) {
+        return VisitBoth;
+      }
+      // simply use the error state to indicate that the operation does not match the
+      // requirement for fully qualified ConcreteDataMatcher
+      state.hasError = true;
+      return VisitNone;
+    },
+    [](auto) { return VisitNone; }};
+
+  auto leafWalker = overloaded{
+    [&state](OriginValueMatcher const& valueMatcher) {
+      // if this is not the first OriginValueMatcher, the value can not be unique
+      if (state.hasOrigin) {
+        state.hasUniqueOrigin = false;
+        return;
+      }
+      state.hasOrigin = true;
+
+      valueMatcher.visit(overloaded{
+        [&state](std::string const& s) {
+          strncpy(state.origin.str, s.data(), 4);
+          state.hasUniqueOrigin = true;
+        },
+        [&state](auto) { state.hasUniqueOrigin = false; }});
+    },
+    [&state](DescriptionValueMatcher const& valueMatcher) {
+      if (state.hasDescription) {
+        state.hasUniqueDescription = false;
+        return;
+      }
+      state.hasDescription = true;
+      valueMatcher.visit(overloaded{
+        [&state](std::string const& s) {
+          strncpy(state.description.str, s.data(), 16);
+          state.hasUniqueDescription = true;
+        },
+        [&state](auto) { state.hasUniqueDescription = false; }});
+    },
+    [&state](SubSpecificationTypeValueMatcher const& valueMatcher) {
+      if (state.hasSubSpec) {
+        state.hasUniqueSubSpec = false;
+        return;
+      }
+      state.hasSubSpec = true;
+      valueMatcher.visit(overloaded{
+        [&state](uint32_t const& data) {
+          state.subSpec = data;
+          state.hasUniqueSubSpec = true;
+        },
+        [&state](auto) { state.hasUniqueSubSpec = false; }});
+    },
+    [](auto t) {}};
+  DataMatcherWalker::walk(matcher, nodeWalker, leafWalker);
+  if (state.hasError == false && state.hasUniqueOrigin && state.hasUniqueDescription && state.hasUniqueSubSpec) {
+    return std::make_optional(ConcreteDataMatcher{state.origin, state.description, state.subSpec});
+  }
+  return {};
 }
 
 InputSpec DataSpecUtils::matchingInput(OutputSpec const& spec)
@@ -550,9 +659,29 @@ InputSpec DataSpecUtils::matchingInput(OutputSpec const& spec)
                         auto&& matcher = DataSpecUtils::dataDescriptorMatcherFrom(dataType);
                         return InputSpec{
                           spec.binding.value,
-                          std::move(matcher)};
+                          std::move(matcher),
+                          spec.lifetime};
                       }},
                     spec.matcher);
+}
+
+InputSpec DataSpecUtils::fromMetadataString(std::string s)
+{
+  std::regex word_regex("(\\w+)");
+  auto words = std::sregex_iterator(s.begin(), s.end(), word_regex);
+  if (std::distance(words, std::sregex_iterator()) != 4) {
+    throw runtime_error_f("Malformed input spec metadata: %s", s.c_str());
+  }
+  std::vector<std::string> data;
+  for (auto i = words; i != std::sregex_iterator(); ++i) {
+    data.emplace_back(i->str());
+  }
+  char origin[4];
+  char description[16];
+  std::memcpy(&origin, data[1].c_str(), 4);
+  std::memcpy(&description, data[2].c_str(), 16);
+  auto version = static_cast<o2::header::DataHeader::SubSpecificationType>(std::atoi(data[3].c_str()));
+  return InputSpec{data[0], header::DataOrigin{origin}, header::DataDescription{description}, version, Lifetime::Timeframe};
 }
 
 std::optional<header::DataOrigin> DataSpecUtils::getOptionalOrigin(InputSpec const& spec)
@@ -649,6 +778,38 @@ bool DataSpecUtils::includes(const InputSpec& left, const InputSpec& right)
           left.matcher);
       }},
     right.matcher);
+}
+
+void DataSpecUtils::updateInputList(std::vector<InputSpec>& list, InputSpec&& input)
+{
+  auto locate = std::find(list.begin(), list.end(), input);
+  if (locate != list.end()) {
+    // amend entry
+    auto& entryMetadata = locate->metadata;
+    entryMetadata.insert(entryMetadata.end(), input.metadata.begin(), input.metadata.end());
+    std::sort(entryMetadata.begin(), entryMetadata.end(), [](ConfigParamSpec const& a, ConfigParamSpec const& b) { return a.name < b.name; });
+    auto new_end = std::unique(entryMetadata.begin(), entryMetadata.end(), [](ConfigParamSpec const& a, ConfigParamSpec const& b) { return a.name == b.name; });
+    entryMetadata.erase(new_end, entryMetadata.end());
+  } else {
+    // add entry
+    list.emplace_back(std::move(input));
+  }
+}
+
+void DataSpecUtils::updateOutputList(std::vector<OutputSpec>& list, OutputSpec&& spec)
+{
+  auto locate = std::find(list.begin(), list.end(), spec);
+  if (locate != list.end()) {
+    // amend entry
+    auto& entryMetadata = locate->metadata;
+    entryMetadata.insert(entryMetadata.end(), spec.metadata.begin(), spec.metadata.end());
+    std::sort(entryMetadata.begin(), entryMetadata.end(), [](ConfigParamSpec const& a, ConfigParamSpec const& b) { return a.name < b.name; });
+    auto new_end = std::unique(entryMetadata.begin(), entryMetadata.end(), [](ConfigParamSpec const& a, ConfigParamSpec const& b) { return a.name == b.name; });
+    entryMetadata.erase(new_end, entryMetadata.end());
+  } else {
+    // add entry
+    list.emplace_back(std::move(spec));
+  }
 }
 
 } // namespace o2::framework

@@ -9,11 +9,7 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#define BOOST_TEST_MODULE Test Framework StaticFor
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
-
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 
 #include "Framework/StringHelpers.h"
 #include "Framework/StaticFor.h"
@@ -23,28 +19,28 @@ using namespace o2::framework;
 template <int someNumber>
 void dummyFunc()
 {
-  std::cout << "calling function with non-type template argument " << someNumber << std::endl;
+  INFO("calling function with non-type template argument " << someNumber);
 }
 
-BOOST_AUTO_TEST_CASE(TestStaticFor)
+TEST_CASE("TestStaticFor")
 {
   // check if it is actually static
   static_for<0, 0>([&](auto i) {
-    static_assert(std::is_same_v<decltype(i), std::integral_constant<int, 0>>);
+    static_assert(std::same_as<decltype(i), std::integral_constant<int, 0>>);
 
-    static_assert(std::is_same_v<decltype(i.value), const int>);
-    BOOST_CHECK_EQUAL(i.value, 0);
-    BOOST_CHECK_EQUAL(i, 0);
+    static_assert(std::same_as<decltype(i.value), const int>);
+    REQUIRE(i.value == 0);
+    REQUIRE(i == 0);
 
     // the following checks will fail
-    //static_assert(std::is_same_v<decltype(i), std::integral_constant<int, 1>>);
-    //BOOST_CHECK_EQUAL(i.value, 1);
-    //BOOST_CHECK_EQUAL(i, 1);
+    // static_assert(std::same_as<decltype(i), std::integral_constant<int, 1>>);
+    // REQUIRE(i.value ==  1);;
+    // REQUIRE(i ==  1);;
   });
 
   // dont start at 0
   static_for<5, 5>([&](auto i) {
-    static_assert(std::is_same_v<decltype(i), std::integral_constant<int, 5>>);
+    static_assert(std::same_as<decltype(i), std::integral_constant<int, 5>>);
   });
 
   // check if argument can be used as non-type template argument
@@ -61,11 +57,9 @@ BOOST_AUTO_TEST_CASE(TestStaticFor)
     constexpr int index = i.value;
 
     // compiler will complain if constexpr is not enforced for index access:
-    //CONST_STR(staticNames[index]);    // works
-    //CONST_STR(staticNames[i.value]);  // fails
 
     constexpr auto sayHello = CONST_STR("Hello ") + CONST_STR(staticNames[index]);
 
-    std::cout << sayHello.str << std::endl;
+    INFO(sayHello.str);
   });
 }

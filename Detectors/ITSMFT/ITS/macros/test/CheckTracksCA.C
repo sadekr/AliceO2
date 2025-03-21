@@ -1,3 +1,14 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
 /// \file CheckTracksCA.C
 /// \brief Simple macro to check ITSU tracks
 
@@ -17,14 +28,16 @@
 #include <TPad.h>
 
 #include "ITSBase/GeometryTGeo.h"
+#include "SimulationDataFormat/MCEventHeader.h"
+#include "DetectorsBase/Propagator.h"
 #include "SimulationDataFormat/TrackReference.h"
 #include "SimulationDataFormat/MCTrack.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "DataFormatsITSMFT/CompCluster.h"
 #include "DataFormatsITS/TrackITS.h"
 
 #endif
+#include "DataFormatsITSMFT/CompCluster.h"
 
 using namespace std;
 
@@ -36,6 +49,11 @@ struct ParticleInfo {
   float phi;
   int mother;
   int first;
+  float pvx{};
+  float pvy{};
+  float pvz{};
+  float dcaxy;
+  float dcaz;
   unsigned short clusters = 0u;
   unsigned char isReco = 0u;
   unsigned char isFake = 0u;
@@ -46,11 +64,19 @@ struct ParticleInfo {
 
 #pragma link C++ class ParticleInfo + ;
 
-void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.root", std::string clusfile = "o2clus_its.root", std::string kinefile = "o2sim_Kine.root")
+void CheckTracksCA(bool doFakeClStud = false,
+                   std::string tracfile = "o2trac_its.root",
+                   std::string magfile = "o2sim_grp.root",
+                   std::string clusfile = "o2clus_its.root",
+                   std::string kinefile = "o2sim_Kine.root")
 {
 
   using namespace o2::itsmft;
   using namespace o2::its;
+
+  // Magnetic field and Propagator
+  o2::base::Propagator::initFieldFromGRP(magfile);
+  float bz = o2::base::Propagator::Instance()->getNominalBz();
 
   // Geometry
   o2::base::GeometryManager::loadGeometry();
@@ -59,11 +85,14 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
   // MC tracks
   TFile* file0 = TFile::Open(kinefile.data());
   TTree* mcTree = (TTree*)gFile->Get("o2sim");
-  mcTree->SetBranchStatus("*", 0); //disable all branches
+  mcTree->SetBranchStatus("*", 0); // disable all branches
   mcTree->SetBranchStatus("MCTrack*", 1);
+  mcTree->SetBranchStatus("MCEventHeader*", 1);
 
   std::vector<o2::MCTrack>* mcArr = nullptr;
   mcTree->SetBranchAddress("MCTrack", &mcArr);
+  o2::dataformats::MCEventHeader* mcEvent = nullptr;
+  mcTree->SetBranchAddress("MCEventHeader.", &mcEvent);
 
   // Clusters
   TFile::Open(clusfile.data());
@@ -87,14 +116,20 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
   std::cout << "** Filling particle table ... " << std::flush;
   int lastEventIDcl = -1, cf = 0;
   int nev = mcTree->GetEntriesFast();
-  std::vector<std::vector<ParticleInfo>> info(nev);
+  std::vector<std::vector<ParticleInfo>> info;
+  info.resize(nev);
+  TH1D* hZvertex = new TH1D("hZvertex", "Z vertex", 100, -20, 20);
   for (int n = 0; n < nev; n++) { // loop over MC events
     mcTree->GetEvent(n);
     info[n].resize(mcArr->size());
+    hZvertex->Fill(mcEvent->GetZ());
     for (unsigned int mcI{0}; mcI < mcArr->size(); ++mcI) {
       auto part = mcArr->at(mcI);
       info[n][mcI].event = n;
       info[n][mcI].pdg = part.GetPdgCode();
+      info[n][mcI].pvx = mcEvent->GetX();
+      info[n][mcI].pvy = mcEvent->GetY();
+      info[n][mcI].pvz = mcEvent->GetZ();
       info[n][mcI].pt = part.GetPt();
       info[n][mcI].phi = part.GetPhi();
       info[n][mcI].eta = part.GetEta();
@@ -159,8 +194,12 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
       info[evID][trackID].isFake += fake;
       /// We keep the best track we would keep in the data
       if (recArr->at(iTrack).isBetter(info[evID][trackID].track, 1.e9)) {
-        info[evID][trackID].storedStatus = fake;
         info[evID][trackID].track = recArr->at(iTrack);
+        info[evID][trackID].storedStatus = fake;
+        static float ip[2]{0., 0.};
+        info[evID][trackID].track.getImpactParams(info[evID][trackID].pvx, info[evID][trackID].pvy, info[evID][trackID].pvz, bz, ip);
+        info[evID][trackID].dcaxy = ip[0];
+        info[evID][trackID].dcaz = ip[1];
       }
 
       fakes += fake;
@@ -182,6 +221,8 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
     xbins[i] = ptcutl * std::exp(i * a);
   TH1D* num = new TH1D("num", ";#it{p}_{T} (GeV/#it{c});Efficiency (fake-track rate)", nb, xbins);
   num->Sumw2();
+  TH1D* numEta = new TH1D("numEta", ";#eta;Number of tracks", 60, -3, 3);
+  numEta->Sumw2();
   TH1D* numChi2 = new TH1D("numChi2", ";#it{p}_{T} (GeV/#it{c});Efficiency (fake-track rate)", 200, 0, 100);
 
   TH1D* fak = new TH1D("fak", ";#it{p}_{T} (GeV/#it{c});Fak", nb, xbins);
@@ -198,18 +239,19 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
 
   for (auto& evInfo : info) {
     for (auto& part : evInfo) {
-      if (part.clusters != 0x7f) {
+      if ((part.clusters & 0x7f) != 0x7f) {
         // part.clusters != 0x3f && part.clusters != 0x3f << 1 &&
         // part.clusters != 0x1f && part.clusters != 0x1f << 1 && part.clusters != 0x1f << 2 &&
         // part.clusters != 0x0f && part.clusters != 0x0f << 1 && part.clusters != 0x0f << 2 && part.clusters != 0x0f << 3) {
         continue;
       }
-      if (std::abs(part.eta) > 1.1 && !part.isPrimary) {
+      if (!part.isPrimary) {
         continue;
       }
       den->Fill(part.pt);
       if (part.isReco) {
         num->Fill(part.pt);
+        numEta->Fill(part.eta);
         if (part.isReco > 1) {
           for (int _i{0}; _i < part.isReco - 1; ++_i) {
             clone->Fill(part.pt);
@@ -247,6 +289,10 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
   clone->Divide(clone, den, 1, 1, "b");
   clone->SetLineColor(3);
   clone->Draw("histesame");
+  TCanvas* c2 = new TCanvas;
+  c2->SetGridx();
+  c2->SetGridy();
+  hZvertex->DrawClone();
 
   std::cout << "** Streaming output TTree to file ... " << std::flush;
   TFile file("CheckTracksCA.root", "recreate");
@@ -270,6 +316,7 @@ void CheckTracksCA(bool doFakeClStud = true, std::string tracfile = "o2trac_its.
   sum->Write("total");
   fak->Write("singleFake");
   num->Write("efficiency");
+  numEta->Write("etaDist");
   multiFak->Write("multiFake");
   clone->Write("clones");
   file.Close();

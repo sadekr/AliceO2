@@ -31,6 +31,8 @@
 #include "GlobalTracking/MatchTPCITS.h"
 #include "CommonConstants/GeomConstants.h"
 #include "DataFormatsTPC/WorkflowHelper.h"
+#include "DataFormatsTPC/VDriftCorrFact.h"
+#include "CorrectionMapsHelper.h"
 #include <algorithm>
 #include <numeric>
 
@@ -82,20 +84,19 @@ void MatchCosmics::process(const o2::globaltracking::RecoContainer& data)
 //________________________________________________________
 void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
 {
-  LOG(INFO) << "Refitting " << mWinners.size() << " winner matches";
+  LOG(info) << "Refitting " << mWinners.size() << " winner matches";
   int count = 0;
   auto tpcTBinMUSInv = 1. / mTPCTBinMUS;
-  if (!mTPCTransform) { // eventually, should be updated at every TF?
-    mTPCTransform = o2::tpc::TPCFastTransformHelperO2::instance()->create(0);
-  }
   const auto& tpcClusRefs = data.getTPCTracksClusterRefs();
   const auto& tpcClusShMap = data.clusterShMapTPC;
+  const auto& tpcClusOccMap = data.occupancyMapTPC;
   std::unique_ptr<o2::gpu::GPUO2InterfaceRefit> tpcRefitter;
   if (data.inputsTPCclusters) {
     tpcRefitter = std::make_unique<o2::gpu::GPUO2InterfaceRefit>(&data.inputsTPCclusters->clusterIndex,
-                                                                 mTPCTransform.get(), mBz,
-                                                                 tpcClusRefs.data(), tpcClusShMap.data(),
-                                                                 nullptr, o2::base::Propagator::Instance());
+                                                                 mTPCCorrMapsHelper, mBz,
+                                                                 tpcClusRefs.data(), 0, tpcClusShMap.data(),
+                                                                 tpcClusOccMap.data(), tpcClusOccMap.size(), nullptr, o2::base::Propagator::Instance());
+    tpcRefitter->setTrackReferenceX(900); // disable propagation after refit by setting reference to value > 500
   }
 
   const auto& itsClusters = prepareITSClusters(data);
@@ -152,7 +153,7 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
       btm = 1;
       top = 0;
     }
-    LOG(DEBUG) << "Winner " << count++ << " Record " << winRID << " Partners:"
+    LOG(debug) << "Winner " << count++ << " Record " << winRID << " Partners:"
                << " B: " << mSeeds[poolEntryID[btm]].origID << "/" << mSeeds[poolEntryID[btm]].origID.getSourceName()
                << " U: " << mSeeds[poolEntryID[top]].origID << "/" << mSeeds[poolEntryID[top]].origID.getSourceName()
                << " | T:" << tOverlap.asString();
@@ -166,14 +167,23 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
     if (mSeeds[poolEntryID[btm]].origID.getSource() == GTrackID::TPC) {
       const auto& tpcTrOrig = data.getTPCTrack(mSeeds[poolEntryID[btm]].origID);
       trCosm = outerLegs[btm];
-      int retVal = tpcRefitter->RefitTrackAsTrackParCov(trCosm, tpcTrOrig.getClusterRef(), t0 * tpcTBinMUSInv, &chi2, false, true); // inward refit, reset
+      trCosm.resetCovariance();
+      // in case of cosmics, constrain the momentum
+      if (!mFieldON) {
+        trCosm.setQ2Pt(-o2::track::kMostProbablePt);
+      }
+      int retVal = tpcRefitter->RefitTrackAsTrackParCov(trCosm, tpcTrOrig.getClusterRef(), t0 * tpcTBinMUSInv, &chi2, false, false); // inward refit, reset
       if (retVal < 0) {                                                                                                             // refit failed
-        LOG(DEBUG) << "Inward refit of btm TPC track failed.";
+        LOG(debug) << "Inward refit of btm TPC track failed.";
         continue;
       }
       nclTot += retVal;
-      LOG(DEBUG) << "chi2 after btm TPC refit with " << retVal << " clusters : " << chi2 << " orig.chi2 was " << tpcTrOrig.getChi2();
+      LOG(debug) << "chi2 after btm TPC refit with " << retVal << " clusters : " << chi2 << " orig.chi2 was " << tpcTrOrig.getChi2();
     } else { // just collect NClusters and chi2
+      // since we did not refit bottom track, we just invert its conventional q/pT in case of B=0, so that after the inversion it gets correct sign
+      if (!mFieldON) {
+        trCosm.setQ2Pt(-trCosm.getQ2Pt());
+      }
       auto gidxListBtm = data.getSingleDetectorRefs(mSeeds[poolEntryID[btm]].origID);
       if (gidxListBtm[GTrackID::TPC].isIndexSet()) {
         const auto& tpcTrOrig = data.getTPCTrack(gidxListBtm[GTrackID::TPC]);
@@ -189,7 +199,7 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
     trCosm.invert();
     if (!trCosm.rotate(mSeeds[poolEntryID[top]].getAlpha()) ||
         !o2::base::Propagator::Instance()->PropagateToXBxByBz(trCosm, mSeeds[poolEntryID[top]].getX(), mMatchParams->maxSnp, mMatchParams->maxStep, mMatchParams->matCorr)) {
-      LOG(DEBUG) << "Rotation/propagation of btm-track to top-track frame failed.";
+      LOG(debug) << "Rotation/propagation of btm-track to top-track frame failed.";
       continue;
     }
     // save bottom parameter at merging point
@@ -205,7 +215,7 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
       if (nclfit < 0) {
         continue;
       }
-      LOG(DEBUG) << "chi2 after top ITS refit with " << nclfit << " clusters : " << chi2 << " orig.chi2 was " << data.getITSTrack(gidxListTop[GTrackID::ITS]).getChi2();
+      LOG(debug) << "chi2 after top ITS refit with " << nclfit << " clusters : " << chi2 << " orig.chi2 was " << data.getITSTrack(gidxListTop[GTrackID::ITS]).getChi2();
       nclTot += nclfit;
     } // ITS refit
     //
@@ -215,17 +225,17 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
         float xtogo = 0;
         if (!trCosm.getXatLabR(o2::constants::geom::XTPCInnerRef, xtogo, mBz, o2::track::DirOutward) ||
             !o2::base::Propagator::Instance()->PropagateToXBxByBz(trCosm, xtogo, mMatchParams->maxSnp, mMatchParams->maxStep, mMatchParams->matCorr)) {
-          LOG(DEBUG) << "Propagation to inner TPC boundary X=" << xtogo << " failed";
+          LOG(debug) << "Propagation to inner TPC boundary X=" << xtogo << " failed";
           continue;
         }
       }
       const auto& tpcTrOrig = data.getTPCTrack(gidxListTop[GTrackID::TPC]);
       int retVal = tpcRefitter->RefitTrackAsTrackParCov(trCosm, tpcTrOrig.getClusterRef(), t0 * tpcTBinMUSInv, &chi2, true, false); // outward refit, no reset
       if (retVal < 0) {                                                                                                             // refit failed
-        LOG(DEBUG) << "Outward refit of top TPC track failed.";
+        LOG(debug) << "Outward refit of top TPC track failed.";
         continue;
       } // outward refit in TPC
-      LOG(DEBUG) << "chi2 after top TPC refit with " << retVal << " clusters : " << chi2 << " orig.chi2 was " << tpcTrOrig.getChi2();
+      LOG(debug) << "chi2 after top TPC refit with " << retVal << " clusters : " << chi2 << " orig.chi2 was " << tpcTrOrig.getChi2();
       nclTot += retVal;
     }
 
@@ -236,7 +246,7 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
       const auto& tpcTrOrig = data.getTPCTrack(gidxListTop[GTrackID::TPC]);
       int retVal = tpcRefitter->RefitTrackAsTrackParCov(trCosmTop, tpcTrOrig.getClusterRef(), t0 * tpcTBinMUSInv, &chi2Dummy, false, true); // inward refit, reset
       if (retVal < 0) {                                                                                                                     // refit failed
-        LOG(DEBUG) << "Outward refit of top TPC track failed.";
+        LOG(debug) << "Outward refit of top TPC track failed.";
         continue;
       } // inward refit in TPC
     }
@@ -251,14 +261,14 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
     // propagate to bottom param
     if (!trCosmTop.rotate(trCosmBtm.getAlpha()) ||
         !o2::base::Propagator::Instance()->PropagateToXBxByBz(trCosmTop, trCosmBtm.getX(), mMatchParams->maxSnp, mMatchParams->maxStep, mMatchParams->matCorr)) {
-      LOG(DEBUG) << "Rotation/propagation of top-track to bottom-track frame failed.";
+      LOG(debug) << "Rotation/propagation of top-track to bottom-track frame failed.";
       continue;
     }
     // calculate weighted average of 2 legs and chi2
     o2::track::TrackParCov::MatrixDSym5 cov5;
     float chi2Match = trCosmBtm.getPredictedChi2(trCosmTop, cov5);
     if (!trCosmBtm.update(trCosmTop, cov5)) {
-      LOG(DEBUG) << "Top/Bottom update failed";
+      LOG(debug) << "Top/Bottom update failed";
       continue;
     }
     // create final track
@@ -269,7 +279,7 @@ void MatchCosmics::refitWinners(const o2::globaltracking::RecoContainer& data)
       tlb.setFakeFlag(lbl[0] != lbl[1]);
     }
   }
-  LOG(INFO) << "Validated " << mCosmicTracks.size() << " top-bottom tracks in TF# " << mTFCount;
+  LOG(info) << "Validated " << mCosmicTracks.size() << " top-bottom tracks in TF# " << mTFCount;
 }
 
 //________________________________________________________
@@ -292,7 +302,7 @@ void MatchCosmics::selectWinners()
         continue;
       }
     }
-    LOGF(INFO, "iter %d Validated %d of %d remaining matches", iter, nValidated, nRemaining);
+    LOGF(info, "iter %d Validated %d of %d remaining matches", iter, nValidated, nRemaining);
     iter++;
   } while (nValidated);
 }
@@ -335,7 +345,7 @@ void MatchCosmics::suppressMatch(int partner0, int partner1)
 {
   // suppress reference to partner0 from partner1 match record
   if (mSeeds[partner1].matchID < 0 || mRecords[mSeeds[partner1].matchID].next == Validated) {
-    LOG(WARNING) << "Attempt to remove null or validated partner match " << mSeeds[partner1].matchID;
+    LOG(warning) << "Attempt to remove null or validated partner match " << mSeeds[partner1].matchID;
     return;
   }
   int topID = MinusOne, next = mSeeds[partner1].matchID;
@@ -368,10 +378,10 @@ MatchCosmics::RejFlag MatchCosmics::checkPair(int i, int j)
     return rej;
   }
 
-  LOG(DEBUG) << "Seed " << i << " [" << seed0.tBracket.getMin() << " : " << seed0.tBracket.getMax() << "] | "
+  LOG(debug) << "Seed " << i << " [" << seed0.tBracket.getMin() << " : " << seed0.tBracket.getMax() << "] | "
              << "Seed " << j << " [" << seed1.tBracket.getMin() << " : " << seed1.tBracket.getMax() << "] | ";
-  LOG(DEBUG) << seed0.origID << " | " << seed0.o2::track::TrackPar::asString();
-  LOG(DEBUG) << seed1.origID << " | " << seed1.o2::track::TrackPar::asString();
+  LOG(debug) << seed0.origID << " | " << seed0.o2::track::TrackPar::asString();
+  LOG(debug) << seed1.origID << " | " << seed1.o2::track::TrackPar::asString();
 
   if (seed1.tBracket > seed0.tBracket) {
     return (rej = RejTime); // since the brackets are sorted in tmin, all following tbj will also exceed tbi
@@ -437,7 +447,7 @@ MatchCosmics::RejFlag MatchCosmics::checkPair(int i, int j)
     rej = Accept;
     registerMatch(i, j, chi2);
     registerMatch(j, i, chi2); // the reverse reference can be also done in a separate loop
-    LOG(DEBUG) << "Chi2 = " << chi2 << " NMatches " << mRecords.size();
+    LOG(debug) << "Chi2 = " << chi2 << " NMatches " << mRecords.size();
     break;
   }
 
@@ -490,6 +500,9 @@ void MatchCosmics::createSeeds(const o2::globaltracking::RecoContainer& data)
         return true;
       }
       if constexpr (isTPCTrack<decltype(_tr)>()) {
+        if (!this->mMatchParams->allowTPCOnly) {
+          return true;
+        }
         // unconstrained TPC track, with t0 = TrackTPC.getTime0+0.5*(DeltaFwd-DeltaBwd) and terr = 0.5*(DeltaFwd+DeltaBwd) in TimeBins
         t0 *= this->mTPCTBinMUS;
         terr *= this->mTPCTBinMUS;
@@ -509,7 +522,7 @@ void MatchCosmics::createSeeds(const o2::globaltracking::RecoContainer& data)
 
   data.createTracksVariadic(creator);
 
-  LOG(INFO) << "collected " << mSeeds.size() << " seeds";
+  LOG(info) << "collected " << mSeeds.size() << " seeds";
 }
 
 //________________________________________________________
@@ -550,7 +563,7 @@ std::vector<o2::BaseCluster<float>> MatchCosmics::prepareITSClusters(const o2::g
     const auto& patterns = data.getITSClustersPatterns();
     itscl.reserve(clusITS.size());
     auto pattIt = patterns.begin();
-    o2::its::ioutils::convertCompactClusters(clusITS, pattIt, itscl, *mITSDict);
+    o2::its::ioutils::convertCompactClusters(clusITS, pattIt, itscl, mITSDict);
   }
   return std::move(itscl);
 }
@@ -573,6 +586,21 @@ void MatchCosmics::setDebugFlag(UInt_t flag, bool on)
   } else {
     mDBGFlags &= ~flag;
   }
+}
+
+//______________________________________________
+void MatchCosmics::setTPCVDrift(const o2::tpc::VDriftCorrFact& v)
+{
+  mTPCVDrift = v.refVDrift * v.corrFact;
+  mTPCVDriftCorrFact = v.corrFact;
+  mTPCVDriftRef = v.refVDrift;
+  mTPCDriftTimeOffset = v.getTimeOffset();
+}
+
+//______________________________________________
+void MatchCosmics::setTPCCorrMaps(o2::gpu::CorrectionMapsHelper* maph)
+{
+  mTPCCorrMapsHelper = maph;
 }
 
 #endif

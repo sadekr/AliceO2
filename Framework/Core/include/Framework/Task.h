@@ -14,47 +14,10 @@
 #include "Framework/AlgorithmSpec.h"
 #include "Framework/CallbackService.h"
 #include "Framework/EndOfStreamContext.h"
-#include <utility>
 #include <memory>
 
 namespace o2::framework
 {
-
-/// Check if the class task has EndOfStream
-template <typename T>
-class has_endOfStream
-{
-  typedef char one;
-  struct two {
-    char x[2];
-  };
-
-  template <typename C>
-  static one test(decltype(&C::endOfStream));
-  template <typename C>
-  static two test(...);
-
- public:
-  enum { value = sizeof(test<T>(nullptr)) == sizeof(char) };
-};
-
-/// Check if the class task has Stop
-template <typename T>
-class has_stop
-{
-  typedef char one;
-  struct two {
-    char x[2];
-  };
-
-  template <typename C>
-  static one test(decltype(&C::stop));
-  template <typename C>
-  static two test(...);
-
- public:
-  enum { value = sizeof(test<T>(nullptr)) == sizeof(char) };
-};
 
 /// A more familiar task API for the DPL.
 /// This allows you to define your own tasks as subclasses
@@ -79,6 +42,13 @@ class Task
   /// This is invoked whenever we have an EndOfStream event
   virtual void endOfStream(EndOfStreamContext& context) {}
 
+  /// This is invoked whenever a new CCDB object associated to
+  /// a given ConcreteDataMatcher is deserialised
+  virtual void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+  {
+    LOGP(debug, "CCDB deserialization invoked");
+  }
+
   /// This is invoked on stop
   virtual void stop() {}
 };
@@ -90,20 +60,55 @@ AlgorithmSpec adaptFromTask(Args&&... args)
 {
   return AlgorithmSpec::InitCallback{[=](InitContext& ic) {
     auto task = std::make_shared<T>(args...);
-    if constexpr (has_endOfStream<T>::value) {
+    if constexpr (requires { &T::endOfStream; }) {
       auto& callbacks = ic.services().get<CallbackService>();
-      callbacks.set(CallbackService::Id::EndOfStream, [task](EndOfStreamContext& eosContext) {
+      callbacks.set<CallbackService::Id::EndOfStream>([task](EndOfStreamContext& eosContext) {
         task->endOfStream(eosContext);
       });
     }
-    if constexpr (has_stop<T>::value) {
+    if constexpr (requires { &T::finaliseCCDB; }) {
       auto& callbacks = ic.services().get<CallbackService>();
-      callbacks.set(CallbackService::Id::Stop, [task]() {
+      callbacks.set<CallbackService::Id::CCDBDeserialised>([task](ConcreteDataMatcher& matcher, void* obj) {
+        task->finaliseCCDB(matcher, obj);
+      });
+    }
+    if constexpr (requires { &T::stop; }) {
+      auto& callbacks = ic.services().get<CallbackService>();
+      callbacks.set<CallbackService::Id::Stop>([task]() {
         task->stop();
       });
     }
     task->init(ic);
     return [task](ProcessingContext& pc) {
+      task->run(pc);
+    };
+  }};
+}
+
+template <typename T>
+AlgorithmSpec adoptTask(std::shared_ptr<T> task)
+{
+  return AlgorithmSpec::InitCallback{[task](InitContext& ic) {
+    if constexpr (requires { &T::endOfStream; }) {
+      auto& callbacks = ic.services().get<CallbackService>();
+      callbacks.set<CallbackService::Id::EndOfStream>([task](EndOfStreamContext& eosContext) {
+        task->endOfStream(eosContext);
+      });
+    }
+    if constexpr (requires { &T::finaliseCCDB; }) {
+      auto& callbacks = ic.services().get<CallbackService>();
+      callbacks.set<CallbackService::Id::CCDBDeserialised>([task](ConcreteDataMatcher& matcher, void* obj) {
+        task->finaliseCCDB(matcher, obj);
+      });
+    }
+    if constexpr (requires { &T::stop; }) {
+      auto& callbacks = ic.services().get<CallbackService>();
+      callbacks.set<CallbackService::Id::Stop>([task]() {
+        task->stop();
+      });
+    }
+    task->init(ic);
+    return [&task](ProcessingContext& pc) {
       task->run(pc);
     };
   }};

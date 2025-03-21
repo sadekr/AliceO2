@@ -13,6 +13,7 @@ o2_add_library(TRDWorkflowIO
                SOURCES src/TRDDigitReaderSpec.cxx
                        src/TRDTrackletReaderSpec.cxx
                        src/TRDCalibReaderSpec.cxx
+                       src/TRDRawStatWriterSpec.cxx
                        src/TRDDigitWriterSpec.cxx
                        src/TRDTrackletWriterSpec.cxx
                        src/TRDTrapRawWriterSpec.cxx
@@ -20,13 +21,22 @@ o2_add_library(TRDWorkflowIO
                        src/TRDTrackWriterSpec.cxx
                        src/TRDTrackReaderSpec.cxx
                        src/TRDCalibWriterSpec.cxx
-                       src/KrClusterWriterSpec.cxx
-               PUBLIC_LINK_LIBRARIES O2::DataFormatsTRD O2::SimulationDataFormat O2::DPLUtils O2::GPUDataTypeHeaders O2::DataFormatsTPC)
+                       src/TRDPHReaderSpec.cxx
+                       include/TRDWorkflowIO/KrClusterWriterSpec.h
+               PUBLIC_LINK_LIBRARIES O2::DataFormatsTRD O2::SimulationDataFormat O2::DPLUtils O2::GPUDataTypes O2::DataFormatsTPC)
 
 
+o2_add_executable(digit-reader-workflow
+                 COMPONENT_NAME trd
+                 SOURCES src/digit-reader-workflow.cxx
+                 PUBLIC_LINK_LIBRARIES O2::TRDWorkflowIO)
 o2_add_executable(track-reader
                  COMPONENT_NAME trd
                  SOURCES src/trd-track-reader-workflow.cxx
+                 PUBLIC_LINK_LIBRARIES O2::TRDWorkflowIO)
+o2_add_executable(calib-reader-workflow
+                 COMPONENT_NAME trd
+                 SOURCES src/trd-calib-reader-workflow.cxx
                  PUBLIC_LINK_LIBRARIES O2::TRDWorkflowIO)
 o2_add_executable(digittracklet-writer
                  COMPONENT_NAME trd

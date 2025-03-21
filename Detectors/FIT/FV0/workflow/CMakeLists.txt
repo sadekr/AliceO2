@@ -17,12 +17,14 @@ o2_add_library(FV0Workflow
                        src/EntropyEncoderSpec.cxx
                        src/EntropyDecoderSpec.cxx
                        src/DigitReaderSpec.cxx
-               PUBLIC_LINK_LIBRARIES O2::Framework
-                                     O2::DataFormatsFV0
+                       src/FV0DigitWriterSpec.cxx
+               PUBLIC_LINK_LIBRARIES O2::DataFormatsFV0
                                      O2::FV0Reconstruction
+                                     O2::FV0Raw
                                      O2::DetectorsCommonDataFormats
+                                     O2::Framework
                                      O2::DPLUtils
-                                     O2::FV0Raw)
+                                     O2::CommonUtils)
 
 o2_add_executable(reco-workflow
                   SOURCES src/fv0-reco-workflow.cxx
@@ -40,11 +42,41 @@ o2_add_executable(digit-reader-workflow
                   COMPONENT_NAME fv0
                   PUBLIC_LINK_LIBRARIES O2::FV0Workflow)
 
+o2_add_executable(digits-writer-workflow
+                  SOURCES src/digits-writer-workflow.cxx
+                  COMPONENT_NAME fv0
+                  PUBLIC_LINK_LIBRARIES O2::FV0Workflow)
+
 o2_add_executable(flp-dpl-workflow
                   COMPONENT_NAME fv0
                   SOURCES src/fv0-flp-workflow.cxx
                   PUBLIC_LINK_LIBRARIES O2::FV0Workflow O2::FITWorkflow O2::FV0Raw
                   TARGETVARNAME fv0flpexe)
+
+o2_add_executable(recpoints-reader-workflow
+                  SOURCES src/recpoints-reader-workflow.cxx
+                  COMPONENT_NAME fv0
+                  PUBLIC_LINK_LIBRARIES O2::FV0Workflow)
+
+o2_add_executable(recpoints-writer-workflow
+                  SOURCES src/recpoints-writer-workflow.cxx
+                  COMPONENT_NAME fv0
+                  PUBLIC_LINK_LIBRARIES O2::FV0Workflow)
+
+o2_add_executable(integrate-cluster-workflow
+                  SOURCES src/cluster-integrator.cxx
+                  COMPONENT_NAME fv0
+                  PUBLIC_LINK_LIBRARIES O2::FV0Workflow O2::FITWorkflow)
+
+o2_add_executable(integrate-cluster-reader-workflow
+                  SOURCES src/cluster-integrator-reader.cxx
+                  COMPONENT_NAME fv0
+                  PUBLIC_LINK_LIBRARIES O2::FV0Workflow O2::FITWorkflow)
+
+o2_add_executable(merge-integrate-cluster-workflow
+                  SOURCES src/cluster-merge-integrator.cxx
+                  COMPONENT_NAME fv0
+                  PUBLIC_LINK_LIBRARIES O2::FV0Workflow O2::FITWorkflow)
 
 if(NOT APPLE)
 

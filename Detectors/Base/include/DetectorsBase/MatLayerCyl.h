@@ -54,9 +54,11 @@ class MatLayerCyl : public o2::gpu::FlatObject
                              Within = 0,
                              Above = 1 };
 
+#ifndef GPUCA_GPUCODE
   MatLayerCyl();
-  MatLayerCyl(const MatLayerCyl& src) CON_DELETE;
-  ~MatLayerCyl() CON_DEFAULT;
+  MatLayerCyl(const MatLayerCyl& src) = delete;
+  ~MatLayerCyl() = default;
+#endif
 
 #ifndef GPUCA_ALIGPUCODE // this part is unvisible on GPU version
   MatLayerCyl(float rMin, float rMax, float zHalfSpan, float dzMin, float drphiMin);
@@ -90,10 +92,21 @@ class MatLayerCyl : public o2::gpu::FlatObject
   GPUd() const MatCell& getCellPhiBin(int iphi, int iz) const { return mCells[getCellIDPhiBin(iphi, iz)]; }
   GPUd() const MatCell& getCell(int iphiSlice, int iz) const { return mCells[getCellID(iphiSlice, iz)]; }
 
+#ifndef GPUCA_ALIGPUCODE // this part is unvisible on GPU version
+  GPUd() MatCell& getCellPhiBin(int iphi, int iz)
+  {
+    return mCells[getCellIDPhiBin(iphi, iz)];
+  }
+#endif
+
   // ---------------------- Z slice manipulation
   // convert Z to Zslice
   GPUd() RangeStatus isZOutside(float z) const { return z < getZMin() ? Below : (z > getZMax() ? Above : Within); }
-  GPUd() int getZBinID(float z) const { return int((z - getZMin()) * getDZInv()); }
+  GPUd() int getZBinID(float z) const
+  {
+    int idz = int((z - getZMin()) * getDZInv()); // cannot be negative since before isZOutside is applied
+    return idz < getNZBins() ? idz : getNZBins() - 1;
+  }
 
   // lower boundary of Z slice
   GPUd() float getZBinMin(int id) const { return getZMin() + id * getDZ(); }
@@ -152,6 +165,8 @@ class MatLayerCyl : public o2::gpu::FlatObject
   /// Gives minimal alignment in bytes required for the flat buffer
   static constexpr size_t getBufferAlignmentBytes() { return 8; }
 #endif
+  // linearized cell ID from phi bin and z bin
+  GPUd() int getCellIDPhiBin(int iphi, int iz) const { return getCellID(phiBin2Slice(iphi), iz); }
 
  protected:
   GPUd() int getNCells() const { return getNZBins() * getNPhiSlices(); }
@@ -161,11 +176,12 @@ class MatLayerCyl : public o2::gpu::FlatObject
   // linearized cell ID from phi slice and z bin
   GPUd() int getCellID(int iphi, int iz) const { return iphi * getNZBins() + iz; }
 
-  // linearized cell ID from phi bin and z bin
-  GPUd() int getCellIDPhiBin(int iphi, int iz) const { return getCellID(phiBin2Slice(iphi), iz); }
-
   // convert Phi (in 0:2pi convention) to PhiBinID
-  GPUd() int getPhiBinID(float phi) const { return int(phi * getDPhiInv()); }
+  GPUd() int getPhiBinID(float phi) const
+  {
+    auto idphi = int(phi * getDPhiInv());
+    return idphi < getNPhiBins() ? idphi : getNPhiBins() - 1;
+  }
 
   GPUd() int getEdgePhiBinOfSlice(int phiBin, int dir) const
   {

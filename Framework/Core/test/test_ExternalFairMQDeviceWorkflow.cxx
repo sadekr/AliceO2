@@ -15,13 +15,51 @@ using namespace o2::framework;
 #include "Framework/AlgorithmSpec.h"
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/ChannelSpec.h"
+#include "Framework/DeviceSpec.h"
 #include "Framework/DataSpecUtils.h"
+#include "Framework/SourceInfoHeader.h"
 #include "Framework/ExternalFairMQDeviceProxy.h"
 #include "Framework/ControlService.h"
 #include "Framework/CallbackService.h"
+#include "Framework/RawDeviceService.h"
 #include "Framework/Logger.h"
+#include "Framework/InputRecordWalker.h"
 #include "Headers/DataHeader.h"
-#include "fairmq/FairMQDevice.h"
+#include <fairmq/Device.h>
+
+namespace test_config
+{
+enum struct ProxyMode {
+  All,
+  SkipOutput,
+  OnlyOutput, // also excludes checker
+  NoProxies,
+};
+}
+
+namespace test_header
+{
+struct MsgModeHeader : public o2::header::BaseHeader {
+  enum struct MsgMode {
+    Pair,
+    Sequence,
+  };
+
+  static constexpr uint32_t sVersion = 1;
+  static constexpr o2::header::HeaderType sHeaderType = "MsgMode";
+  MsgModeHeader(MsgMode _mode, size_t nParts)
+    : BaseHeader(sizeof(MsgModeHeader), sHeaderType, o2::header::gSerializationMethodNone, sVersion), mode(_mode), nPayloadParts(nParts)
+  {
+  }
+
+  MsgMode mode;
+  size_t nPayloadParts;
+};
+} // namespace test_header
+std::istream& operator>>(std::istream& in, enum test_config::ProxyMode& val);
+std::ostream& operator<<(std::ostream& out, const enum test_config::ProxyMode& val);
+std::istream& operator>>(std::istream& in, enum test_header::MsgModeHeader::MsgMode val);
+std::ostream& operator<<(std::ostream& out, const enum test_header::MsgModeHeader::MsgMode val);
 
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
@@ -34,18 +72,42 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
       "number-of-events,n", VariantType::Int, 10, {"number of events to process"}});
   workflowOptions.push_back(
     ConfigParamSpec{
-      "output-proxy-only", VariantType::Bool, false, {"create only the workflow up to output proxy"}});
+      "proxy-mode", VariantType::String, "skip-output", {"proxy mode: all, skip-output, only-output, skip-all"}});
 }
 
 #include "Framework/runDataProcessing.h"
 
+using namespace o2::framework;
+using DataHeader = o2::header::DataHeader;
+using Stack = o2::header::Stack;
+
 #define ASSERT_ERROR(condition)                                   \
   if ((condition) == false) {                                     \
-    LOG(FATAL) << R"(Test condition ")" #condition R"(" failed)"; \
+    LOG(fatal) << R"(Test condition ")" #condition R"(" failed)"; \
   }
+
+#define ASSERT_EQUAL(left, right)                                                            \
+  if ((left == right) == false) {                                                            \
+    LOGP(fatal, R"(Test condition {} ({}) == {} ({}) failed")", #left, left, #right, right); \
+  }
+
+template <typename T>
+T readConfig(ConfigContext const& config, const char* key)
+{
+  auto p = config.options().get<std::string>(key);
+  std::stringstream cs(p);
+  T val;
+  cs >> val;
+  if (cs.fail()) {
+    throw std::runtime_error("invalid configuration parameter '" + p + "' for key " + key);
+  }
+  return val;
+}
 
 std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
 {
+  using ProxyMode = test_config::ProxyMode;
+  auto proxyMode = readConfig<ProxyMode>(config, "proxy-mode");
   std::string defaultTransportConfig = config.options().get<std::string>("default-transport");
   int nRolls = config.options().get<int>("number-of-events");
   if (defaultTransportConfig == "zeromq") {
@@ -58,27 +120,9 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
   std::vector<DataProcessorSpec> workflow;
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // a producer process steered by a timer
+  // configuration of the out-of-band proxy channel
   //
-  // the compute callback of the producer
-  auto producerCallback = [nRolls, counter = std::make_shared<int>()](DataAllocator& outputs, ControlService& control) {
-    outputs.make<int>(OutputRef{"data", 0}) = *counter;
-    if (++(*counter) >= nRolls) {
-      // send the end of stream signal, this is transferred by the proxies
-      // and allows to properly terminate downstream devices
-      control.endOfStream();
-    }
-  };
-
-  workflow.emplace_back(DataProcessorSpec{"producer",
-                                          {InputSpec{"timer", "TST", "TIMER", 0, Lifetime::Timer}},
-                                          {OutputSpec{{"data"}, "TST", "DATA", 0, Lifetime::Timeframe}},
-                                          AlgorithmSpec{adaptStateless(producerCallback)},
-                                          {ConfigParamSpec{"period-timer", VariantType::Int, 100000, {"period of timer"}}}});
-
-  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // the dpl sink proxy process
-
+  // used either in the output proxy ('dpl-sink') or as a direct channel of the producer
   // use the OutputChannelSpec as a tool to create the default configuration for the out-of-band channel
   OutputChannelSpec externalChannelSpec;
   // Note: the name is hardcoded for now
@@ -88,6 +132,9 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
   externalChannelSpec.hostname = "localhost";
   externalChannelSpec.port = 42042;
   externalChannelSpec.listeners = 0;
+  externalChannelSpec.rateLogging = 10;
+  externalChannelSpec.sendBufferSize = 1;
+  externalChannelSpec.recvBufferSize = 1;
   if (!defaultTransportConfig.empty()) {
     if (defaultTransportConfig == "zeromq") {
       externalChannelSpec.protocol = ChannelProtocol::Network;
@@ -101,11 +148,144 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
     channelConfig += ",transport=" + defaultTransportConfig;
   }
 
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // a producer process steered by a timer
+  //
+  auto producerInitCallback = [nRolls, proxyMode, externalChannelSpec](CallbackService& callbacks, RawDeviceService& rds) {
+    srand(getpid());
+    auto channelName = std::make_shared<std::string>();
+    auto producerChannelInit = [channelName, outputRoutes = rds.spec().outputs]() {
+      // find the output channel name, we expect all output messages to be
+      // sent over the same channel
+      if (channelName->empty()) {
+        OutputSpec const query{"TST", "DATA", 0};
+        for (auto& route : outputRoutes) {
+          if (DataSpecUtils::match(route.matcher, query)) {
+            *channelName = route.channel;
+            break;
+          }
+        }
+      }
+      ASSERT_ERROR(channelName->length() > 0);
+    };
+    if (proxyMode == ProxyMode::SkipOutput) {
+      *channelName = externalChannelSpec.name;
+    } else {
+      callbacks.set<CallbackService::Id::Start>(producerChannelInit);
+    }
+    // the compute callback of the producer
+    auto producerCallback = [nRolls, channelName, proxyMode, counter = std::make_shared<size_t>()](DataAllocator& outputs, ControlService& control, RawDeviceService& rds, MessageContext& messageContext) {
+      int data = *counter;
+      // outputs.make<int>(OutputRef{"data", 0}) = data;
+
+      fair::mq::Device& device = *(rds.device());
+      auto transport = device.GetChannel(*channelName, 0).Transport();
+      auto channelAlloc = o2::pmr::getTransportAllocator(transport);
+
+      DataProcessingHeader dph{*counter, 0};
+
+      auto msgMode = rand() % 2 ? test_header::MsgModeHeader::MsgMode::Pair : test_header::MsgModeHeader::MsgMode::Sequence;
+      size_t nPayloads = rand() % 10 + 1;
+
+      test_header::MsgModeHeader mmh{msgMode, nPayloads};
+      fair::mq::Parts messages;
+      auto insertHeader = [&dph, &mmh, &channelAlloc, &messages](DataHeader const& dh) -> void {
+        fair::mq::MessagePtr header = o2::pmr::getMessage(Stack{channelAlloc, dh, dph, mmh});
+        messages.AddPart(std::move(header));
+      };
+      auto insertPayload = [&transport, &messages, &data](size_t size) -> void {
+        fair::mq::MessagePtr payload = transport->CreateMessage(size);
+        memcpy(payload->GetData(), &data, sizeof(data));
+        messages.AddPart(std::move(payload));
+      };
+      auto createSequence = [&insertHeader, &insertPayload, &data](size_t nPayloads, DataHeader dh) -> void {
+        // one header with index set to the number of split parts indicates sequence
+        // of payloads without additional headers
+        dh.payloadSize = sizeof(data);
+        dh.payloadSerializationMethod = o2::header::gSerializationMethodNone;
+        dh.splitPayloadIndex = nPayloads;
+        dh.splitPayloadParts = nPayloads;
+        insertHeader(dh);
+
+        for (size_t i = 0; i < nPayloads; ++i) {
+          insertPayload(dh.payloadSize);
+        }
+      };
+
+      auto createPairs = [&insertHeader, &insertPayload, &data](size_t nPayloads, DataHeader dh) -> void {
+        // one header with index set to the number of split parts indicates sequence
+        // of payloads without additional headers
+        dh.payloadSize = sizeof(data);
+        dh.payloadSerializationMethod = o2::header::gSerializationMethodNone;
+        dh.splitPayloadIndex = 0;
+        dh.splitPayloadParts = nPayloads;
+        for (size_t i = 0; i < nPayloads; ++i) {
+          dh.splitPayloadIndex = i;
+          insertHeader(dh);
+          insertPayload(dh.payloadSize);
+        }
+      };
+
+      if (msgMode == test_header::MsgModeHeader::MsgMode::Pair) {
+        createPairs(nPayloads, DataHeader{"DATA", "TST", 0});
+      } else {
+        createSequence(nPayloads, DataHeader{"DATA", "TST", 0});
+      }
+      // using utility from ExternalFairMQDeviceProxy
+      o2::framework::sendOnChannel(device, messages, *channelName, (size_t)-1);
+      messageContext.fakeDispatch();
+
+      if (++(*counter) >= nRolls) {
+        // send the end of stream signal, this is transferred by the proxies
+        // and allows to properly terminate downstream devices
+        control.endOfStream();
+        if (proxyMode == ProxyMode::SkipOutput) {
+          // since we are sending on the bare channel, also the EOS message needs to be created.
+          DataHeader dhEOS;
+          dhEOS.dataOrigin = "DPL";
+          dhEOS.dataDescription = "EOS";
+          dhEOS.subSpecification = 0;
+          dhEOS.payloadSize = 0;
+          dhEOS.payloadSerializationMethod = o2::header::gSerializationMethodNone;
+          dhEOS.tfCounter = 0;
+          dhEOS.firstTForbit = 0;
+          SourceInfoHeader sih;
+          sih.state = InputChannelState::Completed;
+          auto headerMessage = o2::pmr::getMessage(o2::header::Stack{channelAlloc, dhEOS, dph, sih});
+          fair::mq::Parts out;
+          out.AddPart(std::move(headerMessage));
+          // add empty payload message
+          out.AddPart(std::move(device.NewMessageFor(*channelName, 0, 0)));
+          o2::framework::sendOnChannel(device, out, *channelName, (size_t)-1);
+          messageContext.fakeDispatch();
+        }
+      }
+    };
+    return adaptStateless(producerCallback);
+  };
+
+  workflow.emplace_back(DataProcessorSpec{"producer",
+                                          {InputSpec{"timer", "TST", "TIMER", 0, Lifetime::Timer}},
+                                          {OutputSpec{{"data"}, "TST", "DATA", 0, Lifetime::Timeframe}},
+                                          AlgorithmSpec{adaptStateful(producerInitCallback)},
+                                          {ConfigParamSpec{"period-timer", VariantType::Int, 100000, {"period of timer"}}}});
+
+  if (proxyMode == ProxyMode::SkipOutput) {
+    // create the out-of-band channel in the producer if the output proxy is bypassed
+    const char* d = strdup(channelConfig.c_str());
+    workflow.back().options.push_back(ConfigParamSpec{"channel-config", VariantType::String, d, {"proxy channel of producer"}});
+  }
+
+  //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // the dpl sink proxy process
+
   Inputs sinkInputs = {InputSpec{"external", "TST", "DATA", 0, Lifetime::Timeframe}};
-  auto channelSelector = [](InputSpec const&, const std::unordered_map<std::string, std::vector<FairMQChannel>>&) -> std::string {
+  auto channelSelector = [](InputSpec const&, const std::unordered_map<std::string, std::vector<fair::mq::Channel>>&) -> std::string {
     return "downstream";
   };
-  workflow.emplace_back(std::move(specifyFairMQDeviceMultiOutputProxy("dpl-sink", sinkInputs, channelConfig.c_str(), channelSelector)));
+  if (proxyMode == ProxyMode::All || proxyMode == ProxyMode::OnlyOutput) {
+    workflow.emplace_back(std::move(specifyFairMQDeviceMultiOutputProxy("dpl-sink", sinkInputs, channelConfig.c_str(), channelSelector)));
+  }
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////
   // a simple checker process subscribing to the output of the input proxy
@@ -113,47 +293,80 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
   // the compute callback of the checker
   auto counter = std::make_shared<int>(0);
   auto checkerCallback = [counter](InputRecord& inputs, ControlService& control) {
-    LOG(DEBUG) << "got inputs " << inputs.size();
-    ASSERT_ERROR(inputs.get<int>("datain") == *counter);
+    auto const* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(inputs.get("datain"));
+    auto const* mmh = DataRefUtils::getHeader<test_header::MsgModeHeader*>(inputs.get("datain"));
+    ASSERT_ERROR(dh != nullptr);
+    ASSERT_ERROR(mmh != nullptr);
+    LOGP(info, "{} input slots(s), data {}, parts {}, mode {}", inputs.size(), inputs.get<int>("datain"), mmh->nPayloadParts, (int)mmh->mode);
+    if (mmh->mode == test_header::MsgModeHeader::MsgMode::Pair) {
+      ASSERT_ERROR(dh->splitPayloadParts == mmh->nPayloadParts);
+      ASSERT_ERROR(dh->splitPayloadIndex == 0);
+    } else {
+      ASSERT_ERROR(dh->splitPayloadParts == mmh->nPayloadParts);
+      ASSERT_ERROR(dh->splitPayloadIndex == mmh->nPayloadParts);
+    }
+    size_t nPayloads = 0;
+    for (auto const& ref : InputRecordWalker(inputs)) {
+      auto data = inputs.get<int>(ref);
+      ASSERT_ERROR(data == *counter);
+      ++nPayloads;
+    }
+    ASSERT_ERROR(nPayloads == mmh->nPayloadParts);
     ++(*counter);
   };
   auto checkCounter = [counter, nRolls](EndOfStreamContext&) {
-    ASSERT_ERROR(*counter == nRolls);
+    ASSERT_EQUAL(*counter, nRolls);
     if (*counter == nRolls) {
       LOG(info) << "checker has received " << nRolls << " successful event(s)";
     }
   };
   auto checkerInit = [checkerCallback, checkCounter](CallbackService& callbacks) {
-    callbacks.set(CallbackService::Id::EndOfStream, checkCounter);
+    callbacks.set<CallbackService::Id::EndOfStream>(checkCounter);
     return adaptStateless(checkerCallback);
   };
 
   // the checker process connects to the proxy
-  workflow.emplace_back(DataProcessorSpec{"checker",
-                                          {InputSpec{"datain", "PRX", "DATA", 0, Lifetime::Timeframe}},
-                                          {},
-                                          AlgorithmSpec{adaptStateful(checkerInit)}});
+  Inputs checkerInputs;
+  if (proxyMode != ProxyMode::All) {
+    checkerInputs.emplace_back(InputSpec{"datain", ConcreteDataTypeMatcher{"TST", "DATA"}, Lifetime::Timeframe});
+    // for (unsigned int i = 0; i < pState->nChannels; i++) {
+    //   checkerInputs.emplace_back(InputSpec{{"datain"}, "TST", "DATA", i, Lifetime::Timeframe});
+    // }
+  } else {
+    checkerInputs.emplace_back(InputSpec{"datain", ConcreteDataTypeMatcher{"PRX", "DATA"}, Lifetime::Timeframe});
+    // for (unsigned int i = 0; i < pState->nChannels; i++) {
+    //   checkerInputs.emplace_back(InputSpec{{"datain"}, "PRX", "DATA", i, Lifetime::Timeframe});
+    // }
+  }
+  if (proxyMode != ProxyMode::OnlyOutput) {
+    // the checker is not added if the input proxy is skipped
+    workflow.emplace_back(DataProcessorSpec{"checker",
+                                            std::move(checkerInputs),
+                                            {},
+                                            AlgorithmSpec{adaptStateful(checkerInit)}});
+  }
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////
   // the input proxy process
   // reads the messages from the output proxy via the out-of-band channel
 
   // converter callback for the external FairMQ device proxy ProcessorSpec generator
-  auto converter = [](FairMQDevice& device, FairMQParts& inputs, ChannelRetriever channelRetriever) {
+  InjectorFunction converter = [](TimingInfo&, ServiceRegistryRef const& services, fair::mq::Parts& inputs, ChannelRetriever channelRetriever, size_t newTimesliceId, bool&) -> bool {
+    auto* device = services.get<RawDeviceService>().device();
     ASSERT_ERROR(inputs.Size() >= 2);
     if (inputs.Size() < 2) {
-      return;
+      return false;
     }
     int msgidx = 0;
     auto dh = o2::header::get<o2::header::DataHeader*>(inputs.At(msgidx)->GetData());
     if (!dh) {
       LOG(error) << "data on input " << msgidx << " does not follow the O2 data model, DataHeader missing";
-      return;
+      return false;
     }
     auto dph = o2::header::get<DataProcessingHeader*>(inputs.At(msgidx)->GetData());
     if (!dph) {
       LOG(error) << "data on input " << msgidx << " does not follow the O2 data model, DataProcessingHeader missing";
-      return;
+      return false;
     }
     // Note: we want to run both the output and input proxy in the same workflow and thus we need
     // different data identifiers and change the data origin in the forwarding
@@ -164,22 +377,36 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
     // the forwarded SourceInfoHeader created by the output proxy will be skipped here since the
     // input proxy handles this internally
     ASSERT_ERROR(!isData || !channelName.empty());
-    LOG(DEBUG) << "using channel '" << channelName << "' for " << DataSpecUtils::describe(OutputSpec{dh->dataOrigin, dh->dataDescription, dh->subSpecification});
+    LOG(debug) << "using channel '" << channelName << "' for " << DataSpecUtils::describe(OutputSpec{dh->dataOrigin, dh->dataDescription, dh->subSpecification});
     if (channelName.empty()) {
-      return;
+      return false;
     }
-    // make a copy of the header message, get the data header and change origin
-    auto outHeaderMessage = device.NewMessageFor(channelName, 0, inputs.At(msgidx)->GetSize());
-    memcpy(outHeaderMessage->GetData(), inputs.At(msgidx)->GetData(), inputs.At(msgidx)->GetSize());
-    // this we obviously need to fix in the get API, const'ness of the returned header pointer
-    // should depend on const'ness of the buffer
-    auto odh = const_cast<o2::header::DataHeader*>(o2::header::get<o2::header::DataHeader*>(outHeaderMessage->GetData()));
-    odh->dataOrigin = o2::header::DataOrigin("PRX");
-    FairMQParts output;
-    output.AddPart(std::move(outHeaderMessage));
-    output.AddPart(std::move(inputs.At(msgidx + 1)));
-    LOG(DEBUG) << "sending " << DataSpecUtils::describe(OutputSpec{odh->dataOrigin, odh->dataDescription, odh->subSpecification});
-    o2::framework::sendOnChannel(device, output, channelName);
+    fair::mq::Parts output;
+    for (; msgidx < inputs.Size(); ++msgidx) {
+      auto const* dh = o2::header::get<o2::header::DataHeader*>(inputs.At(msgidx)->GetData());
+      if (dh) {
+        LOGP(debug, "{}/{}/{} with {} part(s), index {}",
+             dh->dataOrigin.as<std::string>(),
+             dh->dataDescription.as<std::string>(),
+             dh->subSpecification,
+             dh->splitPayloadParts,
+             dh->splitPayloadIndex);
+        // make a copy of the header message, get the data header and change origin
+        auto outHeaderMessage = device->NewMessageFor(channelName, 0, inputs.At(msgidx)->GetSize());
+        memcpy(outHeaderMessage->GetData(), inputs.At(msgidx)->GetData(), inputs.At(msgidx)->GetSize());
+        // this we obviously need to fix in the get API, const'ness of the returned header pointer
+        // should depend on const'ness of the buffer
+        auto odh = const_cast<o2::header::DataHeader*>(o2::header::get<o2::header::DataHeader*>(outHeaderMessage->GetData()));
+        odh->dataOrigin = o2::header::DataOrigin("PRX");
+        output.AddPart(std::move(outHeaderMessage));
+      } else {
+        output.AddPart(std::move(inputs.At(msgidx)));
+      }
+    }
+    auto& messageContext = services.get<MessageContext>();
+    o2::framework::sendOnChannel(*device, output, channelName, (size_t)-1);
+    messageContext.fakeDispatch();
+    return output.Size() != 0;
   };
 
   // we use the same spec to build the configuration string, ideally we would have some helpers
@@ -195,19 +422,86 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const& config)
     channelConfig += ",transport=" + defaultTransportConfig;
   }
 
-  // Note: in order to make the DPL output proxy and an input proxy working in the same
-  // workflow, we use different data description
-  Outputs inputProxyOutputs = {OutputSpec{"PRX", "DATA", 0, Lifetime::Timeframe}};
-  workflow.emplace_back(specifyExternalFairMQDeviceProxy(
-    "input-proxy",
-    std::move(inputProxyOutputs),
-    channelConfig.c_str(),
-    converter));
-
-  if (config.options().get<bool>("output-proxy-only")) {
-    // remove the input proxy and checker from the workflow
-    workflow.pop_back();
-    workflow.pop_back();
+  if (proxyMode == ProxyMode::All) {
+    // Note: in order to make the DPL output proxy and an input proxy working in the same
+    // workflow, we use different data description
+    Outputs inputProxyOutputs = {OutputSpec{ConcreteDataTypeMatcher{"PRX", "DATA"}, Lifetime::Timeframe}};
+    workflow.emplace_back(specifyExternalFairMQDeviceProxy(
+      "input-proxy",
+      std::move(inputProxyOutputs),
+      channelConfig.c_str(),
+      converter));
+  } else if (proxyMode == ProxyMode::SkipOutput) {
+    Outputs inputProxyOutputs = {OutputSpec{ConcreteDataTypeMatcher{"TST", "DATA"}, Lifetime::Timeframe}};
+    // we use the same specs as filters in the dpl adaptor
+    auto filterSpecs = inputProxyOutputs;
+    workflow.emplace_back(specifyExternalFairMQDeviceProxy(
+      "input-proxy",
+      std::move(inputProxyOutputs),
+      channelConfig.c_str(),
+      o2::framework::dplModelAdaptor(filterSpecs, true)));
   }
+  workflow.back().labels.emplace_back(DataProcessorLabel{"input-proxy"});
+
   return workflow;
+}
+
+std::istream& operator>>(std::istream& in, enum test_config::ProxyMode& val)
+{
+  std::string token;
+  in >> token;
+  if (token == "all" || token == "a") {
+    val = test_config::ProxyMode::All;
+  } else if (token == "skip-output") {
+    val = test_config::ProxyMode::SkipOutput;
+  } else if (token == "only-output") {
+    val = test_config::ProxyMode::OnlyOutput;
+  } else if (token == "skip-all" || token == "skip-proxies") {
+    val = test_config::ProxyMode::NoProxies;
+  } else {
+    in.setstate(std::ios_base::failbit);
+  }
+  return in;
+}
+
+std::ostream& operator<<(std::ostream& out, const enum test_config::ProxyMode& val)
+{
+  if (val == test_config::ProxyMode::All) {
+    out << "all";
+  } else if (val == test_config::ProxyMode::SkipOutput) {
+    out << "skip-output";
+  } else if (val == test_config::ProxyMode::OnlyOutput) {
+    out << "only-output";
+  } else if (val == test_config::ProxyMode::NoProxies) {
+    out << "skip-all";
+  } else {
+    out.setstate(std::ios_base::failbit);
+  }
+  return out;
+}
+
+std::istream& operator>>(std::istream& in, enum test_header::MsgModeHeader::MsgMode& val)
+{
+  std::string token;
+  in >> token;
+  if (token == "pair") {
+    val = test_header::MsgModeHeader::MsgMode::Pair;
+  } else if (token == "sequence") {
+    val = test_header::MsgModeHeader::MsgMode::Sequence;
+  } else {
+    in.setstate(std::ios_base::failbit);
+  }
+  return in;
+}
+
+std::ostream& operator<<(std::ostream& out, const enum test_header::MsgModeHeader::MsgMode& val)
+{
+  if (val == test_header::MsgModeHeader::MsgMode::Pair) {
+    out << "pair";
+  } else if (val == test_header::MsgModeHeader::MsgMode::Sequence) {
+    out << "sequence";
+  } else {
+    out.setstate(std::ios_base::failbit);
+  }
+  return out;
 }

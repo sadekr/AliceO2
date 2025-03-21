@@ -16,6 +16,7 @@
 #define BOOST_TEST_DYN_LINK
 
 #include <boost/test/unit_test.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include "DetectorsRaw/HBFUtils.h"
 #include "DetectorsRaw/RawFileWriter.h"
 #include "Framework/Logger.h"
@@ -104,7 +105,7 @@ std::vector<std::byte> paginate(gsl::span<const std::byte> buffer, const std::st
   return pages;
 }
 
-const char* sampaClusterFormat = "{}-CH{}-{}";
+constexpr const char* sampaClusterFormat = "{}-CH{}-{}";
 
 // Create a vector of SampaCluster from a string d
 // where d is of the form ts-#-bc-#-cs-#-q-# or
@@ -169,7 +170,7 @@ std::vector<std::byte> createBuffer(gsl::span<std::string> data,
 {
   const o2::raw::HBFUtils& hbfutils = o2::raw::HBFUtils::Instance();
   o2::conf::ConfigurableParam::setValue<uint32_t>("HBFUtils", "orbitFirst", orbit);
-
+  o2::conf::ConfigurableParam::setValue<uint32_t>("HBFUtils", "orbitFirstSampled", orbit);
   auto encoder = createPayloadEncoder(createSolar2FeeLinkMapper<ELECMAP>(),
                                       isUserLogicFormat<FORMAT>::value,
                                       VERSION,

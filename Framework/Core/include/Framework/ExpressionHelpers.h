@@ -12,44 +12,11 @@
 #define O2_FRAMEWORK_EXPRESSIONS_HELPERS_H_
 #include "Framework/Expressions.h"
 
-#include <vector>
 #include <iosfwd>
 #include <fmt/format.h>
 
 namespace o2::framework::expressions
 {
-/// a map between BasicOp and gandiva node definitions
-/// note that logical 'and' and 'or' are created separately
-static std::array<std::string, BasicOp::Conditional + 1> basicOperationsMap = {
-  "and",
-  "or",
-  "add",
-  "subtract",
-  "divide",
-  "multiply",
-  "bitwise_and",
-  "bitwise_or",
-  "bitwise_xor",
-  "less_than",
-  "less_than_or_equal_to",
-  "greater_than",
-  "greater_than_or_equal_to",
-  "equal",
-  "not_equal",
-  "powerf",
-  "sqrtf",
-  "expf",
-  "logf",
-  "log10f",
-  "sinf",
-  "cosf",
-  "tanf",
-  "asinf",
-  "acosf",
-  "atanf",
-  "absf",
-  "bitwise_not",
-  "if"};
 
 struct DatumSpec {
   /// datum spec either contains an index, a value of a literal or a binding label

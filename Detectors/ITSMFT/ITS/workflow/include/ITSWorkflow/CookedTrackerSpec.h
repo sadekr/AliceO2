@@ -16,12 +16,14 @@
 
 #include "Framework/DataProcessorSpec.h"
 #include "ITSReconstruction/CookedTracker.h"
+#include "ITStracking/TimeFrame.h"
 #include "ITStracking/Vertexer.h"
 #include "ITStracking/VertexerTraits.h"
 #include "DataFormatsParameters/GRPObject.h"
 #include "DataFormatsITSMFT/TopologyDictionary.h"
 #include "Framework/Task.h"
 #include "TStopwatch.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 
 using namespace o2::framework;
 
@@ -33,17 +35,24 @@ namespace its
 class CookedTrackerDPL : public Task
 {
  public:
-  CookedTrackerDPL(bool useMC, const std::string& trMode);
+  CookedTrackerDPL(std::shared_ptr<o2::base::GRPGeomRequest> gr, bool useMC, int trgType, const TrackingMode& trMode);
   ~CookedTrackerDPL() override = default;
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
   void endOfStream(framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj) final;
+  void setClusterDictionary(const o2::itsmft::TopologyDictionary* d) { mDict = d; }
 
  private:
+  void updateTimeDependentParams(ProcessingContext& pc);
+
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
   int mState = 0;
   bool mUseMC = true;
   bool mRunVertexer = true;
-  o2::itsmft::TopologyDictionary mDict;
+  int mUseTriggers = 0;
+  TrackingMode mMode = TrackingMode::Sync;
+  const o2::itsmft::TopologyDictionary* mDict = nullptr;
   std::unique_ptr<o2::parameters::GRPObject> mGRP = nullptr;
   o2::its::CookedTracker mTracker;
   std::unique_ptr<VertexerTraits> mVertexerTraitsPtr = nullptr;
@@ -53,7 +62,7 @@ class CookedTrackerDPL : public Task
 
 /// create a processor spec
 /// run ITS CookedMatrix tracker
-framework::DataProcessorSpec getCookedTrackerSpec(bool useMC, const std::string& trMode);
+framework::DataProcessorSpec getCookedTrackerSpec(bool useMC, bool useGeom, int useTrig, const std::string& trMode);
 
 } // namespace its
 } // namespace o2

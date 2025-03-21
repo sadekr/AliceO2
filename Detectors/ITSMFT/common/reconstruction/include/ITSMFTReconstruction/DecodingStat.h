@@ -27,38 +27,55 @@ namespace itsmft
 class ChipPixelData;
 
 struct ChipStat {
+  enum ActionOnError : int {
+    ErrActNone = 0x0,      // do nothing
+    ErrActPropagate = 0x1, // propagate to decoded data
+    ErrActDump = 0x2       // produce raw data dump
+  };
 
   enum DecErrors : int {
-    BusyViolation,
-    DataOverrun,
-    Fatal,
-    BusyOn,
-    BusyOff,
-    TruncatedChipEmpty,           // Data was truncated after ChipEmpty
-    TruncatedChipHeader,          // Data was truncated after ChipHeader
-    TruncatedRegion,              // Data was truncated after Region record
-    TruncatedLondData,            // Data was truncated in the LongData record
-    WrongDataLongPattern,         // LongData pattern has highest bit set
-    NoDataFound,                  // Region is not followed by Short or Long data
-    UnknownWord,                  // Unknown word was seen
-    RepeatingPixel,               // Same pixel fired more than once
-    WrongRow,                     // Non-existing row decoded
-    APE_STRIP_START,              // lane entering strip data mode | See https://alice.its.cern.ch/jira/browse/O2-1717
-    APE_STRIP_STOP,               // lane exiting strip data mode
-    APE_DET_TIMEOUT,              // detector timeout (FATAL)
-    APE_OOT_START,                // 8b10b OOT (FATAL, start)
-    APE_PROTOCOL_ERROR,           // event protocol error marker (FATAL, start)
-    APE_LANE_FIFO_OVERFLOW_ERROR, // lane FIFO overflow error (FATAL)
-    APE_FSM_ERROR,                // FSM error (FATAL, SEU error, reached an unknown state)
-    APE_OCCUPANCY_RATE_LIMIT,     // pending detector events limit (FATAL)
-    APE_OCCUPANCY_RATE_LIMIT_2,   // pending detector events limit in packager(FATAL)
+    BusyViolation,                    // Busy violation
+    DataOverrun,                      // Data overrun
+    Fatal,                            // Fatal (ALPIDE trigger fifo overflow, trigger-event matching compromised)
+    BusyOn,                           // Busy On
+    BusyOff,                          // Busy Off
+    TruncatedChipEmpty,               // Data was truncated after ChipEmpty
+    TruncatedChipHeader,              // Data was truncated after ChipHeader
+    TruncatedRegion,                  // Data was truncated after Region record
+    TruncatedLondData,                // Data was truncated in the LongData record
+    WrongDataLongPattern,             // LongData pattern has highest bit set
+    NoDataFound,                      // Region is not followed by Short or Long data
+    UnknownWord,                      // Unknown word was seen
+    RepeatingPixel,                   // Same pixel fired more than once
+    WrongRow,                         // Non-existing row decoded
+    APE_STRIP_START,                  // 0xF2 - Lane data stripped for this chip event (behaviour changed with RU FW v1.16.0, for general APE behaviour see  https://alice.its.cern.ch/jira/browse/O2-1717)
+    APE_ILLEGAL_CHIPID,               // 0xF3 - Chip ID jumped downwards within an ROF on a OB module (FATAL)
+    APE_DET_TIMEOUT,                  // 0xF4 - Detector timeout (FATAL)
+    APE_OOT,                          // 0xF5 - 8b10b OOT (FATAL, start)
+    APE_PROTOCOL_ERROR,               // 0xF6 - Event protocol error marker (FATAL, start)
+    APE_LANE_FIFO_OVERFLOW_ERROR,     // 0xF7 - Lane FIFO overflow error (FATAL)
+    APE_FSM_ERROR,                    // 0xF8 - FSM error (FATAL, SEU error, reached an unknown state)
+    APE_PENDING_DETECTOR_EVENT_LIMIT, // 0xF9 - Pending detector events limit (FATAL)
+    APE_PENDING_LANE_EVENT_LIMIT,     // 0xFA - Pending detector events limit in packager (FATAL)
+    APE_O2N_ERROR,                    // 0xFB - Lane protocol error (FATAL)
+    APE_RATE_MISSING_TRG_ERROR,       // 0xFC - Received start of event before trigger (FATAL)
+    APE_PE_DATA_MISSING,              // 0xFD - Error in non critical byte
+    APE_OOT_DATA_MISSING,             // 0xFE - OOT non-critical
+    WrongDColOrder,                   // DColumns non increasing
+    InterleavedChipData,              // Chip data interleaved on the cable
+    TruncatedBuffer,                  // Truncated buffer, 0 padding
+    TrailerAfterHeader,               // Trailer seen after header w/o FE of FD set
+    FlushedIncomplete,                // ALPIDE MEB was flushed by the busy handling
+    StrobeExtended,                   // ALPIDE received a second trigger while the strobe was still open
+    WrongAlpideChipID,                // Impossible for given cable ALPIDE ChipOnModule ID
+    DecreasingRow,                    // Decreasing row in the same column
     NErrorsDefined
   };
 
   static constexpr std::array<std::string_view, NErrorsDefined> ErrNames = {
     "BusyViolation flag ON",                        // BusyViolation
     "DataOverrun flag ON",                          // DataOverrun
-    "Fatal flag ON",                                // Fatal
+    "Fatal flag ON",                                // Fatal (ALPIDE trigger fifo overflow, trigger-event matching compromised)
     "BusyON",                                       // BusyOn
     "BusyOFF",                                      // BusyOff
     "Data truncated after ChipEmpty",               // TruncatedChipEmpty
@@ -70,16 +87,66 @@ struct ChipStat {
     "Unknown word",                                 // UnknownWord
     "Same pixel fired multiple times",              // RepeatingPixel
     "Non-existing row decoded",                     // WrongRow
-    "APE_STRIP_START",
-    "APE_STRIP_STOP",
-    "APE_DET_TIMEOUT",
-    "APE_OOT_START",
-    "APE_PROTOCOL_ERROR",
-    "APE_LANE_FIFO_OVERFLOW_ERROR",
-    "APE_FSM_ERROR",
-    "APE_OCCUPANCY_RATE_LIMIT",
-    "APE_OCCUPANCY_RATE_LIMIT_2"};
+    "APE_STRIP_START",                              // 0xF2 - Lane data stripped for this chip event (behaviour changed with RU FW v1.16.0, for general APE behaviour see  https://alice.its.cern.ch/jira/browse/O2-1717)
+    "APE_ILLEGAL_CHIPID",                           // 0xF3 - Chip ID jumped downwards within an ROF on a OB module (FATAL)
+    "APE_DET_TIMEOUT",                              // 0xF4 - Detector timeout (FATAL)
+    "APE_OOT",                                      // 0xF5 - 8b10b OOT (FATAL, start)
+    "APE_PROTOCOL_ERROR",                           // 0xF6 - Event protocol error marker (FATAL, start)
+    "APE_LANE_FIFO_OVERFLOW_ERROR",                 // 0xF7 - Lane FIFO overflow error (FATAL)
+    "APE_FSM_ERROR",                                // 0xF8 - FSM error (FATAL, SEU error, reached an unknown state)
+    "APE_PENDING_DETECTOR_EVENT_LIMIT",             // 0xF9 - Pending detector events limit (FATAL)
+    "APE_PENDING_LANE_EVENT_LIMIT",                 // 0xFA - Pending detector events limit in packager (FATAL)
+    "APE_O2N_ERROR",                                // 0xFB - Lane protocol error (FATAL)
+    "APE_RATE_MISSING_TRG_ERROR",                   // 0xFC - Received start of event before trigger (FATAL)
+    "APE_PE_DATA_MISSING",                          // 0xFD - Error in non critical byte
+    "APE_OOT_NON_CRITICAL",                         // 0xFE - OOT non-critical
+    "DColumns non-increasing",                      // DColumns non increasing
+    "Chip data interleaved on the cable",           // Chip data interleaved on the cable
+    "TruncatedBuffer",                              // Truncated buffer, 0 padding
+    "TrailerAfterHeader",                           // Trailer seen after header w/o FE of FD set
+    "FlushedIncomplete",                            // ALPIDE MEB was flushed by the busy handling
+    "StrobeExtended",                               // ALPIDE received a second trigger while the strobe was still open
+    "Wrong Alpide ChipID",                          // Impossible for given cable ALPIDE ChipOnModule ID
+    "Decreasing row",                               // Decreasing row in the same column
+  };
 
+  static constexpr std::array<uint32_t, NErrorsDefined> ErrActions = {
+    ErrActPropagate | ErrActDump, // Busy violation
+    ErrActPropagate | ErrActDump, // Data overrun
+    ErrActPropagate | ErrActDump, // Fatal (ALPIDE trigger fifo overflow, trigger-event matching compromised)
+    ErrActNone,                   // Busy On
+    ErrActNone,                   // Busy Off
+    ErrActPropagate | ErrActDump, // Data was truncated after ChipEmpty
+    ErrActPropagate | ErrActDump, // Data was truncated after ChipHeader
+    ErrActPropagate | ErrActDump, // Data was truncated after Region record
+    ErrActPropagate | ErrActDump, // Data was truncated in the LongData record
+    ErrActPropagate | ErrActDump, // LongData pattern has highest bit set
+    ErrActPropagate | ErrActDump, // Region is not followed by Short or Long data
+    ErrActPropagate | ErrActDump, // Unknown word was seen
+    ErrActPropagate,              // Same pixel fired more than once
+    ErrActPropagate | ErrActDump, // Non-existing row decoded
+    ErrActPropagate | ErrActDump, // 0xF2 - Lane data stripped for this chip event (behaviour changed with RU FW v1.16.0, for general APE behaviour see  https://alice.its.cern.ch/jira/browse/O2-1717)
+    ErrActPropagate | ErrActDump, // 0xF3 - Chip ID jumped downwards within an ROF on a OB module (FATAL)
+    ErrActPropagate | ErrActDump, // 0xF4 - Detector timeout (FATAL)
+    ErrActPropagate | ErrActDump, // 0xF5 - 8b10b OOT (FATAL, start)
+    ErrActPropagate | ErrActDump, // 0xF6 - Event protocol error marker (FATAL, start)
+    ErrActPropagate | ErrActDump, // 0xF7 - Lane FIFO overflow error (FATAL)
+    ErrActPropagate | ErrActDump, // 0xF8 - FSM error (FATAL, SEU error, reached an unknown state)
+    ErrActPropagate | ErrActDump, // 0xF9 - Pending detector events limit (FATAL)
+    ErrActPropagate | ErrActDump, // 0xFA - Pending detector events limit in packager (FATAL)
+    ErrActPropagate | ErrActDump, // 0xFB - Lane protocol error (FATAL)
+    ErrActPropagate | ErrActDump, // 0xFC - Received start of event before trigger (FATAL)
+    ErrActPropagate | ErrActDump, // 0xFD - Error in non critical byte
+    ErrActPropagate | ErrActDump, // 0xFE - OOT non-critical
+    ErrActPropagate | ErrActDump, // DColumns non increasing
+    ErrActPropagate | ErrActDump, // Chip data interleaved on the cable
+    ErrActPropagate | ErrActDump, // Truncated buffer while something was expected
+    ErrActPropagate | ErrActDump, // trailer seen after header w/o FE of FD set
+    ErrActPropagate | ErrActDump, // ALPIDE MEB was flushed by the busy handling
+    ErrActPropagate | ErrActDump, // ALPIDE received a second trigger while the strobe was still open
+    ErrActPropagate | ErrActDump, // Impossible for given cable ALPIDE ChipOnModule ID
+    ErrActPropagate | ErrActDump, // Decreasing row in the same column
+  };
   uint16_t feeID = -1;
   size_t nHits = 0;
   std::array<uint32_t, NErrorsDefined> errorCounts = {};
@@ -91,22 +158,58 @@ struct ChipStat {
     memset(errorCounts.data(), 0, sizeof(uint32_t) * errorCounts.size());
     nHits = 0;
   }
+
+  static int getAPENonCritical(uint8_t c)
+  {
+    if (c == 0xfd || c == 0xfe) {
+      return APE_STRIP_START + c - 0xf2;
+    }
+    return -1;
+  }
+
   // return APE DecErrors code or -1 if not APE error, set fatal flag if needd
   static int getAPECode(uint8_t c, bool& ft)
   {
-    if (c < 0xf2 || c > 0xfa) {
+    if (c < 0xf2 || c > 0xfe) {
       ft = false;
       return -1;
     }
-    ft = c >= 0xf4;
+    ft = c >= 0xf2 && c <= 0xfe;
     return APE_STRIP_START + c - 0xf2;
   }
+
+  // return APE byte that corresponds to the given APE DecErrors
+  static uint8_t getAPEByte(DecErrors c)
+  {
+    if (c < APE_STRIP_START || c > APE_OOT_DATA_MISSING) {
+      return 0xFF;
+    }
+    return 0xF2 + c - APE_STRIP_START;
+  }
   uint32_t getNErrors() const;
-  void addErrors(uint32_t mask, uint16_t chID, int verbosity);
-  void addErrors(const ChipPixelData& d, int verbosity);
+  uint32_t addErrors(const ChipPixelData& d, int verbosity);
   void print(bool skipNoErr = true, const std::string& pref = "FEEID") const;
 
+  template <typename Func>
+  static void forEachError(Func f)
+  {
+    for (int errIdx = 0; errIdx < NErrorsDefined; ++errIdx) {
+      f(errIdx);
+    }
+  }
+
   ClassDefNV(ChipStat, 1);
+};
+
+struct ChipError {
+  uint32_t id = -1;
+  uint32_t nerrors = 0;
+  uint32_t errors = 0;
+
+  int16_t getChipID() const { return int16_t(id & 0xffff); }
+  uint16_t getFEEID() const { return uint16_t(id >> 16); }
+  static uint32_t composeID(uint16_t feeID, int16_t chipID) { return uint32_t(feeID) << 16 | uint16_t(chipID); }
+  ClassDefNV(ChipError, 1);
 };
 
 /// Statistics for per-link decoding
@@ -133,11 +236,16 @@ struct GBTLinkDecodingStat {
     ErrPacketDoneMissing,        // packet done is missing in the trailer while CRU page is not over
     ErrMissingDiagnosticWord,    // missing diagnostic word after RDH with stop
     ErrGBTWordNotRecognized,     // GBT word not recognized
+    ErrWrongeCableID,            // Invalid cable ID
+    ErrWrongAlignmentWord,       // unexpected alignment word
+    ErrMissingROF,               // missing ROF (desync?)
+    ErrOldROF,                   // old ROF (desync?)
+    ErrLinkRecovery,             // data skipped since recovery is declared
     NErrorsDefined
   };
   static constexpr std::array<std::string_view, NErrorsDefined> ErrNames = {
-    "Page data not start with expected RDH",                             // ErrNoRDHAtStart
-    "RDH is stopped, but the time is not matching the ~stop packet",     // ErrPageNotStopped
+    "Page data does not start with expected RDH",                        // ErrNoRDHAtStart
+    "RDH is stopped, but the time is not matching the stop packet",      // ErrPageNotStopped
     "Page with RDH.stop does not contain diagnostic word only",          // ErrStopPageNotEmpty
     "RDH page counters for the same RU/trigger are not continuous",      // ErrPageCounterDiscontinuity
     "RDH and GBT header page counters are not consistent",               // ErrRDHvsGBTHPageCnt
@@ -153,12 +261,16 @@ struct GBTLinkDecodingStat {
     "Active lanes pattern conflicts with expected for given RU type",    // ErrInvalidActiveLanes
     "Jump in RDH_packetCounter",                                         // ErrPacketCounterJump
     "Packet done is missing in the trailer while CRU page is not over",  // ErrPacketDoneMissing
-    "Missing diagnostic GBT word after RDH with stop",                   // ErrMissingDiagnosticWord
-    "GBT word not recognized"                                            // ErrGBTWordNotRecognized
+    "Wrong/missing diagnostic GBT word after RDH with stop",             // ErrMissingDiagnosticWord
+    "GBT word not recognized",                                           // ErrGBTWordNotRecognized
+    "Wrong cable ID",                                                    // ErrWrongeCableID
+    "Unexpected CRU page alignment padding word",                        // ErrWrongAlignmentWord
+    "ROF in future, pause decoding to synchronize",                      // ErrMissingROF
+    "Old ROF, discarding",                                               // ErrOldROF
+    "Data discarded due to the recovery flag in RDH",                    // ErrLinkRecovery
   };
 
-  uint32_t ruLinkID = 0; // Link ID within RU
-
+  uint16_t feeID = 0; // FeeID
   // Note: packet here is meant as a group of CRU pages belonging to the same trigger
   uint32_t nPackets = 0;                                                        // total number of packets (RDH pages)
   uint32_t nTriggers = 0;                                                       // total number of triggers (ROFs)
@@ -175,7 +287,15 @@ struct GBTLinkDecodingStat {
 
   void print(bool skipNoErr = true) const;
 
-  ClassDefNV(GBTLinkDecodingStat, 2);
+  ClassDefNV(GBTLinkDecodingStat, 3);
+};
+
+struct ErrorMessage {
+  uint16_t id = -1;
+  uint16_t errType = 0;
+  uint16_t errInfo0 = 0;
+  uint16_t errInfo1 = 0;
+  ClassDefNV(ErrorMessage, 1)
 };
 
 } // namespace itsmft

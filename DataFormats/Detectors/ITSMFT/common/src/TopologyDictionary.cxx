@@ -16,12 +16,13 @@
 
 #include "DataFormatsITSMFT/TopologyDictionary.h"
 #include "DataFormatsITSMFT/ClusterTopology.h"
-#include <iostream>
 #include "ITSMFTBase/SegmentationAlpide.h"
+#include "CommonUtils/StringUtils.h"
+#include <TFile.h>
+#include <iostream>
 
 using std::cout;
 using std::endl;
-using std::string;
 using std::unordered_map;
 using std::vector;
 
@@ -32,11 +33,14 @@ namespace o2
 namespace itsmft
 {
 
-TopologyDictionary::TopologyDictionary() : mSmallTopologiesLUT{-1} {}
-
-TopologyDictionary::TopologyDictionary(std::string fileName)
+TopologyDictionary::TopologyDictionary()
 {
-  readBinaryFile(fileName);
+  memset(mSmallTopologiesLUT, -1, STopoSize * sizeof(int));
+}
+
+TopologyDictionary::TopologyDictionary(const std::string& fileName)
+{
+  readFromFile(fileName);
 }
 
 std::ostream& operator<<(std::ostream& os, const TopologyDictionary& dict)
@@ -51,7 +55,7 @@ std::ostream& operator<<(std::ostream& os, const TopologyDictionary& dict)
   return os;
 }
 
-void TopologyDictionary::writeBinaryFile(string outputfile)
+void TopologyDictionary::writeBinaryFile(const std::string& outputfile)
 {
   std::ofstream file_output(outputfile, std::ios::out | std::ios::binary);
   for (auto& p : mVectorOfIDs) {
@@ -71,7 +75,20 @@ void TopologyDictionary::writeBinaryFile(string outputfile)
   file_output.close();
 }
 
-int TopologyDictionary::readBinaryFile(string fname)
+int TopologyDictionary::readFromFile(const std::string& fname)
+{
+  if (o2::utils::Str::endsWith(fname, ".root")) {
+    std::unique_ptr<TopologyDictionary> d{loadFrom(fname)};
+    *this = *d;
+  } else if (o2::utils::Str::endsWith(fname, ".bin")) {
+    readBinaryFile(fname);
+  } else {
+    throw std::runtime_error(fmt::format("Unrecognized format {}", fname));
+  }
+  return 0;
+}
+
+int TopologyDictionary::readBinaryFile(const std::string& fname)
 {
   mVectorOfIDs.clear();
   mCommonMap.clear();
@@ -82,7 +99,7 @@ int TopologyDictionary::readBinaryFile(string fname)
   GroupStruct gr;
   int groupID = 0;
   if (!in.is_open()) {
-    LOG(ERROR) << "The file " << fname << " coud not be opened";
+    LOG(error) << "The file " << fname << " coud not be opened";
     throw std::runtime_error("The file coud not be opened");
   } else {
     while (in.read(reinterpret_cast<char*>(&gr.mHash), sizeof(unsigned long))) {
@@ -127,16 +144,28 @@ void TopologyDictionary::getTopologyDistribution(const TopologyDictionary& dict,
   }
 }
 
-math_utils::Point3D<float> TopologyDictionary::getClusterCoordinates(const CompCluster& cl) const
+template <typename T>
+std::array<T, 3> TopologyDictionary::getClusterCoordinatesA(const CompCluster& cl) const
 {
-  math_utils::Point3D<float> locCl;
+  std::array<T, 3> locCl;
+  o2::itsmft::SegmentationAlpide::detectorToLocalUnchecked(cl.getRow(), cl.getCol(), locCl);
+  locCl[0] += this->getXCOG(cl.getPatternID());
+  locCl[2] += this->getZCOG(cl.getPatternID());
+  return locCl;
+}
+
+template <typename T>
+math_utils::Point3D<T> TopologyDictionary::getClusterCoordinates(const CompCluster& cl) const
+{
+  math_utils::Point3D<T> locCl;
   o2::itsmft::SegmentationAlpide::detectorToLocalUnchecked(cl.getRow(), cl.getCol(), locCl);
   locCl.SetX(locCl.X() + this->getXCOG(cl.getPatternID()));
   locCl.SetZ(locCl.Z() + this->getZCOG(cl.getPatternID()));
   return locCl;
 }
 
-math_utils::Point3D<float> TopologyDictionary::getClusterCoordinates(const CompCluster& cl, const ClusterPattern& patt, bool isGroup)
+template <typename T>
+math_utils::Point3D<T> TopologyDictionary::getClusterCoordinates(const CompCluster& cl, const ClusterPattern& patt, bool isGroup)
 {
   auto refRow = cl.getRow();
   auto refCol = cl.getCol();
@@ -146,10 +175,51 @@ math_utils::Point3D<float> TopologyDictionary::getClusterCoordinates(const CompC
     refRow -= round(xCOG);
     refCol -= round(zCOG);
   }
-  math_utils::Point3D<float> locCl;
+  math_utils::Point3D<T> locCl;
   o2::itsmft::SegmentationAlpide::detectorToLocalUnchecked(refRow + xCOG, refCol + zCOG, locCl);
   return locCl;
 }
+
+template <typename T>
+std::array<T, 3> TopologyDictionary::getClusterCoordinatesA(const CompCluster& cl, const ClusterPattern& patt, bool isGroup)
+{
+  auto refRow = cl.getRow();
+  auto refCol = cl.getCol();
+  float xCOG = 0, zCOG = 0;
+  patt.getCOG(xCOG, zCOG);
+  if (isGroup) {
+    refRow -= round(xCOG);
+    refCol -= round(zCOG);
+  }
+  std::array<T, 3> locCl;
+  o2::itsmft::SegmentationAlpide::detectorToLocalUnchecked(refRow + xCOG, refCol + zCOG, locCl);
+  return locCl;
+}
+
+//_______________________________________________
+TopologyDictionary* TopologyDictionary::loadFrom(const std::string& fname, const std::string& objName)
+{
+  // load object from file
+  TFile fl(fname.c_str());
+  if (fl.IsZombie()) {
+    throw std::runtime_error(fmt::format("Failed to open {} file", fname));
+  }
+  auto dict = reinterpret_cast<o2::itsmft::TopologyDictionary*>(fl.GetObjectChecked(objName.c_str(), o2::itsmft::TopologyDictionary::Class()));
+  if (!dict) {
+    throw std::runtime_error(fmt::format("Failed to load {} from {}", objName, fname));
+  }
+  return dict;
+}
+
+template math_utils::Point3D<float> TopologyDictionary::getClusterCoordinates<float>(const CompCluster& cl) const;
+template math_utils::Point3D<double> TopologyDictionary::getClusterCoordinates<double>(const CompCluster& cl) const;
+template math_utils::Point3D<float> TopologyDictionary::getClusterCoordinates<float>(const CompCluster& cl, const ClusterPattern& patt, bool isGroup);
+template math_utils::Point3D<double> TopologyDictionary::getClusterCoordinates<double>(const CompCluster& cl, const ClusterPattern& patt, bool isGroup);
+
+template std::array<float, 3> TopologyDictionary::getClusterCoordinatesA<float>(const CompCluster& cl) const;
+template std::array<double, 3> TopologyDictionary::getClusterCoordinatesA<double>(const CompCluster& cl) const;
+template std::array<float, 3> TopologyDictionary::getClusterCoordinatesA<float>(const CompCluster& cl, const ClusterPattern& patt, bool isGroup);
+template std::array<double, 3> TopologyDictionary::getClusterCoordinatesA<double>(const CompCluster& cl, const ClusterPattern& patt, bool isGroup);
 
 } // namespace itsmft
 } // namespace o2

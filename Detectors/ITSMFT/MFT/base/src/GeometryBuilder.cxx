@@ -28,7 +28,7 @@
 #include "TGeoVolume.h"
 #include "TGeoManager.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 using namespace o2::mft;
 
@@ -43,14 +43,14 @@ void GeometryBuilder::buildGeometry()
   auto& mftBaseParam = MFTBaseParam::Instance();
   TGeoVolume* volMFT = new TGeoVolumeAssembly(GeometryTGeo::getMFTVolPattern());
 
-  LOG(INFO) << "GeometryBuilder::buildGeometry volume name = " << GeometryTGeo::getMFTVolPattern();
+  LOG(info) << "GeometryBuilder::buildGeometry volume name = " << GeometryTGeo::getMFTVolPattern();
 
   TGeoVolume* vALIC = gGeoManager->GetVolume("barrel");
   if (!vALIC) {
-    LOG(FATAL) << "Could not find the top volume";
+    LOG(fatal) << "Could not find the top volume";
   }
 
-  LOG(DEBUG) << "buildGeometry: "
+  LOG(debug) << "buildGeometry: "
              << Form("gGeoManager name is %s title is %s", gGeoManager->GetName(), gGeoManager->GetTitle());
 
   Segmentation* seg = mftGeo->getSegmentation();
@@ -84,10 +84,10 @@ void GeometryBuilder::buildGeometry()
 
   if (!mftBaseParam.minimal && mftBaseParam.buildBarrel) {
     //barrel services
-    auto* t_barrel0 = new TGeoTranslation("translation_barrel", 0.0, 0.7, -80.17);
+    auto* t_barrel0 = new TGeoTranslation("translation_barrel", 0.0, 0.0, -80.17);
     auto* r_barrel0 = new TGeoRotation("rotation_barrel", 0.0, 0.0, 0.0);
     auto* p_barrel0 = new TGeoCombiTrans(*t_barrel0, *r_barrel0);
-    auto* t_barrel1 = new TGeoTranslation("translation_barrel", 0.0, 0.7, -80.17);
+    auto* t_barrel1 = new TGeoTranslation("translation_barrel", 0.0, 0.0, -80.17);
     auto* r_barrel1 = new TGeoRotation("rotation_barrel", 0.0, 0.0, 180.0);
     auto* p_barrel1 = new TGeoCombiTrans(*t_barrel1, *r_barrel1);
 
@@ -99,10 +99,10 @@ void GeometryBuilder::buildGeometry()
   }
 
   if (!mftBaseParam.minimal && mftBaseParam.buildPatchPanel) {
-    auto* t_patchpanel0 = new TGeoTranslation("translation_patchpanel", 0.0, 0., -81.5); //z (0,0.7, -81.5 -1.3; 0..81.7 --1.5
+    auto* t_patchpanel0 = new TGeoTranslation("translation_patchpanel", 0.0, 0., -81.5);
     auto* r_patchpanel0 = new TGeoRotation("rotation_patchpanel", 0.0, 0.0, 0.0);
     auto* p_patchpanel0 = new TGeoCombiTrans(*t_patchpanel0, *r_patchpanel0);
-    auto* t_patchpanel1 = new TGeoTranslation("translation_patchpanel", 0.0, 0., -81.5); //z( 0, 0.7, -81.5-1.3; 0.. 81.7 --1.5
+    auto* t_patchpanel1 = new TGeoTranslation("translation_patchpanel", 0.0, 0., -81.5);
     auto* r_patchpanel1 = new TGeoRotation("rotation_patchpanel", 0.0, 0.0, 180.0);
     auto* p_patchpanel1 = new TGeoCombiTrans(*t_patchpanel1, *r_patchpanel1);
 

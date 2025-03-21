@@ -20,7 +20,9 @@ o2_add_library(PHOSSimulation
                                      O2::SimConfig
                                      O2::SimulationDataFormat
                                      O2::Headers
-                                     O2::DetectorsRaw)
+                                     O2::DataFormatsCTP
+                                     O2::DetectorsRaw
+                                     ROOT::TreePlayer)
 
 o2_target_root_dictionary(PHOSSimulation
                           HEADERS include/PHOSSimulation/Detector.h

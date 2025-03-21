@@ -194,6 +194,17 @@ The writer will create a new CRU page with provided payload equipping it with th
 For further details see  ``ITSMFT/common/simulation/MC2RawEncoder`` class and the macro
 `Detectors/ITSMFT/ITS/macros/test/run_digi2rawVarPage_its.C` to steer the MC to raw data conversion.
 
+* Update: Use flag HBFUtils.obligatorySOR to start raw data from TF with SOX.
+
+If the HBFUtils.obligatorySOR==false (default) the MC->Raw converted data will start from the 1st TF containing data (i.e. corresponding to HBFUtils.firstOrbitSampled),
+the SOX in the RDH will be set only if this TF coincides with the 1st TF of the Run (defined by the HBFUtils.orbitFirst).
+With HBFUtils.obligatorySOR==true old behaviour will be preserved: the raw data will start from TF with HBFUtils.orbitFirst with SOX always set and for CRU detectors all HBFs/TFs between HBFUtils.orbitFirst and 1st non-empty HBF will be
+filled by dummy RDHs.
+
+With the introduction of `RDHv7` some detectors write their payload w/o padding their GBT words to 16 bytes. Usually such detectors are required to align their CRU page size to certain size (see [discussion](https://alice.its.cern.ch/jira/browse/O2-3525)).
+To delegate this padding for alignment reason to the RawFileWriter one should use methods:
+
+
 ## RawFileReader
 
 A class for parsing raw data file(s) with "variable-size" CRU format.
@@ -289,7 +300,7 @@ bool readPerTF = true; // data can be read per TF or per HBF
 while(1) {
   int tfID = reader.getNextTFToRead();
   if (tfID >= reader.getNTimeFrames()) {
-    LOG(INFO) << "nothing left to read after " << tfID << " TFs read";
+    LOG(info) << "nothing left to read after " << tfID << " TFs read";
     break;
   }
   std::vector<char> dataBuffer; // where to put extracted data
@@ -336,7 +347,8 @@ o2-raw-file-reader-workflow
   --cache-data                          cache data at 1st reading, may require excessive memory!!!
   --detect-tf0                          autodetect HBFUtils start Orbit/BC from 1st TF seen (at SOX)
   --calculate-tf-start                  calculate TF start from orbit instead of using TType
-  --drop-tf arg (=none)                Drop each TFid%(1)==(2) of detector, e.g. ITS,2,4;TPC,4[,0];...
+  --drop-tf arg (=none)                 drop each TFid%(1)==(2) of detector, e.g. ITS,2,4;TPC,4[,0];...
+  --start-time arg (=0)                 define TF creation time as start-time + firstTForbit*orbit_duration, ms, otherwise: current time
   --configKeyValues arg                 semicolon separated key=value strings
 
   # to suppress various error checks / reporting
@@ -364,11 +376,13 @@ Using `--cache-data` option one can force caching the data to memory during the 
 At every invocation of the device `processing` callback a full TimeFrame for every link will be added as a multi-part `FairMQ` message and relayed by the relevant channel.
 By default each HBF will start a new part in the multipart message. This behaviour can be changed by providing `part-per-sp` option, in which case there will be one part per superpage (Note that this is incompatible to the DPLRawSequencer).
 
+By the default the DataProcessingHeader of each message will have its creation time set to `now()`. This can be changed by passing an option `--configKeyValues "HBFUtils.startTime=<t>"` with `t` being desired run start time in milliseconds: in this case the creation time will be defined as `t + (firstTForbit-HBFUtils.orbitFirst)*orbit_duration` in milliseconds.
+
 The standard use case of this workflow is to provide the input for other worfklows using the piping, e.g.
 ```cpp
 o2-raw-file-reader-workflow --input-conf myConf.cfg | o2-dpl-raw-parser
 ```
-Option `--raw-channel-config <confstring> forces the reader to send all data (single FairMQParts containing the whole TF) to raw FairMQ channel, emulating the messages from the DataDistribution.
+Option `--raw-channel-config <confstring> forces the reader to send all data (single `fair::mq::Parts` containing the whole TF) to raw FairMQ channel, emulating the messages from the DataDistribution.
 To inject such a data to DPL one should use a parallel process starting with `o2-dpl-raw-proxy`. An example (note `--session default` added to every executable):
 
 ```bash
@@ -465,6 +479,15 @@ input data (obligatory): comma-separated list of input data files and/or files w
 max TF ID to process (<= 0 : infinite)
 
 ```
+--select-tf-ids <id's of TFs to select>
+```
+This is a `tf-reader` device local option allowing selective reading of particular TFs. It is useful when dealing with TF files containing multiple TFs. The comma-separated list of increasing TFs indices must be provided in the format parsed by the `RangeTokenizer<int>`, e.g. `1,4-6,...`.
+Note that the index corresponds not to DataHeader.TFcounter of the TF but to the reader own counter incremented throught all input files (e.g. if 10 raw-TF files with 20 TFs each are provided for the input and the selection of TFs
+`0,2,22,66` is provided, the reader will inject to the DPL the TFs at entries 0 and 2 from the 1st raw-TF file, entry 5 of the second file, entry 6 of the 3d and will finish the job.
+
+
+
+```
 --loop arg (=0)
 ```
 loop N times (-1 = infinite) over input files (but max-tf has priority if positive)
@@ -524,6 +547,23 @@ list of detectors for which non-raw outputs (if any) are discarded.
 list of detectors for which raw outputs are discarded.
 
 The raw data will be propagated (if present) only if the detector is selected in `--onlyDet` and `NOT` selected in `--non-raw-only-det`. The non-raw data will be propagated (if defined for the given detector and present in the file) only if the detector is selected in `--onlyDet` and `NOT` selected in `--raw-only-det`.
+
+## TF rate limiting
+
+To apply TF rate limiting (i.e. make sure that no more than N TFs are in processing) provide `--timeframes-rate-limit <N> --timeframes-rate-limit-ipcid <IPCID>`
+too all workflows (e.g. via ARGS_ALL).
+The IPCID is the NUMA domain ID (usually 0 on non-EPN workflow).
+Additionally, one may throttle on the free SHM by providing an option to the reader `--timeframes-shm-limit <shm-size>`.
+
+## Raw TF to raw files conversion
+
+The workflow `o2-raw-tf-dump-workflow` allows to convert rawTF files to raw files used by `o2-raw-file-reader-workflow` (or `readout.exe` replay), creating also `raw-file-reader` configuration files (one per detector). Example of usage:
+```
+ulimit -n 10000
+o2-raw-tf-reader-workflow --max-tf 4  --shm-segment-size 16000000000  --input-data pbpb/o2_rawtf_run00529397_tf00033857_epn151.tf --detOnly "ITS,TPC" | o2-raw-tf-dump-workflow --detOnly "ITS,TPC"  --shm-segment-size 16000000000 --fatal-on-deadbeef --output-directory  rawpb --run
+cat rawpb/{ITS,TPC}*raw.cfg > rawAll.cfg
+o2-raw-file-reader-workflow --input-conf rawAll.cfg --nocheck-packet-increment --nocheck-page-increment --nocheck-hbf-jump --configKeyValues "HBFUtils.nHBFPerTF=128"
+```
 
 ## Miscellaneous macros
 

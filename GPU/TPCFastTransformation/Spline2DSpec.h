@@ -22,14 +22,14 @@
 #include "GPUCommonDef.h"
 #include "SplineUtil.h"
 
-#if !defined(__CINT__) && !defined(__ROOTCINT__) && !defined(GPUCA_GPUCODE) && !defined(GPUCA_NO_VC) && defined(__cplusplus) && __cplusplus >= 201703L
+#if !defined(__ROOTCLING__) && !defined(GPUCA_GPUCODE) && !defined(GPUCA_NO_VC)
 #include <Vc/Vc>
 #include <Vc/SimdArray>
 #endif
 
 class TFile;
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -53,18 +53,18 @@ class Spline2DContainer : public FlatObject
   /// _____________  Version control __________________________
 
   /// Version control
-  GPUd() static constexpr int getVersion() { return (1 << 16) + Spline1D<DataT>::getVersion(); }
+  GPUd() static constexpr int32_t getVersion() { return (1 << 16) + Spline1D<DataT>::getVersion(); }
 
   /// _____________  C++ constructors / destructors __________________________
 
   /// Default constructor
-  Spline2DContainer() CON_DEFAULT;
+  Spline2DContainer() = default;
 
   /// Disable all other constructors
-  Spline2DContainer(const Spline2DContainer&) CON_DELETE;
+  Spline2DContainer(const Spline2DContainer&) = delete;
 
   /// Destructor
-  ~Spline2DContainer() CON_DEFAULT;
+  ~Spline2DContainer() = default;
 
   /// _______________  Construction interface  ________________________
 
@@ -72,14 +72,18 @@ class Spline2DContainer : public FlatObject
   /// approximate a function F with this spline
   void approximateFunction(double x1Min, double x1Max, double x2Min, double x2Max,
                            std::function<void(double x1, double x2, double f[/*mYdim*/])> F,
-                           int nAuxiliaryDataPointsU1 = 4, int nAuxiliaryDataPointsU2 = 4);
+                           int32_t nAuxiliaryDataPointsU1 = 4, int32_t nAuxiliaryDataPointsU2 = 4);
+
+  void approximateFunctionViaDataPoints(double x1Min, double x1Max, double x2Min, double x2Max,
+                                        std::function<void(double x1, double x2, double f[])> F,
+                                        int32_t nAuxiliaryDataPointsX1, int32_t nAuxiliaryDataPointsX2);
 #endif
 
   /// _______________  IO   ________________________
 
 #if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
   /// write a class object to the file
-  int writeToFile(TFile& outf, const char* name);
+  int32_t writeToFile(TFile& outf, const char* name);
 
   /// read a class object from the file
   static Spline2DContainer* readFromFile(TFile& inpf, const char* name);
@@ -88,19 +92,19 @@ class Spline2DContainer : public FlatObject
   /// _______________  Getters   ________________________
 
   /// Get number of Y dimensions
-  GPUd() int getYdimensions() const { return mYdim; }
+  GPUd() int32_t getYdimensions() const { return mYdim; }
 
   /// Get minimal required alignment for the spline parameters
   GPUd() static constexpr size_t getParameterAlignmentBytes() { return 16; }
 
   /// Number of parameters
-  GPUd() int getNumberOfParameters() const { return this->calcNumberOfParameters(mYdim); }
+  GPUd() int32_t getNumberOfParameters() const { return this->calcNumberOfParameters(mYdim); }
 
   /// Size of the parameter array in bytes
   GPUd() size_t getSizeOfParameters() const { return sizeof(DataT) * this->getNumberOfParameters(); }
 
   /// Get a number of knots
-  GPUd() int getNumberOfKnots() const { return mGridX1.getNumberOfKnots() * mGridX2.getNumberOfKnots(); }
+  GPUd() int32_t getNumberOfKnots() const { return mGridX1.getNumberOfKnots() * mGridX2.getNumberOfKnots(); }
 
   /// Get 1-D grid for the X1 coordinate
   GPUd() const Spline1D<DataT>& getGridX1() const { return mGridX1; }
@@ -109,17 +113,17 @@ class Spline2DContainer : public FlatObject
   GPUd() const Spline1D<DataT>& getGridX2() const { return mGridX2; }
 
   /// Get 1-D grid for X1 or X2 coordinate
-  GPUd() const Spline1D<DataT>& getGrid(int ix) const { return (ix == 0) ? mGridX1 : mGridX2; }
+  GPUd() const Spline1D<DataT>& getGrid(int32_t ix) const { return (ix == 0) ? mGridX1 : mGridX2; }
 
   /// Get (u1,u2) of i-th knot
-  GPUd() void getKnotU(int iKnot, int& u1, int& u2) const
+  GPUd() void getKnotU(int32_t iKnot, int32_t& u1, int32_t& u2) const
   {
     u1 = mGridX1.getKnot(iKnot % mGridX1.getNumberOfKnots()).getU();
     u2 = mGridX2.getKnot(iKnot / mGridX1.getNumberOfKnots()).getU();
   }
 
   /// Get index of a knot (iKnotX1,iKnotX2)
-  GPUd() int getKnotIndex(int iKnotX1, int iKnotX2) const
+  GPUd() int32_t getKnotIndex(int32_t iKnotX1, int32_t iKnotX2) const
   {
     return mGridX1.getNumberOfKnots() * iKnotX2 + iKnotX1;
   }
@@ -151,13 +155,13 @@ class Spline2DContainer : public FlatObject
   ///  _______________  Expert tools  _______________
 
   /// Number of parameters for given Y dimensions
-  GPUd() int calcNumberOfParameters(int nYdim) const { return (4 * nYdim) * getNumberOfKnots(); }
+  GPUd() int32_t calcNumberOfParameters(int32_t nYdim) const { return (4 * nYdim) * getNumberOfKnots(); }
 
   ///_______________  Test tools  _______________
 
-#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE) && !defined(GPUCA_ALIROOT_LIB) // code invisible on GPU and in the standalone compilation
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE) // code invisible on GPU and in the standalone compilation
   /// Test the class functionality
-  static int test(const bool draw = 0, const bool drawDataPoints = 1);
+  static int32_t test(const bool draw = 0, const bool drawDataPoints = 1);
 #endif
 
   /// _____________  FlatObject functionality, see FlatObject class for description  ____________
@@ -179,22 +183,20 @@ class Spline2DContainer : public FlatObject
  protected:
 #if !defined(GPUCA_GPUCODE)
   /// Constructor for a regular spline
-  void recreate(int nYdim, int nKnotsX1, int nKnotsX2);
+  void recreate(int32_t nYdim, int32_t nKnotsX1, int32_t nKnotsX2);
 
   /// Constructor for an irregular spline
-  void recreate(int nYdim, int nKnotsX1, const int knotU1[], int nKnotsX2, const int knotU2[]);
+  void recreate(int32_t nYdim, int32_t nKnotsX1, const int32_t knotU1[], int32_t nKnotsX2, const int32_t knotU2[]);
 #endif
 
   /// _____________  Data members  ____________
 
-  int mYdim = 0;                ///< dimentionality of F
+  int32_t mYdim = 0;            ///< dimentionality of F
   Spline1D<DataT> mGridX1;      ///< grid for U axis
   Spline1D<DataT> mGridX2;      ///< grid for V axis
   DataT* mParameters = nullptr; //! (transient!!) F-dependent parameters of the spline
 
-#ifndef GPUCA_ALIROOT_LIB
   ClassDefNV(Spline2DContainer, 1);
-#endif
 };
 
 /// ==================================================================================================
@@ -215,14 +217,14 @@ class Spline2DContainer : public FlatObject
 ///  2 - nYdim<0: nYdim must be set during runtime
 ///  3 - specialization where nYdim==1 (a small add-on on top of the other specs)
 ///
-template <typename DataT, int YdimT, int SpecT>
+template <typename DataT, int32_t YdimT, int32_t SpecT>
 class Spline2DSpec;
 
 /// ==================================================================================================
 /// Specialization 0 declares common methods for all other Spline2D specializations.
 /// Implementations of the methods may depend on the YdimT value.
 ///
-template <typename DataT, int YdimT>
+template <typename DataT, int32_t YdimT>
 class Spline2DSpec<DataT, YdimT, 0>
   : public Spline2DContainer<DataT>
 {
@@ -242,24 +244,24 @@ class Spline2DSpec<DataT, YdimT, 0>
 
   /// Get interpolated value for an inpYdim-dimensional S(u1,u2) using spline parameters Parameters.
   template <SafetyLevel SafeT = SafetyLevel::kSafe>
-  GPUd() void interpolateU(int inpYdim, GPUgeneric() const DataT Parameters[],
-                           DataT u1, DataT u2, GPUgeneric() DataT S[/*inpYdim*/]) const
+  GPUd() void interpolateUold(int32_t inpYdim, GPUgeneric() const DataT Parameters[],
+                              DataT u1, DataT u2, GPUgeneric() DataT S[/*inpYdim*/]) const
   {
 
     const auto nYdimTmp = SplineUtil::getNdim<YdimT>(inpYdim);
-    const int nYdim = nYdimTmp.get();
+    const int32_t nYdim = nYdimTmp.get();
 
     const auto maxYdim = SplineUtil::getMaxNdim<YdimT>(inpYdim);
-    const int maxYdim4 = 4 * maxYdim.get();
+    const int32_t maxYdim4 = 4 * maxYdim.get();
 
     const auto nYdim2 = nYdim * 2;
     const auto nYdim4 = nYdim * 4;
 
-    const float& u = u1;
-    const float& v = u2;
-    int nu = mGridX1.getNumberOfKnots();
-    int iu = mGridX1.template getLeftKnotIndexForU<SafeT>(u);
-    int iv = mGridX2.template getLeftKnotIndexForU<SafeT>(v);
+    const DataT& u = u1;
+    const DataT& v = u2;
+    int32_t nu = mGridX1.getNumberOfKnots();
+    int32_t iu = mGridX1.template getLeftKnotIndexForU<SafeT>(u);
+    int32_t iv = mGridX2.template getLeftKnotIndexForU<SafeT>(v);
 
     const typename TBase::Knot& knotU = mGridX1.template getKnot<SafetyLevel::kNotSafe>(iu);
     const typename TBase::Knot& knotV = mGridX2.template getKnot<SafetyLevel::kNotSafe>(iv);
@@ -274,7 +276,7 @@ class Spline2DSpec<DataT, YdimT, 0>
     DataT Su1[maxYdim4]; // values { {Y1,Y2,Y3,Y1'v,Y2'v,Y3'v}(v0), {Y1,Y2,Y3,Y1'v,Y2'v,Y3'v}(v1) }, at u1
     DataT Du1[maxYdim4]; // derivatives {}'_u  at u1
 
-    for (int i = 0; i < nYdim2; i++) {
+    for (int32_t i = 0; i < nYdim2; i++) {
       Su0[i] = par00[i];
       Su0[nYdim2 + i] = par01[i];
 
@@ -305,6 +307,59 @@ class Spline2DSpec<DataT, YdimT, 0>
     gridX2.interpolateU(nYdim, knotV, Sv0, Dv0, Sv1, Dv1, v, S);
   }
 
+  /// Get interpolated value for an inpYdim-dimensional S(u1,u2) using spline parameters Parameters.
+  template <SafetyLevel SafeT = SafetyLevel::kSafe>
+  GPUd() void interpolateU(int32_t inpYdim, GPUgeneric() const DataT Parameters[],
+                           DataT u1, DataT u2, GPUgeneric() DataT S[/*inpYdim*/]) const
+  {
+
+    const auto nYdimTmp = SplineUtil::getNdim<YdimT>(inpYdim);
+    const int32_t nYdim = nYdimTmp.get();
+
+    // const auto maxYdim = SplineUtil::getMaxNdim<YdimT>(inpYdim);
+    // const int32_t maxYdim4 = 4 * maxYdim.get();
+
+    // const auto nYdim2 = nYdim * 2;
+    const auto nYdim4 = nYdim * 4;
+
+    const DataT& u = u1;
+    const DataT& v = u2;
+    int32_t nu = mGridX1.getNumberOfKnots();
+    int32_t iu = mGridX1.template getLeftKnotIndexForU<SafeT>(u);
+    int32_t iv = mGridX2.template getLeftKnotIndexForU<SafeT>(v);
+
+    const typename TBase::Knot& knotU = mGridX1.template getKnot<SafetyLevel::kNotSafe>(iu);
+    const typename TBase::Knot& knotV = mGridX2.template getKnot<SafetyLevel::kNotSafe>(iv);
+
+    const DataT* A = Parameters + (nu * iv + iu) * nYdim4; // values { {Y1,Y2,Y3}, {Y1,Y2,Y3}'v, {Y1,Y2,Y3}'u, {Y1,Y2,Y3}''vu } at {u0, v0}
+    const DataT* B = A + nYdim4 * nu;                      // values { ... } at {u0, v1}
+
+    DataT dSl, dDl, dSr, dDr;
+    mGridX1.getUderivatives(knotU, u, dSl, dDl, dSr, dDr);
+    DataT dSd, dDd, dSu, dDu;
+    mGridX2.getUderivatives(knotV, v, dSd, dDd, dSu, dDu);
+
+    // when nYdim == 1:
+    // S = dSl * (dSd * A[0] + dDd * A[1]) + dDl * (dSd * A[2] + dDd * A[3]) +
+    //     dSr * (dSd * A[4] + dDd * A[5]) + dDr * (dSd * A[6] + dDd * A[7]) +
+    //     dSl * (dSu * B[0] + dDu * B[1]) + dDl * (dSu * B[2] + dDu * B[3]) +
+    //     dSr * (dSu * B[4] + dDu * B[5]) + dDr * (dSu * B[6] + dDu * B[7]);
+
+    DataT a[8] = {dSl * dSd, dSl * dDd, dDl * dSd, dDl * dDd,
+                  dSr * dSd, dSr * dDd, dDr * dSd, dDr * dDd};
+    DataT b[8] = {dSl * dSu, dSl * dDu, dDl * dSu, dDl * dDu,
+                  dSr * dSu, dSr * dDu, dDr * dSu, dDr * dDu};
+
+    // S = sum a[i]*A[i] + b[i]*B[i]
+
+    for (int32_t dim = 0; dim < nYdim; dim++) {
+      S[dim] = 0;
+      for (int32_t i = 0; i < 8; i++) {
+        S[dim] += a[i] * A[nYdim * i + dim] + b[i] * B[nYdim * i + dim];
+      }
+    }
+  }
+
  protected:
   using TBase::mGridX1;
   using TBase::mGridX2;
@@ -317,7 +372,7 @@ class Spline2DSpec<DataT, YdimT, 0>
 /// Specialization 1: YdimT>0 where the number of Y dimensions is taken from template parameters
 /// at the compile time
 ///
-template <typename DataT, int YdimT>
+template <typename DataT, int32_t YdimT>
 class Spline2DSpec<DataT, YdimT, 1>
   : public Spline2DSpec<DataT, YdimT, 0>
 {
@@ -332,13 +387,13 @@ class Spline2DSpec<DataT, YdimT, 1>
   Spline2DSpec() : Spline2DSpec(2, 2) {}
 
   /// Constructor for a regular spline
-  Spline2DSpec(int nKnotsX1, int nKnotsX2) : TBase()
+  Spline2DSpec(int32_t nKnotsX1, int32_t nKnotsX2) : TBase()
   {
     recreate(nKnotsX1, nKnotsX2);
   }
   /// Constructor for an irregular spline
-  Spline2DSpec(int nKnotsX1, const int knotU1[],
-               int nKnotsX2, const int knotU2[])
+  Spline2DSpec(int32_t nKnotsX1, const int32_t knotU1[],
+               int32_t nKnotsX2, const int32_t knotU2[])
     : TBase()
   {
     recreate(nKnotsX1, knotU1, nKnotsX2, knotU2);
@@ -349,24 +404,24 @@ class Spline2DSpec<DataT, YdimT, 1>
     TBase::cloneFromObject(v, nullptr);
   }
   /// Constructor for a regular spline
-  void recreate(int nKnotsX1, int nKnotsX2)
+  void recreate(int32_t nKnotsX1, int32_t nKnotsX2)
   {
     TBase::recreate(YdimT, nKnotsX1, nKnotsX2);
   }
 
   /// Constructor for an irregular spline
-  void recreate(int nKnotsX1, const int knotU1[],
-                int nKnotsX2, const int knotU2[])
+  void recreate(int32_t nKnotsX1, const int32_t knotU1[],
+                int32_t nKnotsX2, const int32_t knotU2[])
   {
     TBase::recreate(YdimT, nKnotsX1, knotU1, nKnotsX2, knotU2);
   }
 #endif
 
   /// Get number of Y dimensions
-  GPUd() constexpr int getYdimensions() const { return YdimT; }
+  GPUd() constexpr int32_t getYdimensions() const { return YdimT; }
 
   /// Number of parameters
-  GPUd() int getNumberOfParameters() const { return (4 * YdimT) * getNumberOfKnots(); }
+  GPUd() int32_t getNumberOfParameters() const { return (4 * YdimT) * getNumberOfKnots(); }
 
   /// Size of the parameter array in bytes
   GPUd() size_t getSizeOfParameters() const { return (sizeof(DataT) * 4 * YdimT) * getNumberOfKnots(); }
@@ -379,6 +434,14 @@ class Spline2DSpec<DataT, YdimT, 1>
                            DataT u1, DataT u2, GPUgeneric() DataT S[/*nYdim*/]) const
   {
     TBase::template interpolateU<SafeT>(YdimT, Parameters, u1, u2, S);
+  }
+
+  /// Get interpolated value for an YdimT-dimensional S(u1,u2) using spline parameters Parameters.
+  template <SafetyLevel SafeT = SafetyLevel::kSafe>
+  GPUd() void interpolateUold(GPUgeneric() const DataT Parameters[],
+                              DataT u1, DataT u2, GPUgeneric() DataT S[/*nYdim*/]) const
+  {
+    TBase::template interpolateUold<SafeT>(YdimT, Parameters, u1, u2, S);
   }
 
   using TBase::getNumberOfKnots;
@@ -395,7 +458,7 @@ class Spline2DSpec<DataT, YdimT, 1>
 /// Specialization 2 (YdimT<=0) where the numbaer of Y dimensions
 /// must be set in the runtime via a constructor parameter
 ///
-template <typename DataT, int YdimT>
+template <typename DataT, int32_t YdimT>
 class Spline2DSpec<DataT, YdimT, 2>
   : public Spline2DSpec<DataT, YdimT, 0>
 {
@@ -410,14 +473,14 @@ class Spline2DSpec<DataT, YdimT, 2>
   Spline2DSpec() : Spline2DSpec(0, 2, 2) {}
 
   /// Constructor for a regular spline
-  Spline2DSpec(int nYdim, int nKnotsX1, int nKnotsX2) : TBase()
+  Spline2DSpec(int32_t nYdim, int32_t nKnotsX1, int32_t nKnotsX2) : TBase()
   {
     TBase::recreate(nYdim, nKnotsX1, nKnotsX2);
   }
 
   /// Constructor for an irregular spline
-  Spline2DSpec(int nYdim, int nKnotsX1, const int knotU1[],
-               int nKnotsX2, const int knotU2[]) : TBase()
+  Spline2DSpec(int32_t nYdim, int32_t nKnotsX1, const int32_t knotU1[],
+               int32_t nKnotsX2, const int32_t knotU2[]) : TBase()
   {
     TBase::recreate(nYdim, nKnotsX1, knotU1, nKnotsX2, knotU2);
   }
@@ -429,14 +492,14 @@ class Spline2DSpec<DataT, YdimT, 2>
   }
 
   /// Constructor for a regular spline
-  void recreate(int nYdim, int nKnotsX1, int nKnotsX2)
+  void recreate(int32_t nYdim, int32_t nKnotsX1, int32_t nKnotsX2)
   {
     TBase::recreate(nYdim, nKnotsX1, nKnotsX2);
   }
 
   /// Constructor for an irregular spline
-  void recreate(int nYdim, int nKnotsX1, const int knotU1[],
-                int nKnotsX2, const int knotU2[])
+  void recreate(int32_t nYdim, int32_t nKnotsX1, const int32_t knotU1[],
+                int32_t nKnotsX2, const int32_t knotU2[])
   {
     TBase::recreate(nYdim, nKnotsX1, knotU1, nKnotsX2, knotU2);
   }
@@ -472,6 +535,6 @@ class Spline2DSpec<DataT, 1, 3>
   using TBase::interpolate;
 };
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

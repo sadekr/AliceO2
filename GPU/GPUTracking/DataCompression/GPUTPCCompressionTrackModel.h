@@ -17,7 +17,7 @@
 
 // For debugging purposes, we provide means to use other track models
 // #define GPUCA_COMPRESSION_TRACK_MODEL_MERGER
-// #define GPUCA_COMPRESSION_TRACK_MODEL_SLICETRACKER
+// #define GPUCA_COMPRESSION_TRACK_MODEL_SECTORTRACKER
 
 #include "GPUDef.h"
 
@@ -25,13 +25,13 @@
 #include "GPUTPCGMPropagator.h"
 #include "GPUTPCGMTrackParam.h"
 
-#elif defined(GPUCA_COMPRESSION_TRACK_MODEL_SLICETRACKER)
+#elif defined(GPUCA_COMPRESSION_TRACK_MODEL_SECTORTRACKER)
 #include "GPUTPCTrackParam.h"
 
 #else // Default internal track model for compression
 #endif
 
-namespace GPUCA_NAMESPACE::gpu
+namespace o2::gpu
 {
 // ATTENTION! This track model is used for the data compression.
 // Changes to the propagation and fit will prevent the decompression of data
@@ -44,12 +44,12 @@ constexpr float MaxSinPhi = 0.999f;
 class GPUTPCCompressionTrackModel
 {
  public:
-  GPUd() void Init(float x, float y, float z, float alpha, unsigned char qPt, const GPUParam& proc);
-  GPUd() int Propagate(float x, float alpha);
-  GPUd() int Filter(float y, float z, int iRow);
-  GPUd() int Mirror();
+  GPUd() void Init(float x, float y, float z, float alpha, uint8_t qPt, const GPUParam& proc);
+  GPUd() int32_t Propagate(float x, float alpha);
+  GPUd() int32_t Filter(float y, float z, int32_t iRow);
+  GPUd() int32_t Mirror();
 
-#if defined(GPUCA_COMPRESSION_TRACK_MODEL_MERGER) || defined(GPUCA_COMPRESSION_TRACK_MODEL_SLICETRACKER)
+#if defined(GPUCA_COMPRESSION_TRACK_MODEL_MERGER) || defined(GPUCA_COMPRESSION_TRACK_MODEL_SECTORTRACKER)
   GPUd() float X() const
   {
     return mTrk.GetX();
@@ -91,14 +91,26 @@ class GPUTPCCompressionTrackModel
   // helper functions for standalone propagation and update methods
   GPUd() void updatePhysicalTrackValues(PhysicalTrackModel& trk);
   GPUd() void changeDirection();
-  GPUd() int rotateToAlpha(float newAlpha);
-  GPUd() int propagateToXBzLightNoUpdate(PhysicalTrackModel& t, float x, float Bz, float& dLp);
+  GPUd() int32_t rotateToAlpha(float newAlpha);
+  GPUd() int32_t propagateToXBzLightNoUpdate(PhysicalTrackModel& t, float x, float Bz, float& dLp);
   GPUd() bool setDirectionAlongX(PhysicalTrackModel& t);
-  GPUd() int followLinearization(const PhysicalTrackModel& t0e, float Bz, float dLp);
+  GPUd() int32_t followLinearization(const PhysicalTrackModel& t0e, float Bz, float dLp);
   GPUd() void calculateMaterialCorrection();
   GPUd() float approximateBetheBloch(float beta2);
-  GPUd() void getClusterRMS2(int iRow, float z, float sinPhi, float DzDs, float& ErrY2, float& ErrZ2) const;
+  GPUd() void getClusterErrors2(int32_t iRow, float z, float sinPhi, float DzDs, float& ErrY2, float& ErrZ2) const;
   GPUd() void resetCovariance();
+
+  GPUd() float LinearPad2Y(int32_t sector, float pad, float padWidth, uint8_t npads) const
+  {
+    const float u = (pad - 0.5f * npads) * padWidth;
+    return (sector >= GPUCA_NSECTORS / 2) ? -u : u;
+  }
+
+  GPUd() float LinearY2Pad(int32_t sector, float y, float padWidth, uint8_t npads) const
+  {
+    const float u = (sector >= GPUCA_NSECTORS / 2) ? -y : y;
+    return u / padWidth + 0.5f * npads;
+  }
 
 #endif
 
@@ -108,7 +120,7 @@ class GPUTPCCompressionTrackModel
   GPUTPCGMTrackParam mTrk;
   const GPUParam* mParam;
 
-#elif defined(GPUCA_COMPRESSION_TRACK_MODEL_SLICETRACKER)
+#elif defined(GPUCA_COMPRESSION_TRACK_MODEL_SECTORTRACKER)
   GPUTPCTrackParam mTrk;
   float mAlpha;
   const GPUParam* mParam;
@@ -125,7 +137,7 @@ class GPUTPCCompressionTrackModel
 
   // default TPC cluster error parameterization taken from GPUParam.cxx
   // clang-format off
-  const float mParamRMS0[2][3][4] =
+  const float mParamErrors0[2][3][4] =
   {
     { { 4.17516864836e-02, 1.87623649254e-04, 5.63788712025e-02, 5.38373768330e-01, },
     { 8.29434990883e-02, 2.03291710932e-04, 6.81538805366e-02, 9.70965325832e-01, },
@@ -141,7 +153,7 @@ class GPUTPCCompressionTrackModel
   float mAlpha;
   float mP[5];
   float mC[15];
-  int mNDF = -5;
+  int32_t mNDF = -5;
   float mCosAlpha;
   float mSinAlpha;
 
@@ -152,6 +164,6 @@ class GPUTPCCompressionTrackModel
   PhysicalTrackModel mTrk;
 #endif
 };
-} // namespace GPUCA_NAMESPACE::gpu
+} // namespace o2::gpu
 
 #endif

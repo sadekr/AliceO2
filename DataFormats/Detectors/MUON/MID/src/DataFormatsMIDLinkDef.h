@@ -15,12 +15,12 @@
 #pragma link off all classes;
 #pragma link off all functions;
 
-#pragma link C++ struct o2::mid::Cluster2D + ;
-#pragma link C++ class std::vector < o2::mid::Cluster2D> + ;
-#pragma link C++ struct o2::mid::Cluster3D + ;
-#pragma link C++ class std::vector < o2::mid::Cluster3D> + ;
-#pragma link C++ struct o2::mid::ColumnData + ;               // This is needed for the derived classes
-#pragma link C++ class std::vector < o2::mid::ColumnData> + ; // This is needed for the derived classes
+#pragma link C++ struct o2::mid::ChEffCounter + ;
+#pragma link C++ class std::vector < o2::mid::ChEffCounter> + ;
+#pragma link C++ struct o2::mid::Cluster + ;
+#pragma link C++ class std::vector < o2::mid::Cluster> + ;
+#pragma link C++ struct o2::mid::ColumnData + ;
+#pragma link C++ class std::vector < o2::mid::ColumnData> + ;
 #pragma link C++ struct o2::mid::ROFRecord + ;
 #pragma link C++ class std::vector < o2::mid::ROFRecord> + ;
 #pragma link C++ struct o2::mid::Track + ;
@@ -33,5 +33,7 @@
 #include "SimulationDataFormat/MCTruthContainer.h"
 #pragma link C++ class o2::mid::MCClusterLabel + ;
 #pragma link C++ class o2::dataformats::MCTruthContainer < o2::mid::MCClusterLabel> + ;
+#pragma link C++ class o2::mid::MCLabel + ;
+#pragma link C++ class o2::dataformats::MCTruthContainer < o2::mid::MCLabel> + ;
 
 #endif

@@ -14,8 +14,8 @@
 ///
 /// \author Philippe Pillot, Subatech
 
-#ifndef ALICEO2_MCH_CLUSTERFINDERORIGINAL_H_
-#define ALICEO2_MCH_CLUSTERFINDERORIGINAL_H_
+#ifndef O2_MCH_CLUSTERFINDERORIGINAL_H_
+#define O2_MCH_CLUSTERFINDERORIGINAL_H_
 
 #include <functional>
 #include <map>
@@ -28,7 +28,8 @@
 #include <TH2D.h>
 
 #include "DataFormatsMCH/Digit.h"
-#include "DataFormatsMCH/ClusterBlock.h"
+#include "DataFormatsMCH/Cluster.h"
+#include "MCHBase/ErrorMap.h"
 #include "MCHMappingInterface/Segmentation.h"
 #include "MCHPreClustering/PreClusterFinder.h"
 
@@ -59,9 +60,12 @@ class ClusterFinderOriginal
   void findClusters(gsl::span<const Digit> digits);
 
   /// return the list of reconstructed clusters
-  const std::vector<ClusterStruct>& getClusters() const { return mClusters; }
+  const std::vector<Cluster>& getClusters() const { return mClusters; }
   /// return the list of digits used in reconstructed clusters
   const std::vector<Digit>& getUsedDigits() const { return mUsedDigits; }
+
+  /// return the counting of encountered errors
+  ErrorMap& getErrorMap() { return mErrorMap; }
 
  private:
   static constexpr double SDistancePrecision = 1.e-3;            ///< precision used to check overlaps and so on (cm)
@@ -108,7 +112,7 @@ class ClusterFinderOriginal
              std::vector<std::vector<double>>& couplingClCl, std::vector<std::vector<double>>& couplingClPad) const;
   void updatePads(const double fitParam[SNFitParamMax + 1], int nParamUsed);
 
-  void setClusterResolution(ClusterStruct& cluster) const;
+  void setClusterResolution(Cluster& cluster) const;
 
   /// function to reinterpret digit ADC as charge
   std::function<double(uint32_t)> mADCToCharge = [](uint32_t adc) { return static_cast<double>(adc); };
@@ -125,8 +129,10 @@ class ClusterFinderOriginal
 
   const mapping::Segmentation* mSegmentation = nullptr; ///< pointer to the DE segmentation for the current precluster
 
-  std::vector<ClusterStruct> mClusters{}; ///< list of reconstructed clusters
-  std::vector<Digit> mUsedDigits{};       ///< list of digits used in reconstructed clusters
+  std::vector<Cluster> mClusters{}; ///< list of reconstructed clusters
+  std::vector<Digit> mUsedDigits{}; ///< list of digits used in reconstructed clusters
+
+  ErrorMap mErrorMap{}; ///< counting of encountered errors
 
   PreClusterFinder mPreClusterFinder{}; ///< preclusterizer
 };
@@ -134,4 +140,4 @@ class ClusterFinderOriginal
 } // namespace mch
 } // namespace o2
 
-#endif // ALICEO2_MCH_CLUSTERFINDERORIGINAL_H_
+#endif // O2_MCH_CLUSTERFINDERORIGINAL_H_

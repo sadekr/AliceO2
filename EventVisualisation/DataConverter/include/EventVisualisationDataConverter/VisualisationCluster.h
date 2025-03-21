@@ -19,13 +19,12 @@
 
 #include "ReconstructionDataFormats/GlobalTrackID.h"
 #include "rapidjson/document.h"
+#include <TVector3.h>
 
 #include <vector>
 #include <ctime>
 
-namespace o2
-{
-namespace event_visualisation
+namespace o2::event_visualisation
 {
 
 /// Minimalistic description of a cluster
@@ -36,27 +35,34 @@ namespace event_visualisation
 
 class VisualisationCluster
 {
- public:
-  VisualisationCluster(rapidjson::Value& tree);
-  rapidjson::Value jsonTree(rapidjson::Document::AllocatorType& allocator);
+  friend class VisualisationEventJSONSerializer;
+  friend class VisualisationEventROOTSerializer;
+  friend class VisualisationEventOpenGLSerializer;
+  friend class VisualisationEvent;
 
+ public:
   // Default constructor
-  VisualisationCluster(float XYZ[], float time);
+  VisualisationCluster(const float XYZ[], float time, o2::dataformats::GlobalTrackID gid);
+  VisualisationCluster(TVector3 xyz)
+  {
+    mTime = 0;
+    mBGID = 0;
+    mCoordinates[0] = xyz[0];
+    mCoordinates[1] = xyz[1];
+    mCoordinates[2] = xyz[2];
+  }
 
   float X() const { return mCoordinates[0]; }
   float Y() const { return mCoordinates[1]; }
   float Z() const { return mCoordinates[2]; }
   float Time() const { return mTime; }
 
-  // GID  getter
-  int getSource() const { return mSource; }
-
  private:
-  void setCoordinates(float xyz[3]);
+  void setCoordinates(const float xyz[3]);
   float mCoordinates[3]; /// Vector of cluster's coordinates
   float mTime;           /// time asociated with cluster
-  o2::dataformats::GlobalTrackID::Source mSource; /// data source of the cluster (debug)
+  o2::dataformats::GlobalTrackID mBGID;
 };
-} // namespace event_visualisation
-} // namespace o2
+} // namespace o2::event_visualisation
+
 #endif // ALICE_O2_DATACONVERTER_VISUALISATIONCLUSTER_H

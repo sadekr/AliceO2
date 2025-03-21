@@ -26,18 +26,49 @@
 
 using namespace o2::ccdb;
 
+static string basePath;
+std::string ccdbUrl = "http://ccdb-test.cern.ch:8080";
+bool hostReachable = false;
+
+/**
+ * Global fixture, ie general setup and teardown
+ */
+struct Fixture {
+  Fixture()
+  {
+    CcdbApi api;
+    api.init(ccdbUrl);
+    std::cout << "ccdb url: " << ccdbUrl << std::endl;
+    hostReachable = api.isHostReachable();
+    std::cout << "Is host reachable ? --> " << hostReachable << std::endl;
+    char hostname[_POSIX_HOST_NAME_MAX];
+    gethostname(hostname, _POSIX_HOST_NAME_MAX);
+    basePath = string("Test/") + hostname + "/pid" + getpid() + "/BasicCCDBManager/";
+    std::cout << "Path we will use in this test suite : " + basePath << std::endl;
+  }
+  ~Fixture()
+  {
+    if (hostReachable) {
+      CcdbApi api;
+      api.init(ccdbUrl);
+      api.truncate(basePath + "*");
+      std::cout << "Test data truncated (" << basePath << ")" << std::endl;
+    }
+  }
+};
+BOOST_GLOBAL_FIXTURE(Fixture);
+
 BOOST_AUTO_TEST_CASE(TestBasicCCDBManager)
 {
   CcdbApi api;
-  const std::string uri = "http://ccdb-test.cern.ch:8080";
-  api.init(uri);
+  api.init(ccdbUrl);
   if (!api.isHostReachable()) {
-    LOG(WARNING) << "Host " << uri << " is not reacheable, abandoning the test";
+    LOG(warning) << "Host " << ccdbUrl << " is not reacheable, abandoning the test";
     return;
   }
   //
-  std::string pathA = "Test/CachingA";
-  std::string pathB = "Test/CachingB";
+  std::string pathA = basePath + "CachingA";
+  std::string pathB = basePath + "CachingB";
   std::string ccdbObjO = "testObjectO";
   std::string ccdbObjN = "testObjectN";
   std::map<std::string, std::string> md;
@@ -48,12 +79,12 @@ BOOST_AUTO_TEST_CASE(TestBasicCCDBManager)
 
   // test reading
   auto& cdb = o2::ccdb::BasicCCDBManager::instance();
-  cdb.setURL(uri);
+  cdb.setURL(ccdbUrl);
   cdb.setTimestamp((start + stop) / 2);
   cdb.setCaching(true);
 
   auto* objA = cdb.get<std::string>(pathA); // will be loaded from scratch and fill the cache
-  LOG(INFO) << "1st reading of A: " << *objA;
+  LOG(info) << "1st reading of A: " << *objA;
   BOOST_CHECK(objA && (*objA) == ccdbObjO); // make sure correct object is loaded
 
   auto* objB = cdb.get<std::string>(pathB); // will be loaded from scratch and fill the cache
@@ -63,45 +94,48 @@ BOOST_AUTO_TEST_CASE(TestBasicCCDBManager)
   (*objA) = hack;
   (*objB) = hack;
   objA = cdb.get<std::string>(pathA); // should get already cached and hacked object
-  LOG(INFO) << "Reading of cached and modified A: " << *objA;
+  LOG(info) << "Reading of cached and modified A: " << *objA;
   BOOST_CHECK(objA && (*objA) == hack); // make sure correct object is loaded
 
   // now check wrong object reading, 0 will be returned and cache will be cleaned
+  cdb.setFatalWhenNull(false);
   objA = cdb.getForTimeStamp<std::string>(pathA, start - (stop - start) / 2); // wrong time
-  LOG(INFO) << "Read for wrong time, expect null: " << objA;
+  LOG(info) << "Read for wrong time, expect null: " << objA;
   BOOST_CHECK(objA == nullptr);
+  cdb.setFatalWhenNull(true);
   objA = cdb.get<std::string>(pathA); // cache again
-  LOG(INFO) << "Reading of A from scratch after error: " << *objA;
+  LOG(info) << "Reading of A from scratch after error: " << *objA;
   BOOST_CHECK(objA && (*objA) != hack); // make sure we did not get cached object
   (*objA) = hack;
 
   // read object from another time slot
   objA = cdb.getForTimeStamp<std::string>(pathA, stop + (stop - start) / 2); // will be loaded from scratch and fill the cache
-  LOG(INFO) << "Reading of A for different time slost, expect non-cached object: " << *objA;
+  LOG(info) << "Reading of A for different time slost, expect non-cached object: " << *objA;
   BOOST_CHECK(objA && (*objA) == ccdbObjN); // make sure correct object is loaded
 
   // clear specific object cache
   cdb.clearCache(pathA);
   objA = cdb.get<std::string>(pathA); // will be loaded from scratch and fill the cache
-  LOG(INFO) << "Reading of A after cleaning its cache, expect non-cached object: " << *objA;
+  LOG(info) << "Reading of A after cleaning its cache, expect non-cached object: " << *objA;
   BOOST_CHECK(objA && (*objA) == ccdbObjO); // make sure correct object is loaded
   (*objA) = hack;
   objA = cdb.get<std::string>(pathA); // should get already cached and hacked object
-  LOG(INFO) << "Reading same A, expect cached and modified value: " << *objA;
+  LOG(info) << "Reading same A, expect cached and modified value: " << *objA;
   BOOST_CHECK(objA && (*objA) == hack); // make sure correct object is loaded
 
   objB = cdb.get<std::string>(pathB); // should get already cached and hacked object, since is was not reset
-  LOG(INFO) << "Reading B, expect cached since only A cache was cleaned: " << *objB;
+  LOG(info) << "Reading B, expect cached since only A cache was cleaned: " << *objB;
   BOOST_CHECK(objB && (*objB) == hack); // make sure correct object is loaded
 
   // clear all caches
   cdb.clearCache();
   objB = cdb.get<std::string>(pathB); // will be loaded from scratch and fill the cache
-  LOG(INFO) << "Reading B after cleaning cache completely: " << *objB;
+  LOG(info) << "Reading B after cleaning cache completely: " << *objB;
   BOOST_CHECK(objB && (*objB) == ccdbObjO); // make sure correct object is loaded
 
   // get object in TimeMachine mode in the past
   cdb.setCreatedNotAfter(1);          // set upper object validity
+  cdb.setFatalWhenNull(false);
   objA = cdb.get<std::string>(pathA); // should not be loaded
   BOOST_CHECK(!objA);                 // make sure correct object is not loaded
   cdb.resetCreatedNotAfter();         // resetting upper validity limit
@@ -111,14 +145,15 @@ BOOST_AUTO_TEST_CASE(TestBasicCCDBManager)
   objA = cdb.get<std::string>(pathA);     // should not be loaded
   BOOST_CHECK(!objA);                     // make sure correct object is not loaded
   cdb.resetCreatedNotBefore();            // resetting upper validity limit
+  cdb.setFatalWhenNull(true);
 
   // disable cache at all (will also clean it)
   cdb.setCaching(false);
   objA = cdb.get<std::string>(pathA); // will be loaded from scratch, w/o filling the cache
-  LOG(INFO) << "Reading A after disabling the cache: " << *objA;
+  LOG(info) << "Reading A after disabling the cache: " << *objA;
   BOOST_CHECK(objA && (*objA) == ccdbObjO); // make sure correct object is loaded
   (*objA) = hack;
   objA = cdb.get<std::string>(pathA); // will be loaded from scratch
-  LOG(INFO) << "Reading A again, it should not be cached: " << *objA;
+  LOG(info) << "Reading A again, it should not be cached: " << *objA;
   BOOST_CHECK(objA && (*objA) != hack); // make sure correct object is loaded
 }

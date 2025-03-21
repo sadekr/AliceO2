@@ -24,7 +24,7 @@
 #include <TGeoGlobalMagField.h>
 #include <TMath.h>
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "CommonConstants/MathConstants.h"
 #include "DetectorsBase/Propagator.h"
@@ -261,10 +261,6 @@ void CookedTracker::makeSeeds(std::vector<TrackITSExt>& seeds, Int_t first, Int_
   const Double_t kpWinD = 2 * (TMath::ASin(gmaxDCAxy / layer2.getR()) - TMath::ASin(gmaxDCAxy / layer1.getR()));
   const Double_t kpWin = std::max(kpWinC, kpWinD);
 
-  // Int_t nClusters1 = layer1.getNumberOfClusters();
-  Int_t nClusters2 = layer2.getNumberOfClusters();
-  Int_t nClusters3 = layer3.getNumberOfClusters();
-
   for (Int_t n1 = first; n1 < last; n1++) {
     const Cluster* c1 = layer1.getCluster(n1);
     //
@@ -406,9 +402,8 @@ void CookedTracker::trackSeeds(std::vector<TrackITSExt>& seeds)
     TrackITSExt best(track);
 
     Int_t volID = -1;
-    Int_t ci = -1;
-    TrackITSExt t3(track);
     for (auto& ci3 : selec[3]) {
+      TrackITSExt t3(track);
       if (used[3][ci3]) {
         continue;
       }
@@ -419,8 +414,8 @@ void CookedTracker::trackSeeds(std::vector<TrackITSExt>& seeds)
         best = t3;
       }
 
-      TrackITSExt t2(t3);
       for (auto& ci2 : selec[2]) {
+        TrackITSExt t2(t3);
         if (used[2][ci2]) {
           continue;
         }
@@ -431,8 +426,8 @@ void CookedTracker::trackSeeds(std::vector<TrackITSExt>& seeds)
           best = t2;
         }
 
-        TrackITSExt t1(t2);
         for (auto& ci1 : selec[1]) {
+          TrackITSExt t1(t2);
           if (used[1][ci1]) {
             continue;
           }
@@ -443,8 +438,8 @@ void CookedTracker::trackSeeds(std::vector<TrackITSExt>& seeds)
             best = t1;
           }
 
-          TrackITSExt t0(t1);
           for (auto& ci0 : selec[0]) {
+            TrackITSExt t0(t1);
             if (used[0][ci0]) {
               continue;
             }
@@ -498,7 +493,7 @@ std::vector<TrackITSExt> CookedTracker::trackInThread(Int_t first, Int_t last)
 
 void CookedTracker::process(gsl::span<const o2::itsmft::CompClusterExt> const& clusters,
                             gsl::span<const unsigned char>::iterator& pattIt,
-                            const o2::itsmft::TopologyDictionary& dict,
+                            const o2::itsmft::TopologyDictionary* dict,
                             TrackInserter& inserter,
                             o2::itsmft::ROFRecord& rof)
 {
@@ -506,10 +501,10 @@ void CookedTracker::process(gsl::span<const o2::itsmft::CompClusterExt> const& c
   // This is the main tracking function
   //--------------------------------------------------------------------
   if (mVertices == nullptr || mVertices->empty()) {
-    LOG(INFO) << "Not a single primary vertex provided. Skipping...\n";
+    LOG(info) << "Not a single primary vertex provided. Skipping...\n";
     return;
   }
-  LOG(INFO) << "\n CookedTracker::process(), number of threads: " << mNumOfThreads;
+  LOG(info) << "\n CookedTracker::process(), number of threads: " << mNumOfThreads;
 
   auto start = std::chrono::system_clock::now();
 
@@ -521,19 +516,19 @@ void CookedTracker::process(gsl::span<const o2::itsmft::CompClusterExt> const& c
 
     auto pattID = comp.getPatternID();
     o2::math_utils::Point3D<float> locXYZ;
-    float sigmaY2 = gSigma2, sigmaZ2 = gSigma2, sigmaYZ = 0;
+    float sigmaY2 = gSigma2, sigmaZ2 = gSigma2;
     if (pattID != itsmft::CompCluster::InvalidPatternID) {
       sigmaY2 = gSigma2; //dict.getErr2X(pattID);
       sigmaZ2 = gSigma2; //dict.getErr2Z(pattID);
-      if (!dict.isGroup(pattID)) {
-        locXYZ = dict.getClusterCoordinates(comp);
+      if (!dict->isGroup(pattID)) {
+        locXYZ = dict->getClusterCoordinates(comp);
       } else {
         o2::itsmft::ClusterPattern patt(pattIt);
-        locXYZ = dict.getClusterCoordinates(comp, patt);
+        locXYZ = dict->getClusterCoordinates(comp, patt);
       }
     } else {
       o2::itsmft::ClusterPattern patt(pattIt);
-      locXYZ = dict.getClusterCoordinates(comp, patt, false);
+      locXYZ = dict->getClusterCoordinates(comp, patt, false);
     }
     auto sensorID = comp.getSensorID();
     // Inverse transformation to the local --> tracking
@@ -550,7 +545,7 @@ void CookedTracker::process(gsl::span<const o2::itsmft::CompClusterExt> const& c
 
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> diff = end - start;
-  LOG(INFO) << "Loading clusters: " << nClFrame << " in a single frame : " << diff.count() << " s";
+  LOG(info) << "Loading clusters: " << nClFrame << " in a single frame : " << diff.count() << " s";
 
   start = end;
 
@@ -561,7 +556,7 @@ void CookedTracker::process(gsl::span<const o2::itsmft::CompClusterExt> const& c
   unloadClusters();
   end = std::chrono::system_clock::now();
   diff = end - start;
-  LOG(INFO) << "Processing time/clusters for single frame : " << diff.count() << " / " << nClFrame << " s";
+  LOG(info) << "Processing time/clusters for single frame : " << diff.count() << " / " << nClFrame << " s";
 
   start = end;
 }
@@ -614,8 +609,8 @@ std::tuple<int, int> CookedTracker::processLoadedClusters(TrackInserter& inserte
   }
 
   if (nSeeds) {
-    LOG(INFO) << "Found tracks: " << nTracks;
-    LOG(INFO) << "CookedTracker::processLoadedClusters(), good_tracks:/seeds: " << ngood << '/' << nSeeds << "-> "
+    LOG(info) << "Found tracks: " << nTracks;
+    LOG(info) << "CookedTracker::processLoadedClusters(), good_tracks:/seeds: " << ngood << '/' << nSeeds << "-> "
               << Float_t(ngood) / nSeeds << '\n';
   }
   // returning index of the first track and the number of add tracks
@@ -688,7 +683,7 @@ int CookedTracker::loadClusters()
       auto f = std::async(std::launch::async, &CookedTracker::Layer::init, sLayers + (l + t));
       fut.push_back(std::move(f));
     }
-    for (Int_t t = 0; t < fut.size(); t++) {
+    for (size_t t = 0; t < fut.size(); t++) {
       fut[t].wait();
     }
   }
@@ -744,7 +739,7 @@ void CookedTracker::Layer::init()
     Float_t phi = xyz.Phi();
     o2::math_utils::bringTo02Pi(phi);
     mPhi.push_back(phi);
-    Int_t s = phi * kNSectors / k2PI;
+    Int_t s = phi * (int)kNSectors / k2PI;
     mSectors[s < kNSectors ? s : kNSectors - 1].emplace_back(i, c->getZ());
   }
 
@@ -797,8 +792,8 @@ void CookedTracker::Layer::selectClusters(std::vector<Int_t>& selec, Float_t phi
 
   Float_t dphi = dy / mR;
 
-  int smin = (phi - dphi) / k2PI * kNSectors;
-  int ds = (phi + dphi) / k2PI * kNSectors - smin + 1;
+  int smin = (phi - dphi) / k2PI * (int)kNSectors;
+  int ds = (phi + dphi) / k2PI * (int)kNSectors - smin + 1;
 
   smin = (smin + kNSectors) % kNSectors;
 

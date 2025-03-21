@@ -12,12 +12,12 @@
 #define O2_FRAMEWORK_DEVICESTATE_H_
 
 #include "Framework/ChannelInfo.h"
+#include "Framework/DeviceStateEnums.h"
 #include "Framework/ComputingQuotaOffer.h"
 
 #include <vector>
 #include <string>
-#include <map>
-#include <utility>
+#include <atomic>
 
 typedef struct uv_loop_s uv_loop_t;
 typedef struct uv_timer_s uv_timer_t;
@@ -28,40 +28,58 @@ typedef struct uv_async_s uv_async_t;
 namespace o2::framework
 {
 
-/// enumeration representing the current state of a given
-/// device.
-enum struct StreamingState {
-  /// Data is being processed
-  Streaming = 0,
-  /// End of streaming requested, but not notified
-  EndOfStreaming = 1,
-  /// End of streaming notified
-  Idle = 2,
-};
+struct DataProcessorContext;
 
 /// Running state information of a given device
 struct DeviceState {
   /// Motivation for the loop being triggered.
   enum LoopReason : int {
-    NO_REASON = 0,          // No tracked reason to wake up
-    METRICS_MUST_FLUSH = 1, // Metrics available to flush
-    SIGNAL_ARRIVED = 2,     // Signal has arrived
-    DATA_SOCKET_POLLED = 4, // Data has arrived
-    DATA_INCOMING = 8,      // Data was read
-    DATA_OUTGOING = 16,     // Data was written
-    WS_COMMUNICATION = 32,  // Communication over WS
-    TIMER_EXPIRED = 64,     // Timer expired
-    WS_CONNECTED = 128,     // Connection to driver established
-    WS_CLOSING = 256,       // Events related to WS shutting down
-    WS_READING = 512,       // Events related to WS shutting down
-    WS_WRITING = 1024,      // Events related to WS shutting down
-    ASYNC_NOTIFICATION = 2048,
-    OOB_ACTIVITY = 4096 // Out of band activity
+    NO_REASON = 0,                // No tracked reason to wake up
+    METRICS_MUST_FLUSH = 1,       // Metrics available to flush
+    SIGNAL_ARRIVED = 1 << 1,      // Signal has arrived
+    DATA_SOCKET_POLLED = 1 << 2,  // Data has arrived
+    DATA_INCOMING = 1 << 3,       // Data was read
+    DATA_OUTGOING = 1 << 4,       // Data was written
+    WS_COMMUNICATION = 1 << 5,    // Communication over WS
+    TIMER_EXPIRED = 1 << 6,       // Timer expired
+    WS_CONNECTED = 1 << 7,        // Connection to driver established
+    WS_CLOSING = 1 << 8,          // Events related to WS shutting down
+    WS_READING = 1 << 9,          // Events related to WS shutting down
+    WS_WRITING = 1 << 10,         // Events related to WS shutting down
+    ASYNC_NOTIFICATION = 1 << 11, // Some other thread asked the main one to wake up
+    OOB_ACTIVITY = 1 << 12,       // Out of band activity
+    UNKNOWN = 1 << 13,            // Unknown reason why we are here.
+    FIRST_LOOP = 1 << 14,         // First loop to be executed
+    NEW_STATE_PENDING = 1 << 15,  // Someone invoked NewStatePending
+    PREVIOUSLY_ACTIVE = 1 << 16,  // The previous loop was active
+    TRACE_CALLBACKS = 1 << 17,    // Trace callbacks
+    TRACE_USERCODE = 1 << 18,     // Trace only usercode
+    DATA_CONNECTED = 1 << 19,     // Data channel connected
+  };
+
+  enum LogStreams : int {
+    NO_LOG = 0,
+    DEVICE_LOG = 1 << 0,                 // Log for Data Processing Device activities.
+    COMPLETION_LOG = 1 << 1,             // Log for the completion policy of the device.
+    MONITORING_SERVICE_LOG = 1 << 2,     // Log for the monitoring service flushing.
+    DATA_PROCESSOR_CONTEXT_LOG = 1 << 3, // Log for the DataProcessorContext callbacks
+    STREAM_CONTEXT_LOG = 1 << 4,         // Log for the StreamContext callbacks
+  };
+
+  enum ProcessingType : int {
+    Any,             // Any kind of processing is allowed
+    CalibrationOnly, // Only calibrations are allowed to be processed / produced
   };
 
   std::vector<InputChannelInfo> inputChannelInfos;
   StreamingState streaming = StreamingState::Streaming;
+  // What kind of processing is allowed. By default we allow any.
+  // If we are past the data processing timeout, this will be
+  // CalibrationOnly. We need to reset it at every start.
+  ProcessingType allowedProcessing = ProcessingType::Any;
+
   bool quitRequested = false;
+  std::atomic<int64_t> cleanupCount = -1;
 
   /// ComputingQuotaOffers which have not yet been
   /// evaluated by the ComputingQuotaEvaluator
@@ -74,6 +92,8 @@ struct DeviceState {
   uv_loop_t* loop = nullptr;
   // The list of active timers which notify this device.
   std::vector<uv_timer_t*> activeTimers;
+  // The list of timers fired in this loop
+  std::vector<uv_timer_t*> firedTimers;
   // The list of pollers for active input channels
   std::vector<uv_poll_t*> activeInputPollers;
   // The list of pollers for active output channels
@@ -85,8 +105,25 @@ struct DeviceState {
 
   uv_async_t* awakeMainThread = nullptr;
 
+  // A list of states which we should go to
+  std::vector<std::string> nextFairMQState;
+
+  /// Bitmask of LoopReason which caused this iterations.
   int loopReason = 0;
+  /// Bitmask of LoopReason to trace
+  int tracingFlags = 0;
+  /// Bitmask of log streams which are available
+  int logStreams = 0;
+  /// Stack of the severity, so that we can display only
+  /// the bits we are interested in.
+  std::vector<int> severityStack;
+  TransitionHandlingState transitionHandling = TransitionHandlingState::NoTransition;
+
+  // The DataProcessorContext which was most recently active.
+  // We use this to determine if we should trigger the loop without
+  // waiting for some events.
+  std::atomic<DataProcessorContext*> lastActiveDataProcessor = nullptr;
 };
 
 } // namespace o2::framework
-#endif
+#endif // O2_FRAMEWORK_DEVICESTATE_H_

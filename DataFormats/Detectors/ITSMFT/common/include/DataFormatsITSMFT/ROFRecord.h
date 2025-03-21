@@ -31,6 +31,8 @@ class ROFRecord
 {
 
  public:
+  enum { VtxStdMode = 0,
+         VtxUPCMode = 1 };
   using EvIdx = o2::dataformats::RangeReference<int, int>;
   using BCData = o2::InteractionRecord;
   using ROFtype = unsigned int;
@@ -45,6 +47,14 @@ class ROFRecord
   void setFirstEntry(int idx) { mROFEntry.setFirstEntry(idx); }
   void setNEntries(int n) { mROFEntry.setEntries(n); }
 
+  uint32_t getFlags() const { return mBits; }
+  void setFlags(uint32_t flags) { mBits = flags; }
+  void setFlag(uint8_t flagIndex) { mBits |= (1 << flagIndex); }
+  void resetFlag(uint8_t flagIndex) { mBits &= ~(1 << flagIndex); }
+  bool getFlag(uint8_t flagIndex) const { return mBits & (1 << flagIndex); }
+  void clearAllFlags() { mBits = 0; }
+  void setAllFlags() { mBits = ~0; }
+
   const BCData& getBCData() const { return mBCData; }
   BCData& getBCData() { return mBCData; }
   EvIdx getEntry() const { return mROFEntry; }
@@ -58,7 +68,6 @@ class ROFRecord
     mROFEntry.clear();
     mBCData.clear();
   }
-  void print() const;
 
   template <typename T>
   gsl::span<const T> getROFData(const gsl::span<const T> tfdata) const
@@ -84,12 +93,16 @@ class ROFRecord
     return i < getNEntries() ? &tfdata[getFirstEntry() + i] : nullptr;
   }
 
+  std::string asString() const;
+  void print() const;
+  friend std::ostream& operator<<(std::ostream& output, const ROFRecord& rec);
+
  private:
   o2::InteractionRecord mBCData; // BC data for given trigger
   EvIdx mROFEntry;               //< reference on the 1st object of the ROF in data
   ROFtype mROFrame = 0;          //< frame ID
-
-  ClassDefNV(ROFRecord, 2);
+  uint32_t mBits = 0;
+  ClassDefNV(ROFRecord, 3);
 };
 
 /// this is a simple reference connecting (composed) MC event ID (from the EventRecord of the RunContext)
@@ -105,7 +118,10 @@ struct MC2ROFRecord {
   MC2ROFRecord() = default;
   MC2ROFRecord(int evID, int rofRecID, ROFtype mnrof, ROFtype mxrof) : eventRecordID(evID), rofRecordID(rofRecID), minROF(mnrof), maxROF(mxrof) {}
   int getNROFs() const { return (rofRecordID < 0 || minROF > maxROF) ? 0 : (maxROF - minROF); }
+  std::string asString() const;
   void print() const;
+  friend std::ostream& operator<<(std::ostream& output, const MC2ROFRecord& rec);
+
   ClassDefNV(MC2ROFRecord, 1);
 };
 } // namespace itsmft

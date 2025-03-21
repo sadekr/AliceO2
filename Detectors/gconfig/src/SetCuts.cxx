@@ -10,9 +10,9 @@
 // or submit itself to any jurisdiction.
 
 #include "SetCuts.h"
-#include "SimSetup/GlobalProcessCutSimParam.h"
+#include "SimConfig/GlobalProcessCutSimParam.h"
 #include "DetectorsBase/MaterialManager.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 using namespace o2::base;
 
@@ -21,7 +21,7 @@ namespace o2
 
 void SetCuts()
 {
-  LOG(INFO) << "Setup global cuts and processes";
+  LOG(info) << "Setup global cuts and processes";
 
   // ------>>>> IMPORTANT!!!!
   // For a correct comparison between GEANE and MC (pull distributions)
@@ -37,9 +37,12 @@ void SetCuts()
   // \note All following settings could also be set in Cave since it is always loaded.
   // Use MaterialManager to set processes and cuts
   auto& mgr = o2::base::MaterialManager::Instance();
+  // This loads default cuts and processes if they are defined in the MaterialManagerParam.inputFile
+  // The cuts and processes below will only be set if they were not defined in the JSON
+  mgr.loadCutsAndProcessesFromJSON();
   auto& params = o2::GlobalProcessCutSimParam::Instance();
 
-  LOG(INFO) << "Set default settings for processes and cuts.";
+  LOG(info) << "Set default settings for processes and cuts.";
   mgr.DefaultProcesses({{EProc::kPAIR, params.PAIR},   /** pair production */
                         {EProc::kCOMP, params.COMP},   /** Compton scattering */
                         {EProc::kPHOT, params.PHOT},   /** photo electric effect */
@@ -68,8 +71,8 @@ void SetCuts()
 
   const char* settingProc = mgr.specialProcessesEnabled() ? "enabled" : "disabled";
   const char* settingCut = mgr.specialCutsEnabled() ? "enabled" : "disabled";
-  LOG(INFO) << "Special process settings are " << settingProc << ".";
-  LOG(INFO) << "Special cut settings are " << settingCut << ".";
+  LOG(info) << "Special process settings are " << settingProc << ".";
+  LOG(info) << "Special cut settings are " << settingCut << ".";
 }
 
 } // namespace o2

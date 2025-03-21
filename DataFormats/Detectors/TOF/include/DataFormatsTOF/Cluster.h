@@ -19,7 +19,7 @@
 #include "GPUCommonMath.h"
 #include "ReconstructionDataFormats/BaseCluster.h"
 #include "CommonConstants/LHCConstants.h"
-#ifndef GPUCA_GPUCODE
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
 #include <boost/serialization/base_object.hpp> // for base_object
 #include <cstdlib>
 #include <vector>
@@ -53,7 +53,7 @@ class Cluster : public o2::BaseCluster<float>
 
   Cluster() = default;
 
-  Cluster(std::int16_t sensid, float x, float y, float z, float sy2, float sz2, float syz, double timeRaw, double time, float tot, int L0L1latency, int deltaBC);
+  Cluster(std::int16_t sensid, float x, float y, float z, float sy2, float sz2, float syz, double timeRaw, double time, float tot, int L0L1latency, int deltaBC, float geanttime = 0.0, double t0 = 0.0);
 
   ~Cluster() = default;
 
@@ -134,10 +134,15 @@ class Cluster : public o2::BaseCluster<float>
   int getDigitInfoCH(int idig) const { return mDigitInfoCh[idig]; }
   double getDigitInfoT(int idig) const { return mDigitInfoT[idig]; }
   float getDigitInfoTOT(int idig) const { return mDigitInfoTOT[idig]; }
+  float getTgeant() const { return mTgeant; }
+  void setTgeant(float val) { mTgeant = val; }
+  double getT0true() const { return mT0true; }
+  void setT0true(double val) { mT0true = val; }
 
  private:
+#if !defined(GPUCA_GPUCODE) && !defined(GPUCA_STANDALONE)
   friend class boost::serialization::access;
-
+#endif
   double mTimeRaw;  // raw TOF time // CZ: in AliRoot it is a double
   double mTime;     // calibrated TOF time // CZ: in AliRoot it is a double
   float mTot;       // Time-Over-threshold // CZ: in AliRoot it is a double
@@ -152,8 +157,10 @@ class Cluster : public o2::BaseCluster<float>
   int mDigitInfoCh[6] = {0, 0, 0, 0, 0, 0};
   double mDigitInfoT[6] = {0., 0., 0., 0., 0., 0.};
   float mDigitInfoTOT[6] = {0., 0., 0., 0., 0., 0.};
+  float mTgeant = 0.0;
+  double mT0true = 0.0;
 
-  ClassDefNV(Cluster, 4);
+  ClassDefNV(Cluster, 5);
 };
 
 #ifndef GPUCA_GPUCODE

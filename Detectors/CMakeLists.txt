@@ -31,21 +31,33 @@ add_subdirectory(MUON)
 
 add_subdirectory(TPC)
 
+add_subdirectory(FOCAL)
+
 add_subdirectory(GlobalTracking)
 add_subdirectory(GlobalTrackingWorkflow)
 add_subdirectory(Vertexing)
+add_subdirectory(GLOQC)
+
 if(BUILD_ANALYSIS)
-add_subdirectory(AOD)
+  add_subdirectory(AOD)
 endif()
+
+add_subdirectory(Filtering)
 
 add_subdirectory(Calibration)
 add_subdirectory(DCS)
 
 add_subdirectory(Align)
+add_subdirectory(ForwardAlign)
+
 
 if(BUILD_SIMULATION)
   add_subdirectory(gconfig)
   o2_data_file(COPY gconfig DESTINATION Detectors)
+endif()
+
+if(BUILD_SIMULATION)
+  add_subdirectory(O2TrivialMC)
 endif()
 
 o2_data_file(COPY Geometry DESTINATION Detectors)

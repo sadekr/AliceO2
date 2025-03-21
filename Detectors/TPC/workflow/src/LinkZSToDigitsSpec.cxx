@@ -109,8 +109,8 @@ o2::framework::DataProcessorSpec getLinkZSToDigitsSpec(int channel, const std::s
         o2::tpc::TPCSectorHeader header{sector};
         header.activeSectors = processAttributes->activeSectors;
         // digit for now are transported per sector, not per lane
-        // pc.outputs().snapshot(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe, header},
-        pc.outputs().snapshot(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(sector), Lifetime::Timeframe, header},
+        // pc.outputs().snapshot(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(channel), header},
+        pc.outputs().snapshot(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(sector), header},
                               const_cast<std::vector<o2::tpc::Digit>&>(digits));
       };
 
@@ -119,6 +119,7 @@ o2::framework::DataProcessorSpec getLinkZSToDigitsSpec(int channel, const std::s
       // loop over all inputs
       for (auto& input : pc.inputs()) {
         const auto* dh = DataRefUtils::getHeader<o2::header::DataHeader*>(input);
+        auto payloadSize = DataRefUtils::getPayloadSize(input);
 
         // select only RAW data
         if (dh->dataDescription != o2::header::gDataDescriptionRawData) {
@@ -143,14 +144,14 @@ o2::framework::DataProcessorSpec getLinkZSToDigitsSpec(int channel, const std::s
         processAttributes->activeSectors |= (0x1 << sector);
 
         LOGP(debug, "Specifier: {}/{}/{}", dh->dataOrigin, dh->dataDescription, dh->subSpecification);
-        LOGP(debug, "Payload size: {}", dh->payloadSize);
+        LOGP(debug, "Payload size: {}", payloadSize);
         LOGP(debug, "CRU: {}; linkID: {}; dataWrapperID: {}; globalLinkID: {}", cruID, linkID, dataWrapperID, globalLinkID);
 
         try {
-          o2::framework::RawParser parser(input.payload, dh->payloadSize);
+          o2::framework::RawParser parser(input.payload, payloadSize);
 
           for (auto it = parser.begin(), end = parser.end(); it != end; ++it) {
-            auto* rdhPtr = it.get_if<o2::header::RAWDataHeader>();
+            auto* rdhPtr = reinterpret_cast<const o2::header::RDHAny*>(it.raw());
             if (!rdhPtr) {
               break;
             }
@@ -181,7 +182,7 @@ o2::framework::DataProcessorSpec getLinkZSToDigitsSpec(int channel, const std::s
 
             if ((lastOrbit > 0) && (hbOrbit > (lastOrbit + 3))) {
               ++processAttributes->processedEvents;
-              LOG(INFO) << fmt::format("Number of processed events: {} ({})", processAttributes->processedEvents, processAttributes->maxEvents);
+              LOG(info) << fmt::format("Number of processed events: {} ({})", processAttributes->processedEvents, processAttributes->maxEvents);
               processAttributes->sortDigits();
 
               // publish digits of all configured sectors
@@ -279,9 +280,9 @@ o2::framework::DataProcessorSpec getLinkZSToDigitsSpec(int channel, const std::s
           }
 
         } catch (const std::runtime_error& e) {
-          LOG(ERROR) << "can not create raw parser form input data";
-          o2::header::hexDump("payload", input.payload, dh->payloadSize, 64);
-          LOG(ERROR) << e.what();
+          LOG(alarm) << "can not create raw parser form input data";
+          o2::header::hexDump("payload", input.payload, payloadSize, 64);
+          LOG(alarm) << e.what();
         }
       }
     };

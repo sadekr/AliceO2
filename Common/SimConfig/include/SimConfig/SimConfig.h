@@ -13,44 +13,81 @@
 #define O2_SIM_CONFIGURATION
 
 #include <Rtypes.h>
+#ifndef __CLING__
 #include <boost/program_options.hpp>
+#else
+namespace boost::program_options
+{
+class variables_map;
+class options_description;
+} // namespace boost::program_options
+#endif
 
 namespace o2
 {
 namespace conf
 {
 
+enum class SimFieldMode {
+  kDefault = 0,
+  kUniform = 1,
+  kCCDB = 2
+};
+
+enum class VertexMode {
+  kNoVertex = 0,     // no vertexing should be applied in the generator
+  kDiamondParam = 1, // Diamond param will influence vertexing
+  kCCDB = 2,         // vertex should be taken from CCDB (Calib/MeanVertex object)
+  kCollCxt = 3       // vertex should be taken from collision context
+};
+
+enum class TimeStampMode {
+  kNow = 0,
+  kManual = 1,
+  kRun = 2
+};
+
 // configuration struct (which can be passed around)
 struct SimConfigData {
-  std::vector<std::string> mActiveDetectors; // list of active detectors
-  std::string mMCEngine;                     // chosen VMC engine
-  std::string mGenerator;                    // chosen VMC generator
-  std::string mTrigger;                      // chosen VMC generator trigger
-  unsigned int mNEvents;                     // number of events to be simulated
-  std::string mExtKinFileName;               // file name of external kinematics file (needed for ext kinematics generator)
-  std::string mEmbedIntoFileName;            // filename containing the reference events to be used for the embedding
-  unsigned int mStartEvent;                  // index of first event to be taken
-  float mBMax;                               // maximum for impact parameter sampling
-  bool mIsMT;                                // chosen MT mode (Geant4 only)
-  std::string mOutputPrefix;                 // prefix to be used for output files
-  std::string mLogSeverity;                  // severity for FairLogger
-  std::string mLogVerbosity;                 // loglevel for FairLogger
-  std::string mKeyValueTokens;               // a string holding arbitrary sequence of key-value tokens
-                                             // Foo.parameter1=x,Bar.parameter2=y,Baz.paramter3=hello
-                                             // (can be used to **loosely** change any configuration parameter from command-line)
-  std::string mConfigFile;                   // path to a JSON or INI config file (file extension is required to determine type).
-                                             // values within the config file will override values set in code by the param classes
-                                             // but will themselves be overridden by any values given in mKeyValueTokens.
-  int mPrimaryChunkSize;                     // defining max granularity for input primaries of a sim job
-  int mInternalChunkSize;                    //
-  int mStartSeed;                            // base for random number seeds
-  int mSimWorkers = 1;                       // number of parallel sim workers (when it applies)
-  bool mFilterNoHitEvents = false;           // whether to filter out events not leaving any response
-  std::string mCCDBUrl;                      // the URL where to find CCDB
-  long mTimestamp;                           // timestamp to anchor transport simulation to
-  int mField;                                // L3 field setting in kGauss: +-2,+-5 and 0
-  bool mUniformField = false;                // uniform magnetic field
-  bool mAsService = false;                   // if simulation should be run as service/deamon (does not exit after run)
+  std::vector<std::string> mActiveModules;            // list of active modules
+  std::vector<std::string> mReadoutDetectors;         // list of readout detectors
+  std::string mMCEngine;                              // chosen VMC engine
+  std::string mGenerator;                             // chosen VMC generator
+  std::string mTrigger;                               // chosen VMC generator trigger
+  unsigned int mNEvents;                              // number of events to be simulated
+  std::string mExtKinFileName;                        // file name of external kinematics file (needed for ext kinematics generator)
+  std::string mEmbedIntoFileName;                     // filename containing the reference events to be used for the embedding
+  unsigned int mStartEvent;                           // index of first event to be taken
+  float mBMax;                                        // maximum for impact parameter sampling
+  bool mIsMT;                                         // chosen MT mode (Geant4 only)
+  std::string mOutputPrefix;                          // prefix to be used for output files
+  std::string mLogSeverity;                           // severity for FairLogger
+  std::string mLogVerbosity;                          // loglevel for FairLogger
+  std::string mKeyValueTokens;                        // a string holding arbitrary sequence of key-value tokens
+                                                      // Foo.parameter1=x,Bar.parameter2=y,Baz.paramter3=hello
+                                                      // (can be used to **loosely** change any configuration parameter from command-line)
+  std::string mConfigFile;                            // path to a JSON or INI config file (file extension is required to determine type).
+                                                      // values within the config file will override values set in code by the param classes
+                                                      // but will themselves be overridden by any values given in mKeyValueTokens.
+  unsigned int mPrimaryChunkSize;                     // defining max granularity for input primaries of a sim job
+  int mInternalChunkSize;                             //
+  ULong_t mStartSeed;                                 // base for random number seeds
+  int mSimWorkers = 1;                                // number of parallel sim workers (when it applies)
+  bool mFilterNoHitEvents = false;                    // whether to filter out events not leaving any response
+  std::string mCCDBUrl;                               // the URL where to find CCDB
+  uint64_t mTimestamp;                                // timestamp in ms to anchor transport simulation to
+  TimeStampMode mTimestampMode = TimeStampMode::kNow; // telling of timestamp was given as option or defaulted to now
+  int mRunNumber = -1;                                // ALICE run number (if set != -1); the timestamp should be compatible
+  int mField;                                         // L3 field setting in kGauss: +-2,+-5 and 0
+  SimFieldMode mFieldMode = SimFieldMode::kDefault;   // uniform magnetic field
+  bool mAsService = false;                            // if simulation should be run as service/deamon (does not exit after run)
+  bool mNoGeant = false;                              // if Geant transport should be turned off (when one is only interested in the generated events)
+  bool mIsUpgrade = false;                            // true if the simulation is for Run 5
+  std::string mFromCollisionContext = "";             // string denoting a collision context file; If given, this file will be used to determine number of events
+                                                      //
+  bool mForwardKine = false;                          // true if tracks and event headers are to be published on a FairMQ channel (for reading by other consumers)
+  bool mWriteToDisc = true;                           // whether we write simulation products (kine, hits) to disc
+  VertexMode mVertexMode = VertexMode::kDiamondParam; // by default we should use die InteractionDiamond parameter
 
   ClassDefNV(SimConfigData, 4);
 };
@@ -77,7 +114,13 @@ class SimConfig
     return conf;
   }
 
-  static void initOptions(boost::program_options::options_description&);
+  // makes a new instance that can be used as a local object
+  static SimConfig make()
+  {
+    return SimConfig();
+  }
+
+  static void initOptions(boost::program_options::options_description&, bool isUpgrade = false);
 
   // initializes the configuration from command line arguments
   // returns true of correctly initialized and not --help called
@@ -93,7 +136,20 @@ class SimConfig
   // get MC engine
   std::string getMCEngine() const { return mConfigData.mMCEngine; }
   // get selected active detectors
-  std::vector<std::string> const& getActiveDetectors() const { return mConfigData.mActiveDetectors; }
+  std::vector<std::string> const& getActiveModules() const { return mConfigData.mActiveModules; }
+  std::vector<std::string> const& getReadoutDetectors() const { return mConfigData.mReadoutDetectors; }
+
+  // static helper functions to determine list of active / readout modules
+  // can also be used from outside
+  static void determineActiveModules(std::vector<std::string> const& input, std::vector<std::string> const& skipped, std::vector<std::string>& active, bool isUpgrade = false);
+  static bool determineActiveModulesList(const std::string& version, std::vector<std::string> const& input, std::vector<std::string> const& skipped, std::vector<std::string>& active);
+  static void determineReadoutDetectors(std::vector<std::string> const& active, std::vector<std::string> const& enabledRO, std::vector<std::string> const& skippedRO, std::vector<std::string>& finalRO);
+
+  // helper to parse field option
+  static bool parseFieldString(std::string const& fieldstring, int& fieldvalue, o2::conf::SimFieldMode& mode);
+  // helper to parse vertex option; returns true if parsing ok, false if failure
+  static bool parseVertexModeString(std::string const& vertexstring, o2::conf::VertexMode& mode);
+
   // get selected generator (to be used to select a genconfig)
   std::string getGenerator() const { return mConfigData.mGenerator; }
   std::string getTrigger() const { return mConfigData.mTrigger; }
@@ -111,13 +167,30 @@ class SimConfig
   std::string getConfigFile() const { return mConfigData.mConfigFile; }
   int getPrimChunkSize() const { return mConfigData.mPrimaryChunkSize; }
   int getInternalChunkSize() const { return mConfigData.mInternalChunkSize; }
-  int getStartSeed() const { return mConfigData.mStartSeed; }
+  ULong_t getStartSeed() const { return mConfigData.mStartSeed; }
   int getNSimWorkers() const { return mConfigData.mSimWorkers; }
   bool isFilterOutNoHitEvents() const { return mConfigData.mFilterNoHitEvents; }
   bool asService() const { return mConfigData.mAsService; }
+  uint64_t getTimestamp() const { return mConfigData.mTimestamp; }
+  int getRunNumber() const { return mConfigData.mRunNumber; }
+  bool isNoGeant() const { return mConfigData.mNoGeant; }
+  void setRun5(bool value = true) { mConfigData.mIsUpgrade = value; }
+  bool forwardKine() const { return mConfigData.mForwardKine; }
+  bool writeToDisc() const { return mConfigData.mWriteToDisc; }
+  VertexMode getVertexMode() const { return mConfigData.mVertexMode; }
+
+  // returns the pair of collision context filename as well as event prefix encoded
+  // in the mFromCollisionContext string. Returns empty string if information is not available or set.
+  std::pair<std::string, std::string> getCollContextFilenameAndEventPrefix() const;
 
  private:
   SimConfigData mConfigData; //!
+
+  // Filter out skipped elements in the list
+  static bool filterSkippedElements(std::vector<std::string>& elements, std::vector<std::string> const& skipped);
+
+  // adjust/overwrite some option settings when collision context is used
+  void adjustFromCollContext(std::string const& collcontextfile, std::string const& prefix);
 
   ClassDefNV(SimConfig, 1);
 };
@@ -143,9 +216,10 @@ struct SimReconfigData {
   std::string configFile; // path to a JSON or INI config file (file extension is required to determine type).
   // values within the config file will override values set in code by the param classes
   // but will themselves be overridden by any values given in mKeyValueTokens.
-  unsigned int primaryChunkSize; // defining max granularity for input primaries of a sim job
-  int startSeed;                 // base for random number seeds
-  bool stop;                     // to shut down the service
+  unsigned int primaryChunkSize;          // defining max granularity for input primaries of a sim job
+  ULong_t startSeed;                      // base for random number seeds
+  bool stop;                              // to shut down the service
+  std::string mFromCollisionContext = ""; // string denoting a collision context file; If given, this file will be used to determine number of events
 
   ClassDefNV(SimReconfigData, 1);
 };

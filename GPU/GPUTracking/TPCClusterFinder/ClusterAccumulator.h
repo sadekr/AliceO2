@@ -17,8 +17,9 @@
 
 #include "clusterFinderDefs.h"
 #include "PackedCharge.h"
+#include "Array2D.h"
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 
 namespace tpc
@@ -30,6 +31,8 @@ namespace gpu
 {
 
 struct ChargePos;
+struct GPUParam;
+class GPUTPCGeometry;
 
 class ClusterAccumulator
 {
@@ -38,8 +41,19 @@ class ClusterAccumulator
   GPUd() tpccf::Charge updateInner(PackedCharge, tpccf::Delta2);
   GPUd() tpccf::Charge updateOuter(PackedCharge, tpccf::Delta2);
 
-  GPUd() void finalize(const ChargePos&, tpccf::Charge, tpccf::TPCTime);
-  GPUd() void toNative(const ChargePos&, tpccf::Charge, int, tpc::ClusterNative&) const;
+  GPUd() void setFull(float qtot, float padMean, float padSigma, float timeMean, float timeSigma, uint8_t splitInPad, uint8_t splitInTime)
+  {
+    mQtot = qtot;
+    mPadMean = padMean;
+    mPadSigma = padSigma;
+    mTimeMean = timeMean;
+    mTimeSigma = timeSigma;
+    mSplitInPad = splitInPad;
+    mSplitInTime = splitInTime;
+  }
+
+  GPUd() void finalize(const ChargePos&, const tpccf::Charge, tpccf::TPCTime);
+  GPUd() bool toNative(const ChargePos&, const tpccf::Charge, tpc::ClusterNative&, const GPUParam&, const Array2D<PackedCharge>&);
 
  private:
   float mQtot = 0;
@@ -47,13 +61,13 @@ class ClusterAccumulator
   float mPadSigma = 0;
   float mTimeMean = 0;
   float mTimeSigma = 0;
-  uchar mSplitInTime = 0;
-  uchar mSplitInPad = 0;
+  uint8_t mSplitInTime = 0;
+  uint8_t mSplitInPad = 0;
 
   GPUd() void update(tpccf::Charge, tpccf::Delta2);
 };
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

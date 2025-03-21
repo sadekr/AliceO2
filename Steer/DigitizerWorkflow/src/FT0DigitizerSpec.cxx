@@ -18,6 +18,7 @@
 #include "Headers/DataHeader.h"
 #include "Steer/HitProcessingManager.h" // for DigitizationContext
 #include "FT0Simulation/Digitizer.h"
+#include "DataFormatsFIT/DeadChannelMap.h"
 #include "DataFormatsFT0/ChannelData.h"
 #include "DataFormatsFT0/HitType.h"
 #include "DataFormatsFT0/Digit.h"
@@ -27,6 +28,12 @@
 #include "Framework/Task.h"
 #include "DetectorsBase/BaseDPLDigitizer.h"
 #include "DataFormatsParameters/GRPObject.h"
+#include "Framework/ControlService.h"
+#include "Framework/ConfigParamRegistry.h"
+#include "Framework/CCDBParamSpec.h"
+#include "CCDB/BasicCCDBManager.h"
+#include "DataFormatsFT0/FT0ChannelTimeCalibrationObject.h"
+#include "DetectorsRaw/HBFUtils.h"
 #include <TChain.h>
 #include <TStopwatch.h>
 
@@ -44,14 +51,28 @@ class FT0DPLDigitizerTask : public o2::base::BaseDPLDigitizer
   using GRP = o2::parameters::GRPObject;
 
  public:
-  FT0DPLDigitizerTask() : o2::base::BaseDPLDigitizer(), mDigitizer() {}
+  FT0DPLDigitizerTask(bool useCCDB) : o2::base::BaseDPLDigitizer(), mDigitizer(), mUseCCDB{useCCDB} {}
   ~FT0DPLDigitizerTask() override = default;
 
   void initDigitizerTask(framework::InitContext& ic) override
   {
     mDigitizer.init();
-    mROMode = mDigitizer.isContinuous() ? o2::parameters::GRPObject::CONTINUOUS : o2::parameters::GRPObject::PRESENT;
+    mROMode = o2::parameters::GRPObject::ROMode(o2::parameters::GRPObject::TRIGGERING | (mDigitizer.isContinuous() ? o2::parameters::GRPObject::CONTINUOUS : o2::parameters::GRPObject::PRESENT));
     mDisableQED = ic.options().get<bool>("disable-qed");
+    mUseDeadChannelMap = !ic.options().get<bool>("disable-dead-channel-map");
+    mUpdateDeadChannelMap = mUseDeadChannelMap;
+  }
+
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+  {
+    if (matcher == ConcreteDataMatcher("FT0", "TimeOffset", 0)) {
+      mUpdateCCDB = false;
+    }
+
+    // Initialize the dead channel map only once
+    if (matcher == ConcreteDataMatcher("FT0", "DeadChannelMap", 0)) {
+      mUpdateDeadChannelMap = false;
+    }
   }
 
   void run(framework::ProcessingContext& pc)
@@ -66,6 +87,17 @@ class FT0DPLDigitizerTask : public o2::base::BaseDPLDigitizer
     context->initSimChains(o2::detectors::DetID::FT0, mSimChains);
     const bool withQED = context->isQEDProvided() && !mDisableQED;
     auto& timesview = context->getEventRecords(withQED);
+    // set CCDB for miscalibration
+    if (mUseCCDB) {
+      auto caliboffsets = pc.inputs().get<o2::ft0::FT0ChannelTimeCalibrationObject*>("ft0offsets");
+      mDigitizer.SetChannelOffset(caliboffsets.get());
+    }
+
+    // Initialize the dead channel map
+    if (mUpdateDeadChannelMap && mUseDeadChannelMap) {
+      auto deadChannelMap = pc.inputs().get<o2::fit::DeadChannelMap*>("ft0deadchannelmap");
+      mDigitizer.setDeadChannelMap(deadChannelMap.get());
+    }
 
     // if there is nothing to do ... return
     if (timesview.size() == 0) {
@@ -75,26 +107,38 @@ class FT0DPLDigitizerTask : public o2::base::BaseDPLDigitizer
     TStopwatch timer;
     timer.Start();
 
-    LOG(INFO) << "CALLING FT0 DIGITIZATION";
+    LOG(info) << "CALLING FT0 DIGITIZATION";
 
     static std::vector<o2::ft0::HitType> hits;
     // o2::dataformats::MCTruthContainer<o2::ft0::MCLabel> labelAccum;
     o2::dataformats::MCTruthContainer<o2::ft0::MCLabel> labels;
+
+    // the interaction record marking the timeframe start
+    auto firstTF = InteractionTimeRecord(o2::raw::HBFUtils::Instance().getFirstSampledTFIR(), 0);
 
     // mDigitizer.setMCLabels(&labels);
     auto& eventParts = context->getEventParts(withQED);
     // loop over all composite collisions given from context
     // (aka loop over all the interaction records)
     for (int collID = 0; collID < timesview.size(); ++collID) {
+      // Note: Very crude filter to neglect collisions coming before
+      // the first interaction record of the timeframe. Remove this, once these collisions can be handled
+      // within the digitization routine. Collisions before this timeframe might impact digits of this timeframe.
+      // See https://its.cern.ch/jira/browse/O2-5395.
+      if (timesview[collID] < firstTF) {
+        LOG(info) << "Too early: Not digitizing collision " << collID;
+        continue;
+      }
+
       mDigitizer.setInteractionRecord(timesview[collID]);
-      LOG(DEBUG) << " setInteractionRecord " << timesview[collID] << " bc " << mDigitizer.getBC() << " orbit " << mDigitizer.getOrbit();
+      LOG(debug) << " setInteractionRecord " << timesview[collID] << " bc " << mDigitizer.getBC() << " orbit " << mDigitizer.getOrbit();
       // for each collision, loop over the constituents event and source IDs
       // (background signal merging is basically taking place here)
       for (auto& part : eventParts[collID]) {
         // get the hits for this event and this source
         hits.clear();
         context->retrieveHits(mSimChains, "FT0Hit", part.sourceID, part.entryID, &hits);
-        LOG(DEBUG) << "For collision " << collID << " eventID " << part.entryID << " source ID " << part.sourceID << " found " << hits.size() << " hits ";
+        LOG(debug) << "For collision " << collID << " eventID " << part.entryID << " source ID " << part.sourceID << " found " << hits.size() << " hits ";
         if (hits.size() > 0) {
           // call actual digitization procedure
           mDigitizer.setEventID(part.entryID);
@@ -106,17 +150,17 @@ class FT0DPLDigitizerTask : public o2::base::BaseDPLDigitizer
     mDigitizer.flush_all(mDigitsBC, mDigitsCh, mDigitsTrig, labels);
 
     // send out to next stage
-    pc.outputs().snapshot(Output{"FT0", "DIGITSBC", 0, Lifetime::Timeframe}, mDigitsBC);
-    pc.outputs().snapshot(Output{"FT0", "DIGITSCH", 0, Lifetime::Timeframe}, mDigitsCh);
-    pc.outputs().snapshot(Output{"FT0", "TRIGGERINPUT", 0, Lifetime::Timeframe}, mDigitsTrig);
+    pc.outputs().snapshot(Output{"FT0", "DIGITSBC", 0}, mDigitsBC);
+    pc.outputs().snapshot(Output{"FT0", "DIGITSCH", 0}, mDigitsCh);
+    pc.outputs().snapshot(Output{"FT0", "TRIGGERINPUT", 0}, mDigitsTrig);
     if (pc.outputs().isAllowed({"FT0", "DIGITSMCTR", 0})) {
-      pc.outputs().snapshot(Output{"FT0", "DIGITSMCTR", 0, Lifetime::Timeframe}, labels);
+      pc.outputs().snapshot(Output{"FT0", "DIGITSMCTR", 0}, labels);
     }
-    LOG(INFO) << "FT0: Sending ROMode= " << mROMode << " to GRPUpdater";
-    pc.outputs().snapshot(Output{"FT0", "ROMode", 0, Lifetime::Timeframe}, mROMode);
+    LOG(info) << "FT0: Sending ROMode= " << mROMode << " to GRPUpdater";
+    pc.outputs().snapshot(Output{"FT0", "ROMode", 0}, mROMode);
 
     timer.Stop();
-    LOG(INFO) << "Digitization took " << timer.CpuTime() << "s";
+    LOG(info) << "Digitization took " << timer.CpuTime() << "s";
 
     // we should be only called once; tell DPL that this process is ready to exit
     pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
@@ -138,18 +182,20 @@ class FT0DPLDigitizerTask : public o2::base::BaseDPLDigitizer
 
   //
   bool mDisableQED = false;
-
+  bool mUseCCDB = true;
+  bool mUpdateCCDB = true;
+  bool mUseDeadChannelMap = true;
+  bool mUpdateDeadChannelMap = true;
   std::vector<TChain*> mSimChains;
 };
 
-o2::framework::DataProcessorSpec getFT0DigitizerSpec(int channel, bool mctruth)
+o2::framework::DataProcessorSpec getFT0DigitizerSpec(int channel, bool mctruth, bool useCCDB)
 {
   // create the full data processor spec using
   //  a name identifier
   //  input description
   //  algorithmic description (here a lambda getting called once to setup the actual processing function)
   //  options that can be used for this processor (here: input file names where to take the hits)
-
   std::vector<OutputSpec> outputs;
   outputs.emplace_back("FT0", "DIGITSBC", 0, Lifetime::Timeframe);
   outputs.emplace_back("FT0", "DIGITSCH", 0, Lifetime::Timeframe);
@@ -158,14 +204,25 @@ o2::framework::DataProcessorSpec getFT0DigitizerSpec(int channel, bool mctruth)
     outputs.emplace_back("FT0", "DIGITSMCTR", 0, Lifetime::Timeframe);
   }
   outputs.emplace_back("FT0", "ROMode", 0, Lifetime::Timeframe);
+  std::vector<InputSpec> inputs;
+  inputs.emplace_back("collisioncontext", "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe);
+  if (useCCDB) {
+    inputs.emplace_back("ft0offsets", "FT0", "TimeOffset", 0,
+                        Lifetime::Condition,
+                        ccdbParamSpec("FT0/Calib/ChannelTimeOffset"));
+  }
+  inputs.emplace_back("ft0deadchannelmap", "FT0", "DeadChannelMap", 0,
+                      Lifetime::Condition,
+                      ccdbParamSpec("FT0/Calib/DeadChannelMap", {}, -1));
 
   return DataProcessorSpec{
     "FT0Digitizer",
-    Inputs{InputSpec{"collisioncontext", "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe}},
+    inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<FT0DPLDigitizerTask>()},
+    AlgorithmSpec{adaptFromTask<FT0DPLDigitizerTask>(useCCDB)},
     Options{{"pileup", VariantType::Int, 1, {"whether to run in continuous time mode"}},
-            {"disable-qed", o2::framework::VariantType::Bool, false, {"disable QED handling"}}}};
+            {"disable-qed", VariantType::Bool, false, {"disable QED handling"}},
+            {"disable-dead-channel-map", VariantType::Bool, false, {"Don't mask dead channels"}}}};
 }
 
 } // namespace ft0

@@ -14,12 +14,17 @@
 ///
 /// \author Philippe Pillot, Subatech
 
-#ifndef ALICEO2_MCH_TRACKFINDERORIGINAL_H_
-#define ALICEO2_MCH_TRACKFINDERORIGINAL_H_
+#ifndef O2_MCH_TRACKFINDERORIGINAL_H_
+#define O2_MCH_TRACKFINDERORIGINAL_H_
 
+#include <array>
 #include <chrono>
+#include <list>
 
-#include "MCHTracking/Cluster.h"
+#include <gsl/span>
+
+#include "DataFormatsMCH/Cluster.h"
+#include "MCHBase/ErrorMap.h"
 #include "MCHTracking/Track.h"
 #include "MCHTracking/TrackFitter.h"
 
@@ -40,8 +45,13 @@ class TrackFinderOriginal
   TrackFinderOriginal(TrackFinderOriginal&&) = delete;
   TrackFinderOriginal& operator=(TrackFinderOriginal&&) = delete;
 
-  void init(float l3Current, float dipoleCurrent);
-  const std::list<Track>& findTracks(const std::array<std::list<Cluster>, 10>* clusters);
+  void init();
+  void initField(float l3Current, float dipoleCurrent);
+
+  const std::list<Track>& findTracks(gsl::span<const Cluster> clusters);
+
+  /// return the counting of encountered errors
+  ErrorMap& getErrorMap() { return mErrorMap; }
 
   /// set the debug level defining the verbosity
   void debug(int debugLevel) { mDebugLevel = debugLevel; }
@@ -55,6 +65,7 @@ class TrackFinderOriginal
   std::list<Track>::iterator findTrackCandidates(int ch1, int ch2, bool skipUsedPairs = false);
   bool areUsed(const Cluster& cl1, const Cluster& cl2);
   void createTrack(const Cluster& cl1, const Cluster& cl2);
+  std::list<Track>::iterator addTrack(const std::list<Track>::iterator& pos, const Track& track);
   bool isAcceptable(const TrackParam& param) const;
   void removeDuplicateTracks();
   void removeConnectedTracks(int stMin, int stMax);
@@ -91,8 +102,11 @@ class TrackFinderOriginal
 
   TrackFitter mTrackFitter{}; /// track fitter
 
-  const std::array<std::list<Cluster>, 10>* mClusters = nullptr; ///< pointer to the lists of clusters
-  std::list<Track> mTracks{};                                    ///< list of reconstructed tracks
+  std::array<std::list<const Cluster*>, 10> mClusters{}; ///< lists of clusters per chamber
+
+  std::list<Track> mTracks{}; ///< list of reconstructed tracks
+
+  ErrorMap mErrorMap{}; ///< counting of encountered errors
 
   double mChamberResolutionX2 = 0.;      ///< chamber resolution square (cm^2) in x direction
   double mChamberResolutionY2 = 0.;      ///< chamber resolution square (cm^2) in y direction
@@ -120,4 +134,4 @@ class TrackFinderOriginal
 } // namespace mch
 } // namespace o2
 
-#endif // ALICEO2_MCH_TRACKFINDERORIGINAL_H_
+#endif // O2_MCH_TRACKFINDERORIGINAL_H_

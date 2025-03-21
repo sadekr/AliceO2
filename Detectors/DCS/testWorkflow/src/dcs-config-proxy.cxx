@@ -17,32 +17,34 @@
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/DataSpecUtils.h"
 #include "Framework/ControlService.h"
+#include "Framework/RawDeviceService.h"
 #include "Framework/Logger.h"
 #include "Framework/Lifetime.h"
 #include "Framework/ConfigParamSpec.h"
 #include "Framework/ExternalFairMQDeviceProxy.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "Headers/DataHeaderHelpers.h"
-#include <fairmq/FairMQDevice.h>
+#include <fairmq/Device.h>
+#include <fairmq/Parts.h>
 #include "CommonUtils/StringUtils.h"
 #include <vector>
 #include <string>
+#include <chrono>
 
 using namespace o2::framework;
 using DetID = o2::detectors::DetID;
 
-std::array<o2::header::DataOrigin, 1> exceptionsDetID{"GRP"};
+std::array<o2::header::DataOrigin, 2> exceptionsDetID{"GRP", "AGD"};
 
-void sendAnswer(const std::string& what, const std::string& ack_chan, FairMQDevice& device)
+void sendAnswer(const std::string& what, const std::string& ack_chan, fair::mq::Device& device)
 {
   if (!ack_chan.empty()) {
-    LOG(INFO) << "Sending acknowledgment " << what;
     auto fmqFactory = device.GetChannel(ack_chan).Transport();
     auto msg = fmqFactory->CreateMessage(what.size(), fair::mq::Alignment{64});
     memcpy(msg->GetData(), what.c_str(), what.size());
-    FairMQParts outParts;
+    fair::mq::Parts outParts;
     outParts.AddPart(std::move(msg));
-    sendOnChannel(device, outParts, ack_chan);
+    sendOnChannel(device, outParts, ack_chan, (size_t)-1);
   }
 }
 
@@ -65,73 +67,80 @@ auto getDataOriginFromFilename(const std::string& filename)
 
 InjectorFunction dcs2dpl(const std::string& acknowledge)
 {
-
-  auto timesliceId = std::make_shared<size_t>(0);
-
-  return [acknowledge, timesliceId](FairMQDevice& device, FairMQParts& parts, ChannelRetriever channelRetriever) {
+  return [acknowledge](TimingInfo&, ServiceRegistryRef const& services, fair::mq::Parts& parts, ChannelRetriever channelRetriever, size_t newTimesliceId, bool&) -> bool {
+    auto *device = services.get<RawDeviceService>().device();
+    if (parts.Size() == 0) { // received at ^c, ignore
+      LOG(info) << "ignoring empty message";
+      return false;
+    }
     // make sure just 2 messages received
     if (parts.Size() != 2) {
-      LOG(ERROR) << "received " << parts.Size() << " instead of 2 expected";
-      sendAnswer("error0: wrong number of messages", acknowledge, device);
-      return;
+      LOG(error) << "received " << parts.Size() << " instead of 2 expected";
+      sendAnswer("error0: wrong number of messages", acknowledge, *device);
+      return false;
     }
     std::string filename{static_cast<const char*>(parts.At(0)->GetData()), parts.At(0)->GetSize()};
     size_t filesize = parts.At(1)->GetSize();
-    LOG(INFO) << "received file " << filename << " of size " << filesize;
+    LOG(info) << "received file " << filename << " of size " << filesize;
     o2::header::DataOrigin dataOrigin = getDataOriginFromFilename(filename);
     if (dataOrigin == o2::header::gDataOriginInvalid) {
-      LOG(ERROR) << "unknown detector for " << filename;
-      sendAnswer("error1: unrecognized filename", acknowledge, device);
-      return;
+      LOG(error) << "unknown detector for " << filename;
+      sendAnswer(fmt::format("{}:error1: unrecognized filename", filename), acknowledge, *device);
+      return false;
     }
 
     o2::header::DataHeader hdrF("DCS_CONFIG_FILE", dataOrigin, 0);
     o2::header::DataHeader hdrN("DCS_CONFIG_NAME", dataOrigin, 0);
-    OutputSpec outsp{hdrN.dataOrigin, hdrN.dataDescription, hdrN.subSpecification};
-    auto channel = channelRetriever(outsp, *timesliceId);
+    OutputSpec outsp{hdrF.dataOrigin, hdrF.dataDescription, hdrF.subSpecification};
+    auto channel = channelRetriever(outsp, newTimesliceId);
     if (channel.empty()) {
-      LOG(ERROR) << "No output channel found for OutputSpec " << outsp;
-      sendAnswer("error2: no channel to send", acknowledge, device);
-      return;
+      LOG(error) << "No output channel found for OutputSpec " << outsp;
+      sendAnswer(fmt::format("{}:error2: no channel to send", filename), acknowledge, *device);
+      return false;
     }
 
-    hdrN.tfCounter = *timesliceId; // this also
+    hdrF.tfCounter = newTimesliceId;
+    hdrF.payloadSerializationMethod = o2::header::gSerializationMethodNone;
+    hdrF.splitPayloadParts = 1;
+    hdrF.splitPayloadIndex = 0;
+    hdrF.payloadSize = filesize;
+    hdrF.firstTForbit = 0; // this should be irrelevant for DCS
+
+    hdrN.tfCounter = newTimesliceId;
     hdrN.payloadSerializationMethod = o2::header::gSerializationMethodNone;
-    hdrN.splitPayloadParts = 2;
+    hdrN.splitPayloadParts = 1;
     hdrN.splitPayloadIndex = 0;
     hdrN.payloadSize = parts.At(0)->GetSize();
     hdrN.firstTForbit = 0; // this should be irrelevant for DCS
 
-    hdrF.tfCounter = *timesliceId; // this also
-    hdrF.payloadSerializationMethod = o2::header::gSerializationMethodNone;
-    hdrF.splitPayloadParts = 2;
-    hdrF.splitPayloadIndex = 1;
-    hdrF.payloadSize = filesize;
-    hdrF.firstTForbit = 0; // this should be irrelevant for DCS
+    auto fmqFactory = device->GetChannel(channel).Transport();
+    std::uint64_t creation = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()).time_since_epoch().count();
 
-    auto fmqFactory = device.GetChannel(channel).Transport();
-
-    o2::header::Stack headerStackF{hdrF, DataProcessingHeader{*timesliceId, 0}};
+    o2::header::Stack headerStackF{hdrF, DataProcessingHeader{newTimesliceId, 1, creation}};
     auto hdMessageF = fmqFactory->CreateMessage(headerStackF.size(), fair::mq::Alignment{64});
     auto plMessageF = fmqFactory->CreateMessage(hdrF.payloadSize, fair::mq::Alignment{64});
     memcpy(hdMessageF->GetData(), headerStackF.data(), headerStackF.size());
     memcpy(plMessageF->GetData(), parts.At(1)->GetData(), hdrF.payloadSize);
 
-    o2::header::Stack headerStackN{hdrN, DataProcessingHeader{*timesliceId, 0}};
+    o2::header::Stack headerStackN{hdrN, DataProcessingHeader{newTimesliceId, 1, creation}};
     auto hdMessageN = fmqFactory->CreateMessage(headerStackN.size(), fair::mq::Alignment{64});
     auto plMessageN = fmqFactory->CreateMessage(hdrN.payloadSize, fair::mq::Alignment{64});
     memcpy(hdMessageN->GetData(), headerStackN.data(), headerStackN.size());
     memcpy(plMessageN->GetData(), parts.At(0)->GetData(), hdrN.payloadSize);
 
-    FairMQParts outParts;
-    outParts.AddPart(std::move(hdMessageF));
-    outParts.AddPart(std::move(plMessageF));
-    outParts.AddPart(std::move(hdMessageN));
-    outParts.AddPart(std::move(plMessageN));
-    sendOnChannel(device, outParts, channel);
+    fair::mq::Parts outPartsF;
+    outPartsF.AddPart(std::move(hdMessageF));
+    outPartsF.AddPart(std::move(plMessageF));
+    sendOnChannel(*device, outPartsF, channel, (size_t)-1);
 
-    sendAnswer("OK", acknowledge, device);
-    LOG(INFO) << "Sent DPL message and acknowledgment for file " << filename;
+    fair::mq::Parts outPartsN;
+    outPartsN.AddPart(std::move(hdMessageN));
+    outPartsN.AddPart(std::move(plMessageN));
+    sendOnChannel(*device, outPartsN, channel, newTimesliceId);
+
+    sendAnswer(fmt::format("{}:ok", filename), acknowledge, *device);
+    LOG(info) << "Sent DPL message and acknowledgment for file " << filename;
+    return true;
   };
 }
 
@@ -171,15 +180,16 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     ackChan = "ackChan";
     chan = o2::utils::Str::concat_string(chan, ";", setChanName(chanTo, ackChan));
   }
-  LOG(INFO) << "Channels setup: " << chan;
+  LOG(info) << "Channels setup: " << chan;
   Outputs dcsOutputs;
+
   for (int id = DetID::First; id <= DetID::Last; id++) {
-    dcsOutputs.emplace_back(DetID(id).getDataOrigin(), "DCS_CONFIG_FILE", 0, Lifetime::Timeframe);
-    dcsOutputs.emplace_back(DetID(id).getDataOrigin(), "DCS_CONFIG_NAME", 0, Lifetime::Timeframe);
+    dcsOutputs.emplace_back(DetID(id).getDataOrigin(), "DCS_CONFIG_FILE", 0, Lifetime::Sporadic);
+    dcsOutputs.emplace_back(DetID(id).getDataOrigin(), "DCS_CONFIG_NAME", 0, Lifetime::Sporadic);
   }
   for (auto& el : exceptionsDetID) {
-    dcsOutputs.emplace_back(el, "DCS_CONFIG_FILE", 0, Lifetime::Timeframe);
-    dcsOutputs.emplace_back(el, "DCS_CONFIG_NAME", 0, Lifetime::Timeframe);
+    dcsOutputs.emplace_back(el, "DCS_CONFIG_FILE", 0, Lifetime::Sporadic);
+    dcsOutputs.emplace_back(el, "DCS_CONFIG_NAME", 0, Lifetime::Sporadic);
   }
 
   DataProcessorSpec dcsConfigProxy = specifyExternalFairMQDeviceProxy(

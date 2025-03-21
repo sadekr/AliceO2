@@ -13,19 +13,20 @@
 /// @author P. Pillot
 /// @brief Class to group the fired pads into preclusters
 
-#ifndef ALICEO2_MCH_PRECLUSTERFINDER_H_
-#define ALICEO2_MCH_PRECLUSTERFINDER_H_
-
-#include <cassert>
-#include <cstdint>
-#include <unordered_map>
-#include <vector>
-#include <memory>
-
-#include <gsl/span>
+#ifndef O2_MCH_PRECLUSTERFINDER_H_
+#define O2_MCH_PRECLUSTERFINDER_H_
 
 #include "DataFormatsMCH/Digit.h"
+#include "MCHBase/ErrorMap.h"
 #include "MCHBase/PreCluster.h"
+#include <cassert>
+#include <cstdint>
+#include <gsl/span>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+#include <map>
 
 namespace o2
 {
@@ -55,6 +56,9 @@ class PreClusterFinder
   int run();
 
   void getPreClusters(std::vector<o2::mch::PreCluster>& preClusters, std::vector<Digit>& digits);
+
+  /// return the counting of encountered errors
+  ErrorMap& getErrorMap() { return mErrorMap; }
 
  private:
   struct DetectionElement;
@@ -89,9 +93,11 @@ class PreClusterFinder
 
   int mNPreClusters[SNDEs][2]{};                                     ///< number of preclusters in each cathods of each DE
   std::vector<std::unique_ptr<PreCluster>> mPreClusters[SNDEs][2]{}; ///< preclusters in each cathods of each DE
+
+  ErrorMap mErrorMap{}; ///< counting of encountered errors
 };
 
 } // namespace mch
 } // namespace o2
 
-#endif // ALICEO2_MCH_PRECLUSTERFINDER_H_
+#endif // O2_MCH_PRECLUSTERFINDER_H_

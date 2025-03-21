@@ -15,9 +15,8 @@
 #include "TRDSimulation/Detector.h"
 
 #include "TRDBase/Calibrations.h"
-#include "TRDBase/CommonParam.h"
 #include "TRDBase/PadResponse.h"
-#include "TRDBase/DiffAndTimeStructEstimator.h"
+#include "TRDSimulation/DiffAndTimeStructEstimator.h"
 #include "TRDSimulation/PileupTool.h"
 
 #include "DataFormatsTRD/Digit.h"
@@ -56,6 +55,8 @@ class Digitizer
   void flush(DigitContainer&, o2::dataformats::MCTruthContainer<MCLabel>&);
   void dumpLabels(const SignalContainer&, o2::dataformats::MCTruthContainer<MCLabel>&);
   void pileup();
+  void clearPileupSignals() { mPileupSignals.clear(); }
+  const std::deque<std::array<SignalContainer, constants::MAXCHAMBER>>& getPileupSignals() const { return mPileupSignals; }
   void setEventTime(double timeNS) { mTime = timeNS; }
   void setTriggerTime(double t) { mCurrentTriggerTime = t; }
   void setEventID(int entryID) { mEventID = entryID; }
@@ -71,8 +72,7 @@ class Digitizer
  private:
   Geometry* mGeo = nullptr;               // access to Geometry
   PadResponse mPRF{};                     // access to PadResponse
-  SimParam* mSimParam = nullptr;          // access to SimParam instance
-  CommonParam* mCommonParam = nullptr;    // access to CommonParam instance
+  SimParam mSimParam{};                   // simulation parameters
   Calibrations* mCalib = nullptr;         // access to Calibrations in CCDB
   PileupTool pileupTool;
 
@@ -83,7 +83,7 @@ class Digitizer
   std::vector<math_utils::RandomRing<>> mGausRandomRings; // pre-generated normal distributed random numbers
   std::vector<math_utils::RandomRing<>> mFlatRandomRings; // pre-generated flat distributed random numbers
   std::vector<math_utils::RandomRing<>> mLogRandomRings;  // pre-generated exp distributed random number
-  std::vector<DiffusionAndTimeStructEstimator> mDriftEstimators;
+  std::vector<DiffusionAndTimeStructEstimator> mDriftEstimators; // use one estimator per thread (works on different chamber with possibly different vDrift and profits from cached values)
 
   double mTime = 0.;               // time in nanoseconds of the hits currently being processed
   double mCurrentTriggerTime = 0.; // time in nanoseconds of the current trigger

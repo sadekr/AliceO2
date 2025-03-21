@@ -63,20 +63,23 @@ namespace o2::framework
 ///     // offset of payload in the raw page
 ///     size_t offset = it.offset();
 ///   }
+template <bool BOUNDS_CHECKS = true>
 class DPLRawParser
 {
  public:
-  using rawparser_type = RawParser<8192>;
+  using rawparser_type = RawParser<8192, BOUNDS_CHECKS>;
   using buffer_type = typename rawparser_type::buffer_type;
 
   DPLRawParser() = delete;
-  DPLRawParser(InputRecord& inputs, std::vector<InputSpec> filterSpecs = {}) : mInputs(inputs), mFilterSpecs(filterSpecs) {}
+  DPLRawParser(InputRecord& inputs, std::vector<InputSpec> filterSpecs = {}, fair::Severity sev = fair::Severity::alarm) : mInputs(inputs), mFilterSpecs(filterSpecs), mSeverity(sev) {}
+
+  void setMaxFailureMessages(size_t n) { mMaxFailureMessages = n; }
+  void setExtFailureCounter(size_t* cnt) { mExtFailureCounter = cnt; }
+  static void setCheckIncompleteHBF(bool v) { rawparser_type::setCheckIncompleteHBF(v); }
 
   // this is a dummy default buffer used to initialize the RawParser in the iterator
   // constructor
-  static constexpr o2::header::RAWDataHeaderV4 initializer = o2::header::RAWDataHeaderV4{};
-  template <typename T>
-  using IteratorBase = std::iterator<std::forward_iterator_tag, T>;
+  static constexpr o2::header::RAWDataHeader initializer = o2::header::RAWDataHeader{.memorySize = sizeof(o2::header::RAWDataHeader)};
 
   /// Iterator implementation
   /// Supports the following operations:
@@ -85,13 +88,14 @@ class DPLRawParser
   /// - member function data() returns pointer to payload at current position
   /// - member function size() return size of payload at current position
   template <typename T>
-  class Iterator : public IteratorBase<T>
+  class Iterator
   {
    public:
+    using iterator_category = std::forward_iterator_tag;
     using self_type = Iterator;
-    using value_type = typename IteratorBase<T>::value_type;
-    using reference = typename IteratorBase<T>::reference;
-    using pointer = typename IteratorBase<T>::pointer;
+    using value_type = T;
+    using reference = T&;
+    using pointer = T*;
     // the iterator over the input channels
     using input_iterator = decltype(std::declval<InputRecord>().begin());
     // the parser type
@@ -99,8 +103,8 @@ class DPLRawParser
 
     Iterator() = delete;
 
-    Iterator(InputRecord& parent, input_iterator it, input_iterator end, std::vector<InputSpec> const& filterSpecs)
-      : mParent(parent), mInputIterator(it), mEnd(end), mPartIterator(mInputIterator.begin()), mParser(std::make_unique<parser_type>(reinterpret_cast<const char*>(&initializer), sizeof(initializer))), mCurrent(mParser->begin()), mFilterSpecs(filterSpecs)
+    Iterator(InputRecord& parent, input_iterator it, input_iterator end, std::vector<InputSpec> const& filterSpecs, fair::Severity sev = fair::Severity::alarm, size_t maxErrMsg = -1, size_t* cntErrMsg = nullptr)
+      : mParent(parent), mInputIterator(it), mEnd(end), mPartIterator(mInputIterator.begin()), mParser(std::make_unique<parser_type>(reinterpret_cast<const char*>(&initializer), sizeof(initializer))), mCurrent(mParser->begin()), mFilterSpecs(filterSpecs), mMaxFailureMessages(maxErrMsg), mExtFailureCounter(cntErrMsg), mSeverity(sev)
     {
       mParser.reset();
       next();
@@ -184,12 +188,18 @@ class DPLRawParser
       return mCurrent.size();
     }
 
+    /// get size of header + payload at current position
+    size_t sizeTotal() const
+    {
+      return mCurrent.sizeTotal();
+    }
+
     /// get header as specific type
     /// @return pointer to header of the specified type, or nullptr if type does not match to actual type
     template <typename U>
     U const* get_if() const
     {
-      return mCurrent.get_if<U>();
+      return mCurrent.template get_if<U>();
     }
 
     friend std::ostream& operator<<(std::ostream& os, self_type const& it)
@@ -232,6 +242,26 @@ class DPLRawParser
 
     bool next()
     {
+      auto logFailure = [this](const std::string& msg, const std::runtime_error& e) {
+        if (!this->mExtFailureCounter || (*this->mExtFailureCounter)++ < this->mMaxFailureMessages) {
+          if (this->mSeverity == fair::Severity::alarm) {
+            LOG(alarm) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          } else if (this->mSeverity == fair::Severity::warn) {
+            LOG(warn) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          } else if (this->mSeverity == fair::Severity::fatal) {
+            LOG(fatal) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          } else if (this->mSeverity == fair::Severity::critical) {
+            LOG(critical) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          } else if (this->mSeverity == fair::Severity::error) {
+            LOG(error) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          } else if (this->mSeverity == fair::Severity::info) {
+            LOG(info) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          } else {
+            LOG(debug) << msg << (*this->mInputIterator).spec->binding << " : " << e.what();
+          }
+        }
+      };
+
       while (mInputIterator != mEnd) {
         bool isInitial = mParser == nullptr;
         while (mPartIterator != mInputIterator.end()) {
@@ -263,9 +293,7 @@ class DPLRawParser
           try {
             raw = mParent.get<gsl::span<char>>(*mPartIterator);
           } catch (const std::runtime_error& e) {
-            // TODO: need some better handling to avoid to be spammed by error messages
-            LOG(ERROR) << "failed to read data from " << (*mInputIterator).spec->binding;
-            LOG(ERROR) << e.what();
+            logFailure("failed to read data from ", e);
           }
           if (raw.size() == 0) {
             continue;
@@ -274,8 +302,7 @@ class DPLRawParser
           try {
             mParser = std::make_unique<parser_type>(raw.data(), raw.size());
           } catch (const std::runtime_error& e) {
-            LOG(ERROR) << "can not create raw parser form input data";
-            LOG(ERROR) << e.what();
+            logFailure("can not create raw parser from ", e);
           }
 
           if (mParser != nullptr) {
@@ -296,27 +323,33 @@ class DPLRawParser
     std::unique_ptr<parser_type> mParser;
     parser_iterator mCurrent;
     std::vector<InputSpec> const& mFilterSpecs;
+    size_t mMaxFailureMessages = -1;
+    size_t* mExtFailureCounter = nullptr; // external optionally provided counter to throttle error messages
+    fair::Severity mSeverity = fair::Severity::alarm;
   };
 
   using const_iterator = Iterator<DataRef const>;
 
   const_iterator begin() const
   {
-    return const_iterator(mInputs, mInputs.begin(), mInputs.end(), mFilterSpecs);
+    return const_iterator(mInputs, mInputs.begin(), mInputs.end(), mFilterSpecs, mSeverity, mMaxFailureMessages, mExtFailureCounter);
   }
 
   const_iterator end() const
   {
-    return const_iterator(mInputs, mInputs.end(), mInputs.end(), mFilterSpecs);
+    return const_iterator(mInputs, mInputs.end(), mInputs.end(), mFilterSpecs, mSeverity, mMaxFailureMessages, mExtFailureCounter);
   }
 
   /// Format helper for stream output of the iterator content,
   /// print RDH version and table header
-  using RDHInfo = const_iterator::Fmt<raw_parser::FormatSpec::Info>;
+  using RDHInfo = typename o2::framework::DPLRawParser<BOUNDS_CHECKS>::const_iterator::template Fmt<raw_parser::FormatSpec::Info>;
 
  private:
   InputRecord& mInputs;
   std::vector<InputSpec> mFilterSpecs;
+  size_t mMaxFailureMessages = -1;
+  size_t* mExtFailureCounter = nullptr; // external optionally provided counter to throttle error messages
+  fair::Severity mSeverity = fair::Severity::alarm;
 };
 
 } // namespace o2::framework

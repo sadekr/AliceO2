@@ -14,7 +14,7 @@
 #include "FairRootManager.h" // for FairRootManager
 #include "FairVolume.h"      // for FairVolume
 #include "DetectorsBase/MaterialManager.h"
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 #include "ZDCSimulation/Detector.h"
 #include "DataFormatsZDC/Hit.h"
 
@@ -30,7 +30,11 @@
 #include <cassert>
 #include <fstream>
 #include "ZDCSimulation/ZDCSimParam.h"
-#include "ZDCBase/Constants.h"
+#ifdef ZDC_FASTSIM_ONNX
+#include "Utils.h" // for normal_distribution()
+#include "FastSimulations.h" // for fastsim module
+#include "Processors.h"      // for fastsim module
+#endif
 
 using namespace o2::zdc;
 
@@ -62,6 +66,62 @@ Detector::Detector(Bool_t active)
   mMediumPMCid = -1; // minus for unitialized
   mMediumPMQid = -2; // different to PMC in any case
   resetHitIndices();
+
+#ifdef ZDC_FASTSIM_ONNX
+  // If FastSim module was disabled, log appropriate message
+  // otherwise check if all necessary parameters were passed, if so try build objects
+  auto& simparam = o2::zdc::ZDCSimParam::Instance();
+
+  if (!simparam.useZDCFastSim) {
+    LOG(info) << "FastSim module disabled";
+  } else if (simparam.useZDCFastSim && !simparam.ZDCFastSimClassifierPath.empty() && !simparam.ZDCFastSimClassifierScales.empty()) {
+    if (!mClassifierScaler) {
+      mClassifierScaler = new fastsim::processors::StandardScaler;
+    }
+    if (!mModelScalerNeutron) {
+      mModelScalerNeutron = new fastsim::processors::StandardScaler;
+    }
+    if (!mModelScalerProton) {
+      mModelScalerProton = new fastsim::processors::StandardScaler;
+    }
+    auto eonScales = o2::zdc::fastsim::loadScales(simparam.ZDCFastSimClassifierScales);
+    if (!eonScales.has_value()) {
+      LOG(error) << "Error while reading model scales from: "
+                 << "'" << simparam.ZDCFastSimClassifierScales << "'";
+      LOG(error) << "FastSim module disabled.";
+    } else {
+      mClassifierScaler->setScales(eonScales->first, eonScales->second);
+      mFastSimClassifier = new o2::zdc::fastsim::ConditionalModelSimulation(simparam.ZDCFastSimClassifierPath, 1);
+
+      if (simparam.useZDCFastSim && !simparam.ZDCFastSimModelPathNeutron.empty() && !simparam.ZDCFastSimModelScalesNeutron.empty()) {
+        auto modelScalesNeutron = o2::zdc::fastsim::loadScales(simparam.ZDCFastSimModelScalesNeutron);
+
+        if (!modelScalesNeutron.has_value()) {
+          LOG(error) << "Error while reading model scales from: "
+                     << "'" << simparam.ZDCFastSimModelScalesNeutron << "'";
+          LOG(error) << "FastSim module disabled";
+        } else {
+          mModelScalerNeutron->setScales(modelScalesNeutron->first, modelScalesNeutron->second);
+          mFastSimModelNeutron = new o2::zdc::fastsim::ConditionalModelSimulation(simparam.ZDCFastSimModelPathNeutron, 1);
+          LOG(info) << "FastSim neutron module enabled";
+        }
+      }
+      if (simparam.useZDCFastSim && !simparam.ZDCFastSimModelPathProton.empty() && !simparam.ZDCFastSimModelScalesProton.empty()) {
+        auto modelScalesProton = o2::zdc::fastsim::loadScales(simparam.ZDCFastSimModelScalesProton);
+
+        if (!modelScalesProton.has_value()) {
+          LOG(error) << "Error while reading model scales from: "
+                     << "'" << simparam.ZDCFastSimModelScalesProton << "'";
+          LOG(error) << "FastSim module disabled";
+        } else {
+          mModelScalerProton->setScales(modelScalesProton->first, modelScalesProton->second);
+          mFastSimModelProton = new o2::zdc::fastsim::ConditionalModelSimulation(simparam.ZDCFastSimModelPathProton, 1);
+          LOG(info) << "FastSim proton module enabled";
+        }
+      }
+    }
+  }
+#endif
 }
 
 //_____________________________________________________________________________
@@ -70,6 +130,19 @@ Detector::Detector(const Detector& rhs)
     mHits(new std::vector<o2::zdc::Hit>)
 {
 }
+
+//_____________________________________________________________________________
+#ifdef ZDC_FASTSIM_ONNX
+Detector::~Detector()
+{
+  delete (mFastSimClassifier);
+  delete (mFastSimModelNeutron);
+  delete (mFastSimModelProton);
+  delete (mClassifierScaler);
+  delete (mModelScalerNeutron);
+  delete (mModelScalerProton);
+}
+#endif
 
 //_____________________________________________________________________________
 template <typename T>
@@ -95,11 +168,11 @@ int loadLightTable(T& table, int beta, int NRADBINS, std::string filename)
         //printf("\n");
       }
     }
-    LOG(DEBUG) << "Read " << counter << " values from ZDC data file " << filename;
+    LOG(debug) << "Read " << counter << " values from ZDC data file " << filename;
     input.close();
     return counter;
   } else {
-    LOG(ERROR) << "Could not open file " << filename;
+    LOG(error) << "Could not open file " << filename;
     return 0;
   }
 }
@@ -140,7 +213,7 @@ void Detector::InitializeO2Detector()
 //_____________________________________________________________________________
 void Detector::ConstructGeometry()
 {
-  LOG(DEBUG) << "Creating ZDC  geometry\n";
+  LOG(debug) << "Creating ZDC  geometry\n";
 
   createMaterials();
 
@@ -153,7 +226,7 @@ void Detector::ConstructGeometry()
 //_____________________________________________________________________________
 void Detector::defineSensitiveVolumes()
 {
-  LOG(INFO) << "defining sensitive for ZDC";
+  LOG(info) << "defining sensitive for ZDC";
   auto vol = gGeoManager->GetVolume("ZNENV");
   if (vol) {
     AddSensitiveVolume(vol);
@@ -164,7 +237,7 @@ void Detector::defineSensitiveVolumes()
     AddSensitiveVolume(gGeoManager->GetVolume("ZNF3"));
     AddSensitiveVolume(gGeoManager->GetVolume("ZNF4"));
   } else {
-    LOG(FATAL) << "can't find volume ZNENV";
+    LOG(fatal) << "can't find volume ZNENV";
   }
   vol = gGeoManager->GetVolume("ZPENV");
   if (vol) {
@@ -176,7 +249,7 @@ void Detector::defineSensitiveVolumes()
     AddSensitiveVolume(gGeoManager->GetVolume("ZPF3"));
     AddSensitiveVolume(gGeoManager->GetVolume("ZPF4"));
   } else {
-    LOG(FATAL) << "can't find volume ZPENV";
+    LOG(fatal) << "can't find volume ZPENV";
   }
   // em calorimeter
   vol = gGeoManager->GetVolume("ZEM ");
@@ -185,7 +258,7 @@ void Detector::defineSensitiveVolumes()
     mZEMVolID = vol->GetNumber();
     AddSensitiveVolume(gGeoManager->GetVolume("ZEMF"));
   } else {
-    LOG(FATAL) << "can't find volume ZEM";
+    LOG(fatal) << "can't find volume ZEM";
   }
 }
 
@@ -198,7 +271,7 @@ void Detector::getDetIDandSecID(TString const& volname, math_utils::Vector3D<flo
 
     if (x.Z() > 0) {
       detector = ZNA;
-      xDet = x - math_utils::Vector3D<float>(Geometry::ZNAPOSITION[0], Geometry::ZNAPOSITION[1], Geometry::ZNAPOSITION[2]);
+      xDet = -(x - math_utils::Vector3D<float>(Geometry::ZNAPOSITION[0], Geometry::ZNAPOSITION[1], Geometry::ZNAPOSITION[2]));
 
     } else if (x.Z() < 0) {
       detector = ZNC;
@@ -224,7 +297,7 @@ void Detector::getDetIDandSecID(TString const& volname, math_utils::Vector3D<flo
     // proton calorimeter
     if (x.Z() > 0) {
       detector = ZPA; // (NB -> DIFFERENT FROM AliRoot!!!)
-      xDet = x - math_utils::Vector3D<float>(Geometry::ZPAPOSITION[0], Geometry::ZPAPOSITION[1], Geometry::ZPAPOSITION[2]);
+      xDet = -(x - math_utils::Vector3D<float>(Geometry::ZPAPOSITION[0], Geometry::ZPAPOSITION[1], Geometry::ZPAPOSITION[2]));
     } else if (x.Z() < 0) {
       detector = ZPC; // (NB -> DIFFERENT FROM AliRoot!!!)
       xDet = x - math_utils::Vector3D<float>(Geometry::ZPCPOSITION[0], Geometry::ZPCPOSITION[1], Geometry::ZPCPOSITION[2]);
@@ -274,6 +347,11 @@ void Detector::resetHitIndices()
 void Detector::flushSpatialResponse()
 {
   if (o2::zdc::ZDCSimParam::Instance().recordSpatialResponse) {
+    auto c = mNeutronResponseImage.getPhotonsPerChannel();
+    std::fstream output("o2sim-FullSimResult", std::fstream::out | std::fstream::app);
+    output << c[0] << " " << c[1] << " " << c[2] << " " << c[3] << " " << c[4] << "\n";
+    output.close();
+
     // only write non-trivial image pairs
     if (mNeutronResponseImage.getPhotonSum() > 0 || mProtonResponseImage.getPhotonSum() > 0) {
       mResponses.push_back(std::make_pair(mCurrentPrincipalParticle,
@@ -281,6 +359,25 @@ void Detector::flushSpatialResponse()
     }
     mNeutronResponseImage.reset();
     mProtonResponseImage.reset();
+  }
+}
+
+// quick estimates the time of flight to reach this detector (located at z)
+// just based on primary particle properties
+// Meant for the neutron / proton detectors which sit a large z so that speed
+// is essentially the speed in z-direction.
+double estimateTimeOfFlight(TParticle const& part, double z /* needs to be in meters */)
+{
+  const auto m = part.GetMass();
+  constexpr auto SPEED_OF_LIGHT = 299792458.; // m/s
+  if (m == 0.) {
+    return z / SPEED_OF_LIGHT;
+  } else {
+    TLorentzVector lorentz; // could be made member var
+    part.Momentum(lorentz);
+    const auto gamma = lorentz.Gamma();
+    const auto speed = SPEED_OF_LIGHT * std::sqrt(1. - 1. / (gamma * gamma));
+    return z / speed; // could refine this
   }
 }
 
@@ -443,6 +540,9 @@ bool Detector::createHitsFromImage(SpatialPhotonResponse const& image, int detec
   // could be put inside the image class
   auto determineSectorID = [Nx, Ny](int detector, int x, int y) {
     if (detector == ZNA || detector == ZNC) {
+      if ((x + y) % 2 == 0) {
+        return (int)Common;
+      }
       if (x < Nx / 2) {
         if (y < Ny / 2) {
           return (int)Ch1;
@@ -459,6 +559,9 @@ bool Detector::createHitsFromImage(SpatialPhotonResponse const& image, int detec
     }
 
     if (detector == ZPA || detector == ZPC) {
+      if ((x + y) % 2 == 0) {
+        return (int)Common;
+      }
       auto i = (int)(4.f * x / Nx);
       return (int)(i + 1);
     }
@@ -478,7 +581,7 @@ bool Detector::createHitsFromImage(SpatialPhotonResponse const& image, int detec
       int sector = determineSectorID(detector, x, y);
       // get medium PMQ and PMC
       int currentMediumid = determineMediumID(detector, x, y);
-      // LOG(INFO) << " x " << x << " y " << y << " sec " << sector << " medium " << currentMediumid;
+      // LOG(info) << " x " << x << " y " << y << " sec " << sector << " medium " << currentMediumid;
       int nphe = pixels[x][y];
       float tof = 0.;        // needs to be in nanoseconds ---> to be filled later on (should be meta-data of image or calculated otherwise)
       float trackenergy = 0; // energy of the primary (need to fill good value)
@@ -503,7 +606,7 @@ o2::zdc::Hit* Detector::addHit(int32_t trackID, int32_t parentID, int32_t sFlag,
                                int32_t secID, math_utils::Vector3D<float> pos, math_utils::Vector3D<float> mom, float tof, math_utils::Vector3D<float> xImpact,
                                double energyloss, int32_t nphePMC, int32_t nphePMQ)
 {
-  LOG(DEBUG4) << "Adding hit for track " << trackID << " X (" << pos.X() << ", " << pos.Y() << ", "
+  LOG(debug4) << "Adding hit for track " << trackID << " X (" << pos.X() << ", " << pos.Y() << ", "
               << pos.Z() << ") P (" << mom.X() << ", " << mom.Y() << ", " << mom.Z() << ")  Ekin "
               << primaryEnergy << " lightPMC  " << nphePMC << " lightPMQ  " << nphePMQ << std::endl;
   mHits->emplace_back(trackID, parentID, sFlag, primaryEnergy, detID, secID, pos, mom,
@@ -517,7 +620,7 @@ void Detector::createMaterials()
   int32_t ifield = 2;
   float fieldm = 10.0;
   o2::base::Detector::initFieldTrackingParams(ifield, fieldm);
-  LOG(INFO) << "Detector::CreateMaterials >>>>> magnetic field: type " << ifield << " max " << fieldm << "\n";
+  LOG(info) << "Detector::CreateMaterials >>>>> magnetic field: type " << ifield << " max " << fieldm << "\n";
 
   // ******** MATERIAL DEFINITION ********
   // --- W alloy -> ZN passive material
@@ -658,7 +761,7 @@ void Detector::createAsideBeamLine()
   // BEAM PIPE from 19.10 m to inner triplet beginning (22.965 m)
   tubpar[0] = 6.0 / 2.;
   tubpar[1] = 6.4 / 2.;
-  tubpar[2] = 386.28 / 2.;
+  tubpar[2] = (386.28 - 0.18) / 2.;
   TVirtualMC::GetMC()->Gsvolu("QA01", "TUBE", getMediumID(kFe), tubpar, 3);
   TVirtualMC::GetMC()->Gspos("QA01", 1, "ZDCA", 0., 0., tubpar[2] + zA, 0, "ONLY");
 
@@ -1281,7 +1384,7 @@ void Detector::createAsideBeamLine()
     boxpar[2] = mLumiLength / 2.;
     TVirtualMC::GetMC()->Gsvolu("QLUA", "BOX ", getMediumID(kCuLumi), boxpar, 3);
     TVirtualMC::GetMC()->Gspos("QLUA", 1, "ZDCA", 0., 0., Geometry::ZNAPOSITION[1] /*fPosZNA[2]*/ - 66. - boxpar[2], 0, "ONLY");
-    LOG(DEBUG) << "A-side luminometer positioned in front of ZNA\n";
+    LOG(debug) << "A-side luminometer positioned in front of ZNA\n";
   }
 }
 
@@ -1694,7 +1797,7 @@ void Detector::createCsideBeamLine()
     boxpar[2] = mLumiLength / 2.; // FIX IT!!!!!!!!!!!!!!!!!!!!!!!!
     TVirtualMC::GetMC()->Gsvolu("QLUC", "BOX ", getMediumID(kCuLumi), boxpar, 3);
     TVirtualMC::GetMC()->Gspos("QLUC", 1, "ZDCC", 0., 0., Geometry::ZNCPOSITION[1] + 66. + boxpar[2], 0, "ONLY");
-    LOG(DEBUG) << "C-side luminometer positioned in front of ZNC\n";
+    LOG(debug) << "C-side luminometer positioned in front of ZNC\n";
   }
 }
 
@@ -2205,13 +2308,16 @@ void Detector::createDetectors()
   TVirtualMC::GetMC()->Matrix(irotzem1, rangzem1[0], rangzem1[1], rangzem1[2], rangzem1[3], rangzem1[4], rangzem1[5]);
   TVirtualMC::GetMC()->Matrix(irotzem2, rangzem2[0], rangzem2[1], rangzem2[2], rangzem2[3], rangzem2[4], rangzem2[5]);
 
+  double zemLength = Geometry::ZEMDIMENSION[0];
+  double zemTranLength = zemLength / 20.;
   double zemPbSlice[6] = {0.15 * TMath::Sqrt(2), 3.5, 3.5, 45., 0., 0.};
-  double zemVoidLayer[6] = {(20.62 / 20.) / 2., 3.5, 3.5, 45., 0., 0.};
+  double zemVoidLayer[6] = {(zemTranLength - 2. * zemPbSlice[0]) / 2., 3.5, 3.5, 45., 0., 0.};
+  // Platform and support structures
   double zemSupportTable[3] = {55. / 2., 1.5 / 2., 110. / 2.};
   double zemSupportBox[6] = {10.5 / 2., 100. / 2., 95. / 2., 0.25 / 2., 2. / 2., 2. / 2.};
   double zemSupport1[3] = {15. / 2, 3. / 2., 95. / 2.};             //support table
   double zemSupport2[3] = {2. / 2, 5. / 2., 95. / 2.};              //support table heels (piedini)
-  double zemSupport3[3] = {3.5, 2. / 2., 20. / 2.};                 //screens around ZEM
+  double zemSupport3[3] = {3.5, 2. / 2., zemLength};                //screens around ZEM
   double zemSupport4[6] = {20. / 2., 3.5, 1.5 / 2., 45., 0., 0.};   //detector box walls (side)
   double zemWallH[3] = {10.5 / 2., /*bthickness[1]*/ 1., 95. / 2.}; //box walls
   double zemWallVfwd[3] = {10.5 / 2., (100. - 2.) / 2., 0.2};
@@ -2227,7 +2333,7 @@ void Detector::createDetectors()
   TVirtualMC::GetMC()->Gsvolu("ZEL2", "PARA", getMediumID(kPb), const_cast<double*>(zemPbSlice), 6);
 
   // --- Position the lead slices in the tranche
-  TVirtualMC::GetMC()->Gspos("ZEL0", 1, "ZETR", -zemVoidLayer[0] + zemPbSlice[0], 0., 0., 0, "ONLY");
+  TVirtualMC::GetMC()->Gspos("ZEL0", 1, "ZETR", -zemTranLength + zemPbSlice[0], 0., 0., 0, "ONLY");
   TVirtualMC::GetMC()->Gspos("ZEL1", 1, "ZETR", zemPbSlice[0], 0., 0., 0, "ONLY");
 
   // --- Vacuum zone (to be filled with fibres)
@@ -2245,7 +2351,7 @@ void Detector::createDetectors()
   // --- Positioning the vacuum slice into the tranche
   //float displFib = fDimZEM[1]/fDivZEM[0];
   TVirtualMC::GetMC()->Gspos("ZEV0", 1, "ZETR", -zemVoidLayer[0], 0., 0., 0, "ONLY");
-  TVirtualMC::GetMC()->Gspos("ZEV1", 1, "ZETR", -zemVoidLayer[0] + zemPbSlice[0], 0., 0., 0, "ONLY");
+  TVirtualMC::GetMC()->Gspos("ZEV1", 1, "ZETR", -zemVoidLayer[0] + zemTranLength, 0., 0., 0, "ONLY");
 
   // --- Positioning the ZEM into the ZDC - rotation for 90 degrees
   // NB -> ZEM is positioned in cave volume
@@ -2387,6 +2493,25 @@ void Detector::FinishPrimary()
   // after each primary we should definitely reset
   mLastPrincipalTrackEntered = -1;
   flushSpatialResponse();
+
+#ifdef ZDC_FASTSIM_ONNX
+  // dump to file only if debugZDCFastSim is set to true
+  auto& simparam = o2::zdc::ZDCSimParam::Instance();
+  if (simparam.debugZDCFastSim && simparam.useZDCFastSim && mFastSimModelNeutron != nullptr && mFastSimModelProton != nullptr && mFastSimClassifier != nullptr) {
+    std::fstream output("o2sim-FastSimResult", std::fstream::out | std::fstream::app);
+    if (!output.is_open()) {
+      LOG(error) << "Could not open file.";
+    } else {
+
+      for (auto& result : mFastSimResults) {
+        output << result[0] << ", " << result[1] << ", " << result[2] << ", " << result[3] << ", " << result[4];
+        output << std::endl;
+      }
+      mFastSimResults.clear();
+    }
+    output.close();
+  }
+#endif
 }
 
 void Detector::BeginPrimary()
@@ -2398,6 +2523,68 @@ void Detector::BeginPrimary()
   resetHitIndices();
 
   mCurrentPrincipalParticle = *stack->GetCurrentTrack();
+
+#ifdef ZDC_FASTSIM_ONNX
+  auto& simparam = o2::zdc::ZDCSimParam::Instance();
+  using std::vector;
+  if (simparam.useZDCFastSim && (mFastSimModelNeutron != nullptr || mFastSimModelProton != nullptr) && mFastSimClassifier != nullptr) {
+    const std::vector<float> rawInput = {static_cast<float>(mCurrentPrincipalParticle.Energy()),
+                                         static_cast<float>(mCurrentPrincipalParticle.Vx()),
+                                         static_cast<float>(mCurrentPrincipalParticle.Vy()),
+                                         static_cast<float>(mCurrentPrincipalParticle.Vz()),
+                                         static_cast<float>(mCurrentPrincipalParticle.Px()),
+                                         static_cast<float>(mCurrentPrincipalParticle.Py()),
+                                         static_cast<float>(mCurrentPrincipalParticle.Pz()),
+                                         static_cast<float>(mCurrentPrincipalParticle.GetMass() * 1000.0),
+                                         static_cast<float>(mCurrentPrincipalParticle.GetPDG()->Charge())};
+
+    auto scaledClassParticle = mClassifierScaler->scale(rawInput);
+    if (!scaledClassParticle.has_value()) {
+      LOG(error) << "FastSimModule: error occurred on scaling";
+    } else {
+      vector<vector<float>> classifierInput = {std::move(*scaledClassParticle)};
+      mFastSimClassifier->setInput(classifierInput);
+      mFastSimClassifier->run();
+
+      // this classifies if particle will leave a trace at all in one of the calos ---> TODO: better do it separately for ZN + ZP?
+      if (fastsim::processors::readClassifier(mFastSimClassifier->getResult()[0], 1)[0]) {
+        // let's do the neutron (ZN) part
+        if (mModelScalerNeutron && mFastSimModelNeutron) {
+          LOG(info) << "Generating fast hits for ZN";
+          auto scaledModelParticleNeutron = mModelScalerNeutron->scale(rawInput);
+          if (!scaledModelParticleNeutron.has_value()) {
+            LOG(error) << "FastSimModule: error occurred on scaling";
+          } else {
+            vector<vector<float>> modelInputNeutron = {fastsim::normal_distribution(0.0, 1.0, 10), std::move(*scaledModelParticleNeutron)};
+            mFastSimModelNeutron->setInput(modelInputNeutron);
+            mFastSimModelNeutron->run();
+            if (simparam.debugZDCFastSim) {
+              mFastSimResults.push_back(fastsim::processors::calculateChannels(mFastSimModelNeutron->getResult()[0], 1)[0]);
+            }
+            // produce hits from fast sim result
+            bool forward = mCurrentPrincipalParticle.Pz() > 0.;
+            FastSimToHits(mFastSimModelNeutron->getResult()[0], mCurrentPrincipalParticle, forward ? ZNA : ZNC);
+          }
+        }
+        // let's do the proton (ZP) part
+        if (mModelScalerProton && mFastSimModelProton) {
+          LOG(info) << "Generating fast hits for ZP";
+          auto scaledModelParticleProton = mModelScalerProton->scale(rawInput);
+          if (!scaledModelParticleProton.has_value()) {
+            LOG(error) << "FastSimModule: error occurred on scaling";
+          } else {
+            vector<vector<float>> modelInputProton = {fastsim::normal_distribution(0.0, 1.0, 10), std::move(*scaledModelParticleProton)};
+            mFastSimModelProton->setInput(modelInputProton);
+            mFastSimModelProton->run();
+            // produce hits from fast sim result
+            bool forward = mCurrentPrincipalParticle.Pz() > 0.;
+            FastSimToHits(mFastSimModelProton->getResult()[0], mCurrentPrincipalParticle, forward ? ZPA : ZPC);
+          }
+        } // end proton treatment
+      }
+    }
+  }
+#endif
 }
 
 //_____________________________________________________________________________
@@ -2426,3 +2613,106 @@ void Detector::Reset()
   mLastPrincipalTrackEntered = -1;
   resetHitIndices();
 }
+
+//_____________________________________________________________________________
+// The code of this function is taken from createHitsFromImage
+// The changes were made to directly convert FastSim output to Hits
+// TParticle can be used to fill additional data required by Hits
+#ifdef ZDC_FASTSIM_ONNX
+bool Detector::FastSimToHits(const Ort::Value& response, const TParticle& particle, int detector)
+{
+  math_utils::Vector3D<float> xImp(0., 0., 0.); // good value
+
+  // determines dimensions of the detector and binds it
+  auto [Nx, Ny] = determineDetectorSize(detector);
+  // if invalid detector was provided return false
+  if (Nx == -1 || Ny == -1) {
+    return false;
+  }
+
+  // gets model output as const float*
+  auto pixels = response.GetTensorData<float>();
+
+  auto determineSectorID = [&Nx = Nx, &Ny = Ny](int detector, int x, int y) {
+    if (detector == ZNA || detector == ZNC) {
+      if ((x + y) % 2 == 0) {
+        return (int)Common;
+      }
+      if (x < Nx / 2) {
+        if (y < Ny / 2) {
+          return (int)Ch1;
+        } else {
+          return (int)Ch3;
+        }
+      } else {
+        if (y >= Ny / 2) {
+          return (int)Ch4;
+        } else {
+          return (int)Ch2;
+        }
+      }
+    }
+
+    if (detector == ZPA || detector == ZPC) {
+      if ((x + y) % 2 == 0) {
+        return (int)Common;
+      }
+      auto i = (int)(4.f * x / Nx);
+      return (int)(i + 1);
+    }
+    return -1;
+  };
+
+  auto determineMediumID = [this](int detector, int x, int y) {
+    // it is a simple checkerboard pattern
+    return ((x + y) % 2 == 0) ? mMediumPMCid : mMediumPMQid;
+  };
+
+  auto z_pos = 0.;
+  if (detector == ZPA) {
+    z_pos = o2::zdc::Geometry::ZPAPOSITION[2];
+  } else if (detector == ZPC) {
+    z_pos = o2::zdc::Geometry::ZPCPOSITION[2];
+  } else if (detector == ZNA) {
+    z_pos = o2::zdc::Geometry::ZNAPOSITION[2];
+  } else if (detector == ZNC) {
+    z_pos = o2::zdc::Geometry::ZNCPOSITION[2];
+  } else {
+    // should not happen --> we don't have fastsim for other detectors
+    LOG(fatal) << "Unsupported detector in ZDC fast sim";
+  }
+  z_pos /= 1.e02; //z_pos in m
+
+  const float tof = 1.e09 * estimateTimeOfFlight(particle, std::abs(z_pos)); //TOF in ns
+
+  // loop over x = columns
+  for (int x = 0; x < Nx; ++x) {
+    // loop over y = rows
+    for (int y = 0; y < Ny; ++y) {
+      // get sector
+      int sector = determineSectorID(detector, x, y);
+      // get medium PMQ and PMC
+      int currentMediumid = determineMediumID(detector, x, y);
+      // LOG(info) << " x " << x << " y " << y << " sec " << sector << " medium " << currentMediumid;
+      // Model output needs to be converted with exp(x)-1 function to be valid
+      int nphe = (int)std::expm1(pixels[Nx * y + x]);
+
+      if (nphe > 0) {
+        float trackenergy = 0; // energy of the primary (need to fill good value)
+        createOrAddHit(detector,
+                       sector,
+                       currentMediumid,
+                       0 /*issecondary ---> don't know in fast sim */,
+                       nphe,
+                       0 /* trackn */,
+                       0 /* parent */,
+                       tof,
+                       trackenergy,
+                       xImp,
+                       0. /* eDep */, 0 /* x */, 0. /* y */, 0. /* z */, 0. /* px */, 0. /* py */, 0. /* pz */);
+      }
+    } // end loop over y
+  }   // end loop over x
+  return true;
+}
+#endif

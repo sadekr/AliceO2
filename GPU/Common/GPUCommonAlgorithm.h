@@ -17,15 +17,14 @@
 
 #include "GPUCommonDef.h"
 
-#if !defined(GPUCA_GPUCODE)
-//&& (!defined __cplusplus || __cplusplus < 201402L) // This would enable to custom search also on the CPU if available by the compiler, but it is not always faster, so we stick to std::sort
+#if !defined(GPUCA_GPUCODE) // Could also enable custom search on the CPU, but it is not always faster, so we stick to std::sort
 #include <algorithm>
 #define GPUCA_ALGORITHM_STD
 #endif
 
 // ----------------------------- SORTING -----------------------------
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -73,9 +72,9 @@ class GPUCommonAlgorithm
   GPUd() static void IterSwap(I a, I b) noexcept;
 };
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -157,7 +156,7 @@ GPUdi() void GPUCommonAlgorithm::QuickSort(I f, I l, Cmp cmp) noexcept
   if (f == l) {
     return;
   }
-  using IndexType = unsigned short;
+  using IndexType = uint16_t;
 
   struct pair {
     IndexType first;
@@ -166,7 +165,7 @@ GPUdi() void GPUCommonAlgorithm::QuickSort(I f, I l, Cmp cmp) noexcept
 
   struct Stack {
     pair data[11];
-    unsigned char n{0};
+    uint8_t n{0};
 
     GPUd() void emplace(IndexType x, IndexType y)
     {
@@ -219,15 +218,15 @@ GPUdi() void GPUCommonAlgorithm::QuickSort(I f, I l) noexcept
 typedef GPUCommonAlgorithm CAAlgo;
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
-#if ((defined(__CUDACC__) && !defined(__clang__)) || defined(__HIPCC__))
+#if (((defined(__CUDACC__) && !defined(__clang__)) || defined(__HIPCC__))) && !defined(GPUCA_GPUCODE_GENRTC) && !defined(GPUCA_GPUCODE_HOSTONLY)
 
 #include "GPUCommonAlgorithmThrust.h"
 
 #else
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -245,20 +244,16 @@ GPUdi() void GPUCommonAlgorithm::sortDeviceDynamic(T* begin, T* end)
 template <class T, class S>
 GPUdi() void GPUCommonAlgorithm::sortDeviceDynamic(T* begin, T* end, const S& comp)
 {
-#ifndef GPUCA_GPUCODE
   GPUCommonAlgorithm::sort(begin, end, comp);
-#else
-  GPUCommonAlgorithm::sortInBlock(begin, end, comp);
-#endif
 }
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif // THRUST
 // sort and sortInBlock below are not taken from Thrust, since our implementations are faster
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -299,12 +294,12 @@ GPUdi() void GPUCommonAlgorithm::sortInBlock(T* begin, T* end, const S& comp)
 #ifndef GPUCA_GPUCODE
   GPUCommonAlgorithm::sort(begin, end, comp);
 #else
-  int n = end - begin;
-  for (int i = 0; i < n; i++) {
-    for (int tIdx = get_local_id(0); tIdx < n; tIdx += get_local_size(0)) {
-      int offset = i % 2;
-      int curPos = 2 * tIdx + offset;
-      int nextPos = curPos + 1;
+  int32_t n = end - begin;
+  for (int32_t i = 0; i < n; i++) {
+    for (int32_t tIdx = get_local_id(0); tIdx < n; tIdx += get_local_size(0)) {
+      int32_t offset = i % 2;
+      int32_t curPos = 2 * tIdx + offset;
+      int32_t nextPos = curPos + 1;
 
       if (nextPos < n) {
         if (!comp(begin[curPos], begin[nextPos])) {
@@ -334,17 +329,42 @@ GPUdi() void GPUCommonAlgorithm::swap(T& a, T& b)
 #endif
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 // ----------------------------- WORK GROUP FUNCTIONS -----------------------------
 
 #ifdef __OPENCL__
 // Nothing to do, work_group functions available
+#pragma OPENCL EXTENSION cl_khr_subgroups : enable
+
+template <class T>
+GPUdi() T work_group_scan_inclusive_add_FUNC(T v)
+{
+  return sub_group_scan_inclusive_add(v);
+}
+template <> // FIXME: It seems OpenCL does not support 8 and 16 bit subgroup operations
+GPUdi() uint8_t work_group_scan_inclusive_add_FUNC<uint8_t>(uint8_t v)
+{
+  return sub_group_scan_inclusive_add((uint32_t)v);
+}
+template <class T>
+GPUdi() T work_group_broadcast_FUNC(T v, int32_t i)
+{
+  return sub_group_broadcast(v, i);
+}
+template <>
+GPUdi() uint8_t work_group_broadcast_FUNC<uint8_t>(uint8_t v, int32_t i)
+{
+  return sub_group_broadcast((uint32_t)v, i);
+}
+
+#define warp_scan_inclusive_add(v) work_group_scan_inclusive_add_FUNC(v)
+#define warp_broadcast(v, i) work_group_broadcast_FUNC(v, i)
 
 #elif (defined(__CUDACC__) || defined(__HIPCC__))
 // CUDA and HIP work the same way using cub, need just different header
 
-#if !defined(GPUCA_GPUCODE_GENRTC) && !defined(GPUCA_GPUCODE_HOSTONLY)
+#if !defined(GPUCA_GPUCODE_COMPILEKERNELS) && !defined(GPUCA_GPUCODE_HOSTONLY)
 #if defined(__CUDACC__)
 #include <cub/cub.cuh>
 #elif defined(__HIPCC__)
@@ -363,9 +383,9 @@ GPUdi() T work_group_scan_inclusive_add_FUNC(T v, S& smem)
 
 #define work_group_broadcast(v, i) work_group_broadcast_FUNC(v, i, smem)
 template <class T, class S>
-GPUdi() T work_group_broadcast_FUNC(T v, int i, S& smem)
+GPUdi() T work_group_broadcast_FUNC(T v, int32_t i, S& smem)
 {
-  if ((int)threadIdx.x == i) {
+  if ((int32_t)threadIdx.x == i) {
     smem.tmpBroadcast = v;
   }
   __syncthreads();
@@ -392,6 +412,17 @@ GPUdi() T warp_scan_inclusive_add_FUNC(T v, S& smem)
   return v;
 }
 
+#define warp_broadcast(v, i) warp_broadcast_FUNC(v, i)
+template <class T>
+GPUdi() T warp_broadcast_FUNC(T v, int32_t i)
+{
+#ifdef __CUDACC__
+  return __shfl_sync(0xFFFFFFFF, v, i);
+#else // HIP
+  return __shfl(v, i);
+#endif
+}
+
 #else
 // Trivial implementation for the CPU
 
@@ -408,13 +439,19 @@ GPUdi() T work_group_reduce_add(T v)
 }
 
 template <class T>
-GPUdi() T work_group_broadcast(T v, int i)
+GPUdi() T work_group_broadcast(T v, int32_t i)
 {
   return v;
 }
 
 template <class T>
 GPUdi() T warp_scan_inclusive_add(T v)
+{
+  return v;
+}
+
+template <class T>
+GPUdi() T warp_broadcast(T v, int32_t i)
 {
   return v;
 }

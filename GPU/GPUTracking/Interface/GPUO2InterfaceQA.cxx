@@ -12,6 +12,7 @@
 /// \file GPUO2InterfaceQA.cxx
 /// \author David Rohr
 
+#include "TGraphAsymmErrors.h"
 #include "GPUParam.h"
 #include "GPUQA.h"
 #include "GPUO2InterfaceConfiguration.h"
@@ -29,7 +30,7 @@ GPUO2InterfaceQA::GPUO2InterfaceQA(const GPUO2InterfaceConfiguration* config)
 
 GPUO2InterfaceQA::~GPUO2InterfaceQA() = default;
 
-int GPUO2InterfaceQA::initializeForProcessing(int tasks)
+int32_t GPUO2InterfaceQA::initializeForProcessing(int32_t tasks)
 {
   return mQA->InitQA(tasks);
 }
@@ -38,14 +39,14 @@ void GPUO2InterfaceQA::runQA(const std::vector<o2::tpc::TrackTPC>* tracksExterna
 {
   mQA->RunQA(false, tracksExternal, tracksExtMC, clNative);
 }
-int GPUO2InterfaceQA::postprocess(TObjArray& out)
+int32_t GPUO2InterfaceQA::postprocess(TObjArray& out)
 {
   return mQA->DrawQAHistograms(&out);
 }
 
-int GPUO2InterfaceQA::postprocessExternal(std::vector<TH1F>& in1, std::vector<TH2F>& in2, std::vector<TH1D>& in3, TObjArray& out, int tasks)
+int32_t GPUO2InterfaceQA::postprocessExternal(std::vector<TH1F>& in1, std::vector<TH2F>& in2, std::vector<TH1D>& in3, std::vector<TGraphAsymmErrors>& in4, TObjArray& out, int32_t tasks)
 {
-  if (mQA->loadHistograms(in1, in2, in3, tasks)) {
+  if (mQA->loadHistograms(in1, in2, in3, in4, tasks)) {
     return 1;
   }
   return mQA->DrawQAHistograms(&out);
@@ -56,14 +57,21 @@ void GPUO2InterfaceQA::cleanup()
   mQA->DrawQAHistogramsCleanup();
 }
 
-void GPUO2InterfaceQA::getHists(const std::vector<TH1F>*& h1, const std::vector<TH2F>*& h2, const std::vector<TH1D>*& h3)
+void GPUO2InterfaceQA::getHists(const std::vector<TH1F>*& h1, const std::vector<TH2F>*& h2, const std::vector<TH1D>*& h3, const std::vector<TGraphAsymmErrors>*& h4)
 {
   h1 = &mQA->getHistograms1D();
   h2 = &mQA->getHistograms2D();
   h3 = &mQA->getHistograms1Dd();
+  h4 = &mQA->getGraphs();
 }
 
 void GPUO2InterfaceQA::resetHists()
 {
   mQA->resetHists();
+}
+
+void GPUO2InterfaceQA::updateGRP(GPUSettingsGRP* grp)
+{
+  mParam->UpdateSettings(grp, nullptr);
+  mQA->UpdateParam(mParam.get());
 }

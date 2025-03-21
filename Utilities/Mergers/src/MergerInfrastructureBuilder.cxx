@@ -25,7 +25,9 @@ using namespace o2::framework;
 namespace o2::mergers
 {
 
-MergerInfrastructureBuilder::MergerInfrastructureBuilder() : mOutputSpec{header::gDataOriginInvalid, header::gDataDescriptionInvalid}
+MergerInfrastructureBuilder::MergerInfrastructureBuilder()
+  : mOutputSpecIntegral{header::gDataOriginInvalid, header::gDataDescriptionInvalid},
+    mOutputSpecMovingWindow{header::gDataOriginInvalid, header::gDataDescriptionInvalid}
 {
 }
 
@@ -41,7 +43,12 @@ void MergerInfrastructureBuilder::setInputSpecs(const framework::Inputs& inputs)
 
 void MergerInfrastructureBuilder::setOutputSpec(const framework::OutputSpec& outputSpec)
 {
-  mOutputSpec = outputSpec;
+  mOutputSpecIntegral = outputSpec;
+}
+
+void MergerInfrastructureBuilder::setOutputSpecMovingWindow(const framework::OutputSpec& outputSpec)
+{
+  mOutputSpecMovingWindow = outputSpec;
 }
 
 void MergerInfrastructureBuilder::setConfig(MergerConfig config)
@@ -52,32 +59,60 @@ void MergerInfrastructureBuilder::setConfig(MergerConfig config)
 std::string MergerInfrastructureBuilder::validateConfig()
 {
   std::string error;
-  const std::string preamble = "mergers::MergerInfrastructureBuilder error: ";
+  const std::string preamble = "MergerInfrastructureBuilder error: ";
   if (mInfrastructureName.empty()) {
     error += preamble + "the infrastructure name is empty\n";
   }
   if (mInputs.empty()) {
     error += preamble + "no inputs specified\n";
   }
-  if (DataSpecUtils::validate(mOutputSpec) == false) {
+  if (DataSpecUtils::validate(mOutputSpecIntegral) == false) {
     error += preamble + "invalid output\n";
   }
 
-  if (mConfig.topologySize.value == TopologySize::NumberOfLayers && mConfig.topologySize.param < 1) {
-    error += preamble + "number of layers less than 1 (" + std::to_string(mConfig.topologySize.param) + ")\n";
+  if ((mConfig.topologySize.value == TopologySize::NumberOfLayers || mConfig.topologySize.value == TopologySize::ReductionFactor) && !std::holds_alternative<int>(mConfig.topologySize.param)) {
+    error += preamble + "TopologySize::NumberOfLayers and TopologySize::ReductionFactor require a single int as parameter\n";
+  } else {
+    if (mConfig.topologySize.value == TopologySize::NumberOfLayers && std::get<int>(mConfig.topologySize.param) < 1) {
+      error += preamble + "number of layers less than 1 (" + std::to_string(std::get<int>(mConfig.topologySize.param)) + ")\n";
+    }
+    if (mConfig.topologySize.value == TopologySize::ReductionFactor && std::get<int>(mConfig.topologySize.param) < 2) {
+      error += preamble + "reduction factor smaller than 2 (" + std::to_string(std::get<int>(mConfig.topologySize.param)) + ")\n";
+    }
   }
-  if (mConfig.topologySize.value == TopologySize::ReductionFactor && mConfig.topologySize.param < 2) {
-    error += preamble + "reduction factor smaller than 2 (" + std::to_string(mConfig.topologySize.param) + ")\n";
+  if (mConfig.topologySize.value == TopologySize::MergersPerLayer) {
+    if (!std::holds_alternative<std::vector<size_t>>(mConfig.topologySize.param)) {
+      error += preamble + "TopologySize::MergersPerLayer require std::vector<size_t> as parameter\n";
+    } else {
+      auto mergersPerLayer = std::get<std::vector<size_t>>(mConfig.topologySize.param);
+      if (mergersPerLayer.empty()) {
+        error += preamble + "TopologySize::MergersPerLayer was used, but the provided vector is empty\n";
+      } else if (mergersPerLayer.back() != 1) {
+        error += preamble + "Last Merger layer should consist of one Merger, " + mergersPerLayer.back() + " was used\n";
+      }
+    }
+  }
+
+  if (mConfig.inputObjectTimespan.value == InputObjectsTimespan::FullHistory && mConfig.parallelismType.value == ParallelismType::RoundRobin) {
+    error += preamble + "ParallelismType::RoundRobin does not apply to InputObjectsTimespan::FullHistory\n";
   }
 
   if (mConfig.inputObjectTimespan.value == InputObjectsTimespan::FullHistory && mConfig.mergedObjectTimespan.value == MergedObjectTimespan::LastDifference) {
     error += preamble + "MergedObjectTimespan::LastDifference does not apply to InputObjectsTimespan::FullHistory\n";
   }
 
+  if (mConfig.publishMovingWindow.value == PublishMovingWindow::Yes && mConfig.inputObjectTimespan.value == InputObjectsTimespan::FullHistory) {
+    error += preamble + "PublishMovingWindow::Yes is not supported with InputObjectsTimespan::FullHistory\n";
+  }
+
   for (const auto& input : mInputs) {
-    if (DataSpecUtils::match(input, mOutputSpec)) {
-      error += preamble + "output '" + DataSpecUtils::label(mOutputSpec) + "' matches input '" + DataSpecUtils::label(input) + "'. That will cause a circular dependency!";
+    if (DataSpecUtils::match(input, mOutputSpecIntegral)) {
+      error += preamble + "output '" + DataSpecUtils::label(mOutputSpecIntegral) + "' matches input '" + DataSpecUtils::label(input) + "'. That will cause a circular dependency!";
     }
+  }
+
+  if (mConfig.detectorName.empty()) {
+    error += preamble + "detector name is empty";
   }
 
   return error;
@@ -93,41 +128,53 @@ framework::WorkflowSpec MergerInfrastructureBuilder::generateInfrastructure()
   auto layerInputs = mInputs;
 
   // preparing some numbers
-  auto mergersPerLayer = computeNumberOfMergersPerLayer(layerInputs.size());
+  const auto mergersPerLayer = computeNumberOfMergersPerLayer(layerInputs.size());
+  const bool expendable = std::ranges::any_of(mConfig.labels, [](const auto& label) { return label.value == "expendable"; });
 
-  // actual topology generation
+  // topology generation
   MergerBuilder mergerBuilder;
   mergerBuilder.setName(mInfrastructureName);
+  mergerBuilder.setOutputSpecMovingWindow(mOutputSpecMovingWindow);
+
   for (size_t layer = 1; layer < mergersPerLayer.size(); layer++) {
 
     size_t numberOfMergers = mergersPerLayer[layer];
-    size_t inputsPerMerger = layerInputs.size() / numberOfMergers;
-    size_t inputsPerMergerRemainder = layerInputs.size() % numberOfMergers;
+    size_t splitInputsMergers = mConfig.parallelismType.value == ParallelismType::SplitInputs ? numberOfMergers : 1;
+    size_t timePipelineVal = mConfig.parallelismType.value == ParallelismType::SplitInputs ? 1 : numberOfMergers;
+    size_t inputsPerMerger = layerInputs.size() / splitInputsMergers;
+    size_t inputsPerMergerRemainder = layerInputs.size() % splitInputsMergers;
 
     MergerConfig layerConfig = mConfig;
     if (layer < mergersPerLayer.size() - 1) {
       // in intermediate layers we should reset the results, so the same data is not added many times.
       layerConfig.mergedObjectTimespan = {MergedObjectTimespan::NCycles, 1};
+      // we also expect moving windows to be published only by the last layer
+      layerConfig.publishMovingWindow = {PublishMovingWindow::No};
     }
-    mergerBuilder.setConfig(layerConfig);
 
     framework::Inputs nextLayerInputs;
     auto inputsRangeBegin = layerInputs.begin();
 
-    for (size_t m = 0; m < numberOfMergers; m++) {
+    for (size_t m = 0; m < splitInputsMergers; m++) {
 
       mergerBuilder.setTopologyPosition(layer, m);
+      mergerBuilder.setTimePipeline(timePipelineVal);
 
       auto inputsRangeEnd = inputsRangeBegin + inputsPerMerger + (m < inputsPerMergerRemainder);
       mergerBuilder.setInputSpecs(framework::Inputs(inputsRangeBegin, inputsRangeEnd));
-      inputsRangeBegin = inputsRangeEnd;
 
-      if (numberOfMergers == 1) {
-        assert(layer == mergersPerLayer.size() - 1);
-        // the last layer => use the specified external OutputSpec
-        mergerBuilder.setOutputSpec(mOutputSpec);
+      if (layer > 1 && !expendable) {
+        // we optimize the latency of higher Merger layers by publishing an object as soon as we get the expected number of inputs.
+        // we can do that safely only if tasks are not expendable, i.e. we are guaranteed that workflow stops if a Merger crashes.
+        const auto inputNumber = std::distance(inputsRangeBegin, inputsRangeEnd);
+        assert(inputNumber != 0);
+        layerConfig.publicationDecision = {PublicationDecision::EachNArrivals, inputNumber};
       }
-
+      if (layer == mergersPerLayer.size() - 1) {
+        // the last layer => use the specified external OutputSpec
+        mergerBuilder.setOutputSpec(mOutputSpecIntegral);
+      }
+      mergerBuilder.setConfig(layerConfig);
       auto merger = mergerBuilder.buildSpec();
 
       auto input = DataSpecUtils::matchingInput(merger.outputs.at(0));
@@ -135,8 +182,9 @@ framework::WorkflowSpec MergerInfrastructureBuilder::generateInfrastructure()
       nextLayerInputs.push_back(input);
 
       workflow.emplace_back(std::move(merger));
+      inputsRangeBegin = inputsRangeEnd;
     }
-    layerInputs = nextLayerInputs; //todo: could be optimised with pointers
+    layerInputs = nextLayerInputs; // todo: could be optimised with pointers
   }
 
   return workflow;
@@ -154,12 +202,12 @@ std::vector<size_t> MergerInfrastructureBuilder::computeNumberOfMergersPerLayer(
     //             |            |
     //
 
-    size_t L = mConfig.topologySize.param;
+    size_t L = std::get<int>(mConfig.topologySize.param);
     for (size_t i = 1; i <= L; i++) {
       mergersPerLayer.push_back(static_cast<size_t>(ceil(pow(inputs, (L - i) / static_cast<double>(L)))));
     }
 
-  } else { // mConfig.topologySize.value == TopologySize::ReductionFactor
+  } else if (mConfig.topologySize.value == TopologySize::ReductionFactor) {
     //              _        _
     //             |  |V|     |  where:
     //  |V|  ---   |  | |i-1  |  R   - reduction factor
@@ -167,13 +215,16 @@ std::vector<size_t> MergerInfrastructureBuilder::computeNumberOfMergersPerLayer(
     //             |    R     |  M_i - number of mergers in i layer
     //
 
-    double R = mConfig.topologySize.param;
+    double R = std::get<int>(mConfig.topologySize.param);
     size_t Mi, prevMi = inputs;
     do {
       Mi = static_cast<size_t>(ceil(prevMi / R));
       mergersPerLayer.push_back(Mi);
       prevMi = Mi;
     } while (Mi > 1);
+  } else { // mConfig.topologySize.value == TopologySize::MergersPerLayer
+    auto mergersPerLayerConfig = std::get<std::vector<size_t>>(mConfig.topologySize.param);
+    mergersPerLayer.insert(mergersPerLayer.cend(), mergersPerLayerConfig.begin(), mergersPerLayerConfig.end());
   }
 
   return mergersPerLayer;

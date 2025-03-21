@@ -13,10 +13,8 @@
 
 #include "Framework/InputSpec.h"
 #include "Framework/OutputSpec.h"
-#include "Framework/ForwardRoute.h"
 #include "Framework/WorkflowSpec.h"
 #include "Framework/DataOutputDirector.h"
-#include "Framework/DataProcessorInfo.h"
 
 #include <cstddef>
 #include <vector>
@@ -49,6 +47,7 @@ struct LogicalOutputInfo {
   size_t specIndex;
   size_t outputGlobalIndex;
   bool forward;
+  bool enabled = true;
 };
 
 // We use this to keep track of the forwards which should
@@ -139,6 +138,11 @@ struct TopoIndexInfo {
   friend std::ostream& operator<<(std::ostream& out, TopoIndexInfo const& info);
 };
 
+// Information about the policies which were derived for a given data processor.
+struct DataProcessorPoliciesInfo {
+  std::string completionPolicyName;
+};
+
 struct OutputObj {
   InputSpec spec;
   bool isdangling;
@@ -176,11 +180,10 @@ struct WorkflowHelpers {
   // dangling inputs are satisfied.
   // @a workflow the workflow to decorate
   // @a ctx the context for the configuration phase
-  static void injectServiceDevices(WorkflowSpec& workflow, ConfigContext const& ctx);
+  static void injectServiceDevices(WorkflowSpec& workflow, ConfigContext& ctx);
 
-  // Re-adjust service devices if the inputs of other devices were modified
-  // @a workflow to analyze
-  static void adjustServiceDevices(WorkflowSpec& workflow);
+  // Final adjustments to @a workflow after service devices have been injected.
+  static void adjustTopology(WorkflowSpec& workflow, ConfigContext const& ctx);
 
   static void constructGraph(const WorkflowSpec& workflow,
                              std::vector<DeviceConnectionEdge>& logicalEdges,
@@ -201,19 +204,24 @@ struct WorkflowHelpers {
     const std::vector<DeviceConnectionEdge>& edges,
     const std::vector<size_t>& index);
 
-  static std::shared_ptr<DataOutputDirector> getDataOutputDirector(ConfigParamRegistry const& options, std::vector<InputSpec> const& OutputsInputs, std::vector<unsigned char> const& outputTypes);
-
   /// Given @a workflow it gathers all the OutputSpec and in addition provides
   /// the information whether and output is dangling and/or of type AOD
   /// An Output is dangling if it does not have a corresponding InputSpec.
-  /// The type of the output is encoded in an unsigend char whichs values are defined by
-  /// 0 + isdangling*1 + isAOD*2
-  /// @return a vector of InputSpec of all outputs and a vector of unsigned char
-  /// with the encoded output type
-  static std::tuple<std::vector<InputSpec>, std::vector<unsigned char>> analyzeOutputs(WorkflowSpec const& workflow);
+  /// @return a vector of InputSpec of all outputs and a vector of bool
+  /// wether the output is dangling
+  static std::tuple<std::vector<InputSpec>, std::vector<bool>> analyzeOutputs(WorkflowSpec const& workflow);
 
   /// returns only dangling outputs
   static std::vector<InputSpec> computeDanglingOutputs(WorkflowSpec const& workflow);
+
+  /// Validate that the nodes at the ends of the edges of the graph
+  /// are actually compatible with each other.
+  /// For example we should make sure that Lifetime::Timeframe inputs of
+  /// one node is not connected to an Output of Lifetime::Sporadic of another node.
+  static void validateEdges(WorkflowSpec const& workflow,
+                            std::vector<DataProcessorPoliciesInfo> const& policiesInfos,
+                            std::vector<DeviceConnectionEdge> const& edges,
+                            std::vector<OutputSpec> const& outputs);
 };
 
 } // namespace o2::framework

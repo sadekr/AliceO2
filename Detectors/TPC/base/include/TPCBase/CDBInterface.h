@@ -24,11 +24,14 @@
 #include "CCDB/BasicCCDBManager.h"
 #include "CCDB/CcdbApi.h"
 #include "TPCBase/CalDet.h"
+#include "TPCBase/FEEConfig.h"
+#include "TPCBase/CDBTypes.h"
+#include "TPCBase/DeadChannelMapCreator.h"
 #include "DataFormatsTPC/LtrCalibData.h"
+#include "DataFormatsTPC/Defs.h"
+#include "CommonUtils/NameConf.h"
 
-namespace o2
-{
-namespace tpc
+namespace o2::tpc
 {
 // forward declarations
 class ParameterDetector;
@@ -36,42 +39,10 @@ class ParameterElectronics;
 class ParameterGas;
 class ParameterGEM;
 
-/// Calibration and parameter types for CCDB
-enum class CDBType {
-  CalPedestal,        ///< Pedestal calibration
-  CalNoise,           ///< Noise calibration
-  CalPulser,          ///< Pulser calibration
-  CalCE,              ///< Laser CE calibration
-  CalPadGainFull,     ///< Full pad gain calibration
-  CalPadGainResidual, ///< ResidualpPad gain calibration (e.g. from tracks)
-  CalLaserTracks,     ///< Laser track calibration data
-                      ///
-  ParDetector,        ///< Parameter for Detector
-  ParElectronics,     ///< Parameter for Electronics
-  ParGas,             ///< Parameter for Gas
-  ParGEM,             ///< Parameter for GEM
-};
-
 /// Upload intervention type
 enum class CDBIntervention {
   Manual,    ///< Upload from manual intervention
   Automatic, ///< Automatic upload
-};
-
-/// Storage name in CCDB for each calibration and parameter type
-const std::unordered_map<CDBType, std::string> CDBTypeMap{
-  {CDBType::CalPedestal, "TPC/Calib/Pedestal"},
-  {CDBType::CalNoise, "TPC/Calib/Noise"},
-  {CDBType::CalPulser, "TPC/Calib/Pulser"},
-  {CDBType::CalCE, "TPC/Calib/CE"},
-  {CDBType::CalPadGainFull, "TPC/Calib/PadGainFull"},
-  {CDBType::CalPadGainResidual, "TPC/Calib/PadGainResidual"},
-  {CDBType::CalLaserTracks, "TPC/Calib/LaserTracks"},
-  //
-  {CDBType::ParDetector, "TPC/Parameter/Detector"},
-  {CDBType::ParElectronics, "TPC/Parameter/Electronics"},
-  {CDBType::ParGas, "TPC/Parameter/Gas"},
-  {CDBType::ParGEM, "TPC/Parameter/GEM"},
 };
 
 /// Poor enum reflection ...
@@ -89,11 +60,14 @@ const std::unordered_map<CDBIntervention, std::string> CDBInterventionMap{
 /// To use this one needs to call
 /// <pre>CDBInterface::instance().setUseDefaults();</pre>
 /// at some point.
-/// It also allows to specifically load pedestals and noise from file using the
+/// It also allows to specifically load pedestals and noise from a file using the
 /// <pre>loadNoiseAndPedestalFromFile(...)</pre> function
 class CDBInterface
 {
  public:
+  using CalPadMapType = std::unordered_map<std::string, CalPad>;
+  using CalPadFlagType = CalDet<PadFlags>;
+
   CDBInterface(const CDBInterface&) = delete;
 
   /// Create instance of singleton
@@ -111,12 +85,20 @@ class CDBInterface
   /// \return pedestal object
   const CalPad& getPedestals();
 
+  /// Return the pedestal object with 10+2bit precision as used in the CRU
+  ///
+  /// \return pedestal object as used in the CRU
+  const CalPad& getPedestalsCRU();
+
   /// Return the noise object
   ///
   /// The function checks if the object is already loaded and returns it
   /// otherwise the object will be loaded first depending on the configuration
   /// \return noise object
   const CalPad& getNoise();
+
+  /// Return the zero suppression threshold map
+  const CalPad& getZeroSuppressionThreshold();
 
   /// Return the gain map object
   ///
@@ -125,6 +107,32 @@ class CDBInterface
   /// \return gain map object
   const CalPad& getGainMap();
 
+  /// Return the ion tail coupling fraction
+  ///
+  /// \return ion tail fraction
+  const CalPad& getITFraction();
+
+  /// Return the ion tail exponential decay parameter
+  ///
+  /// \return ion tail exponential decay parameter
+  const CalPad& getITExpLambda();
+
+  /// Return the common mode per pad values
+  ///
+  /// \return common mode per pad values
+  const CalPad& getCMkValues();
+
+  /// Pad status flags from IDCs
+  const CalPadFlagType& getPadFlags();
+
+  /// Return FEEConfig
+  const FEEConfig& getFEEConfig();
+
+  /// Dead channel map creator
+  DeadChannelMapCreator& getDeadChannelMapCreator() { return mDeadChannelMapCreator; }
+
+  /// Dead channel map
+  const CalDet<bool>& getDeadChannelMap();
   /// Return the Detector parameters
   ///
   /// The function checks if the object is already loaded and returns it
@@ -164,6 +172,10 @@ class CDBInterface
   template <typename T>
   T& getSpecificObjectFromCDB(const std::string_view path, long timestamp = -1, const std::map<std::string, std::string>& metaData = std::map<std::string, std::string>());
 
+  /// read an object from CCDB
+  template <typename T>
+  T& getObjectFromCDB(std::string_view path);
+
   /// Set noise and pedestal object from file
   ///
   /// This assumes that the objects are stored under the name
@@ -179,10 +191,27 @@ class CDBInterface
   /// \param fileName name of the file containing gain map
   void setGainMapFromFile(const std::string_view fileName) { mGainMapFileName = fileName; }
 
+  /// Set zero suppression thresholds from file (will load all FEE params)
+  ///
+  /// This assumes that the objects is stored under the name 'ThresholdMap'
+  ///
+  /// \param fileName name of the file containing the threshold map
+  void setThresholdMapFromFile(const std::string_view fileName) { mFEEParamFileName = fileName; }
+
+  /// Set FEE parameters from file
+  ///
+  /// This assumes that the objects are stored under the name 'fraction,expLambda'
+  ///
+  /// \param fileName name of the file containing the ion tail parameters
+  void setFEEParamsFromFile(const std::string_view fileName) { mFEEParamFileName = fileName; }
+
   /// Force using default values instead of reading the CCDB
   ///
   /// \param default switch if to use default values
   void setUseDefaults(bool defaults = true) { mUseDefaults = defaults; }
+
+  /// return defaults usage
+  bool getUseDefaults() const { return mUseDefaults; }
 
   /// set CDB time stamp for object retrieval
   void setTimeStamp(long time)
@@ -196,6 +225,14 @@ class CDBInterface
   {
     auto& cdb = o2::ccdb::BasicCCDBManager::instance();
     cdb.setURL(url.data());
+    mDeadChannelMapCreator.init(url);
+  }
+
+  /// set the Zero suppression threshold in sigma of noise in case
+  /// the default object is created and not loaded from file or ccdb
+  void setDefaultZSsigma(float zs)
+  {
+    mDefaultZSsigma = zs;
   }
 
   /// Reset the local calibration
@@ -203,34 +240,51 @@ class CDBInterface
   {
     mPedestals.reset();
     mNoise.reset();
+    mZeroSuppression.reset();
     mGainMap.reset();
   }
 
  private:
-  CDBInterface() = default;
+  CDBInterface();
 
-  // ===| Pedestal and noise |==================================================
-  std::unique_ptr<CalPad> mPedestals; ///< Pedestal object
-  std::unique_ptr<CalPad> mNoise;     ///< Noise object
-  std::unique_ptr<CalPad> mGainMap;   ///< Gain map object
+  // ===| Pad calibrations |====================================================
+  std::unique_ptr<CalPad> mPedestals;        ///< Pedestal object
+  std::unique_ptr<CalPad> mPedestalsCRU;     ///< Pedestal object with 10+2bit precision as used in CRU
+  std::unique_ptr<CalPad> mNoise;            ///< Noise object
+  std::unique_ptr<CalPad> mZeroSuppression;  ///< Zero suppression object
+  std::unique_ptr<CalPad> mGainMap;          ///< Gain map object
+  std::unique_ptr<CalPad> mITFraction;       ///< Ion Tail fraction
+  std::unique_ptr<CalPad> mITExpLambda;      ///< Ion Tail exp(-lambda)
+  std::unique_ptr<CalPad> mCMkValues;        ///< Ion Tail exp(-lambda)
+  std::unique_ptr<CalPadFlagType> mPadFlags; ///< Pad flags from IDCs
+
+  std::unique_ptr<FEEConfig> mFEEConfig; ///< FEE Config
 
   // ===| switches and parameters |=============================================
-  bool mUseDefaults = false; ///< use defaults instead of CCDB
+  bool mUseDefaults = false;   ///< use defaults instead of CCDB
+  float mDefaultZSsigma = 3.f; ///< sigma to use in case the default zero suppression is created
 
-  std::string mPedestalNoiseFileName; ///< optional file name for pedestal and noise data
-  std::string mGainMapFileName;       ///< optional file name for the gain map
+  std::string mPedestalNoiseFileName;           ///< optional file name for pedestal and noise data
+  std::string mGainMapFileName;                 ///< optional file name for the gain map
+  std::string mFEEParamFileName;                ///< optional file name for the FEE parameters (ion tail, common mode, threshold, pedestals)
+  DeadChannelMapCreator mDeadChannelMapCreator; ///< creation of dead channel map
 
   // ===========================================================================
   // ===| functions |===========================================================
   //
   void loadNoiseAndPedestalFromFile(); ///< load noise and pedestal values from mPedestalNoiseFileName
   void loadGainMapFromFile();          ///< load gain map from mGainmapFileName
+  void loadFEEParamsFromFile();        ///< load ion tail paramters
+
   void createDefaultPedestals();       ///< creation of default pedestals if requested
   void createDefaultNoise();           ///< creation of default noise if requested
+  void createDefaultZeroSuppression(); ///< creation of default noise if requested
   void createDefaultGainMap();         ///< creation of default gain map if requested
+  void createDefaultIonTailParams();   ///< creation of default ion tail parameters
+  void createDefaultCMParams();        ///< creation of default common mode parameters
+  void createDefaultPadFlags();        ///< creation of default pad flags
 
-  template <typename T>
-  T& getObjectFromCDB(std::string_view path);
+  void createFEEConfig(); ///< create a best guess FEEConfig;
 };
 
 /// Get an object from the CCDB.
@@ -243,6 +297,9 @@ inline T& CDBInterface::getObjectFromCDB(std::string_view path)
 {
   static auto& cdb = o2::ccdb::BasicCCDBManager::instance();
   auto* object = cdb.get<T>(path.data());
+  if (!object) {
+    LOGP(fatal, "Could not get {} from cdb", path);
+  }
   return *object;
 }
 
@@ -263,7 +320,7 @@ inline T& CDBInterface::getSpecificObjectFromCDB(std::string_view path, long tim
 
 template CalPad& CDBInterface::getSpecificObjectFromCDB(const std::string_view path, long timestamp, const std::map<std::string, std::string>& metaData);
 template std::vector<CalPad>& CDBInterface::getSpecificObjectFromCDB(const std::string_view path, long timestamp, const std::map<std::string, std::string>& metaData);
-template std::unordered_map<std::string, o2::tpc::CalPad>& CDBInterface::getSpecificObjectFromCDB(const std::string_view path, long timestamp, const std::map<std::string, std::string>& metaData);
+template CDBInterface::CalPadMapType& CDBInterface::getSpecificObjectFromCDB(const std::string_view path, long timestamp, const std::map<std::string, std::string>& metaData);
 template LtrCalibData& CDBInterface::getSpecificObjectFromCDB(const std::string_view path, long timestamp, const std::map<std::string, std::string>& metaData);
 
 /// \class CDBStorage
@@ -278,6 +335,11 @@ class CDBStorage
   void setURL(std::string_view url)
   {
     mCCDB.init(url.data());
+  }
+
+  void clearMetaData()
+  {
+    mMetaData.clear();
   }
 
   void setResponsible(std::string_view responsible)
@@ -305,11 +367,26 @@ class CDBStorage
     mMetaData["Comment"] = comment;
   }
 
+  void setRunNumber(int run)
+  {
+    mMetaData[o2::base::NameConf::CCDBRunTag.data()] = std::to_string(run);
+  }
+
+  const auto& getMetaData() const { return mMetaData; }
+
+  std::string getMetaDataString() const;
+
+  void setSimulate(bool sim = true) { mSimulate = sim; }
+
+  bool getSimulate() const { return mSimulate; }
+
   template <typename T>
   void storeObject(T* obj, CDBType const type, MetaData_t const& metadata, long start, long end)
   {
     if (checkMetaData(metadata)) {
-      mCCDB.storeAsTFileAny(obj, CDBTypeMap.at(type), metadata, start, end);
+      if (!mSimulate) {
+        mCCDB.storeAsTFileAny(obj, CDBTypeMap.at(type), metadata, start, end);
+      }
       printObjectSummary(typeid(obj).name(), type, metadata, start, end);
     } else {
       LOGP(error, "Meta data not set properly, object will not be stored");
@@ -322,9 +399,11 @@ class CDBStorage
     storeObject(obj, type, mMetaData, start, end);
   }
 
-  void uploadNoiseAndPedestal(std::string_view fileName, long first = -1, long last = -1);
-  void uploadGainMap(std::string_view fileName, bool isFull = true, long first = -1, long last = -1);
-  void uploadPulserOrCEData(CDBType type, std::string_view fileName, long first = -1, long last = -1);
+  void uploadNoiseAndPedestal(std::string_view fileName, long first = -1, long last = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
+  void uploadGainMap(std::string_view fileName, bool isFull = true, long first = -1, long last = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
+  void uploadPulserOrCEData(CDBType type, std::string_view fileName, long first = -1, long last = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
+  void uploadFEEConfigPad(std::string_view fileName, long first = -1, long last = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
+  void uploadTimeGain(std::string_view fileName, long first = -1, long last = o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
 
  private:
   bool checkMetaData(MetaData_t metaData) const;
@@ -333,9 +412,9 @@ class CDBStorage
 
   o2::ccdb::CcdbApi mCCDB;
   MetaData_t mMetaData;
+  bool mSimulate = false;
 };
 
-} // namespace tpc
-} // namespace o2
+} // namespace o2::tpc
 
 #endif

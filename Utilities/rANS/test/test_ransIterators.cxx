@@ -1,4 +1,4 @@
-// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// Copyright 2019-2023 CERN and copyright holders of ALICE O2.
 // See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
 // All rights not expressly granted are reserved.
 //
@@ -11,8 +11,7 @@
 
 /// @file   test_ransIterators.cxx
 /// @author michael.lettrich@cern.ch
-/// @since  2020-10-28
-/// @brief
+/// @brief test iterators that allow to zip/unzip data on the fly
 
 #define BOOST_TEST_MODULE Utility test
 #define BOOST_TEST_MAIN
@@ -20,7 +19,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "rANS/utils.h"
+#include "rANS/iterator.h"
 
 class ShiftFunctor
 {
@@ -56,17 +55,28 @@ struct test_CombninedIteratorFixture {
 BOOST_FIXTURE_TEST_CASE(test_CombinedInputIteratorBase, test_CombninedIteratorFixture)
 {
 
-  o2::rans::utils::CombinedInputIterator iter(a.begin(), b.begin(), f);
+  o2::rans::CombinedInputIterator iter(a.begin(), b.begin(), f);
   // test equal
-  const o2::rans::utils::CombinedInputIterator first(a.begin(), b.begin(), f);
+  const o2::rans::CombinedInputIterator first(a.begin(), b.begin(), f);
   BOOST_CHECK_EQUAL(iter, first);
   // test not equal
-  const o2::rans::utils::CombinedInputIterator second(++(a.begin()), ++(b.begin()), f);
+  const o2::rans::CombinedInputIterator second(++(a.begin()), ++(b.begin()), f);
   BOOST_CHECK_NE(iter, second);
+  // test smaller
+  BOOST_CHECK_LT(first, second);
+  // test greater
+  BOOST_CHECK_GT(second, first);
+  // test greater-equals
+  BOOST_CHECK_GE(second, first);
+  BOOST_CHECK_GE(first, first);
+  // test smaller-equals
+  BOOST_CHECK_LE(first, second);
+  BOOST_CHECK_LE(first, first);
+
   // test pre-increment
   ++iter;
   BOOST_CHECK_EQUAL(iter, second);
-  //test post-increment
+  // test post-increment
   iter = first;
   BOOST_CHECK_EQUAL(iter++, first);
   BOOST_CHECK_EQUAL(iter, second);
@@ -79,9 +89,33 @@ BOOST_FIXTURE_TEST_CASE(test_CombinedInputIteratorBase, test_CombninedIteratorFi
   BOOST_CHECK_EQUAL(iter--, second);
   BOOST_CHECK_EQUAL(iter, first);
 
-  //test deref
+  // test +=
+  iter = first;
+  iter += 1;
+  BOOST_CHECK_EQUAL(iter, second);
+  // test +
+  iter = first;
+  BOOST_CHECK_EQUAL(first + 1, second);
+  BOOST_CHECK_EQUAL(1 + first, second);
+
+  // check -=
+  iter = second;
+  iter -= 1;
+  BOOST_CHECK_EQUAL(iter, first);
+
+  // check -
+  BOOST_CHECK_EQUAL(second - 1, first);
+
+  // check -
+  BOOST_CHECK_EQUAL(second - first, 1);
+
+  // test deref
   const uint32_t val = first.operator*();
+
   BOOST_CHECK_EQUAL(val, aAndB.front());
+
+  // check []
+  BOOST_CHECK_EQUAL(first[1], *second);
 }
 
 BOOST_FIXTURE_TEST_CASE(test_CombinedOutputIteratorBase, test_CombninedIteratorFixture)
@@ -89,7 +123,7 @@ BOOST_FIXTURE_TEST_CASE(test_CombinedOutputIteratorBase, test_CombninedIteratorF
   std::vector<uint16_t> aOut(2, 0x0);
   std::vector<uint16_t> bOut(2, 0x0);
 
-  o2::rans::utils::CombinedOutputIteratorFactory<uint32_t> iterFactory;
+  o2::rans::CombinedOutputIteratorFactory<uint32_t> iterFactory;
   auto iter = iterFactory.makeIter(aOut.begin(), bOut.begin(), f);
 
   // test deref:
@@ -128,8 +162,8 @@ BOOST_FIXTURE_TEST_CASE(test_CombinedOutputIteratorBase, test_CombninedIteratorF
 BOOST_FIXTURE_TEST_CASE(test_CombinedInputIteratorReadArray, test_CombninedIteratorFixture)
 {
 
-  const o2::rans::utils::CombinedInputIterator begin(a.begin(), b.begin(), f);
-  const o2::rans::utils::CombinedInputIterator end(a.end(), b.end(), f);
+  const o2::rans::CombinedInputIterator begin(a.begin(), b.begin(), f);
+  const o2::rans::CombinedInputIterator end(a.end(), b.end(), f);
   BOOST_CHECK_EQUAL_COLLECTIONS(begin, end, aAndB.begin(), aAndB.end());
 };
 
@@ -138,18 +172,11 @@ BOOST_FIXTURE_TEST_CASE(test_CombinedOutputIteratorWriteArray, test_CombninedIte
   std::vector<uint16_t> aRes(a.size(), 0);
   std::vector<uint16_t> bRes(b.size(), 0);
 
-  auto iter = o2::rans::utils::CombinedOutputIteratorFactory<uint32_t>::makeIter(aRes.begin(), bRes.begin(), f);
+  auto iter = o2::rans::CombinedOutputIteratorFactory<uint32_t>::makeIter(aRes.begin(), bRes.begin(), f);
   for (auto input : aAndB) {
     *iter++ = input;
   }
 
   BOOST_CHECK_EQUAL_COLLECTIONS(aRes.begin(), aRes.end(), a.begin(), a.end());
   BOOST_CHECK_EQUAL_COLLECTIONS(bRes.begin(), bRes.end(), b.begin(), b.end());
-};
-
-BOOST_AUTO_TEST_CASE(test_Functions)
-{
-  std::vector<size_t> A(2);
-  BOOST_CHECK_THROW(o2::rans::utils::checkBounds(std::end(A), std::begin(A)), std::runtime_error);
-  BOOST_CHECK_NO_THROW(o2::rans::utils::checkBounds(std::begin(A), std::end(A)));
 };

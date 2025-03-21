@@ -44,142 +44,114 @@ void CTFCoder::compress(CompressedInfos& cc,
 {
   // store in the header the orbit of 1st ROF
   cc.clear();
+  cc.header.det = mDet;
   if (!rofRecVec.size()) {
     return;
   }
-  const auto& rofRec0 = rofRecVec[0];
-  int nrof = rofRecVec.size();
-
-  LOGF(DEBUG, "TOF compress %d ReadoutWindow with %ld digits", nrof, cdigVec.size());
-
-  cc.header.nROFs = nrof;
-  cc.header.firstOrbit = rofRec0.getBCData().orbit;
-  cc.header.firstBC = rofRec0.getBCData().bc;
-  cc.header.nPatternBytes = pattVec.size();
-  cc.header.nDigits = cdigVec.size();
-
-  cc.bcIncROF.resize(cc.header.nROFs);
-  cc.orbitIncROF.resize(cc.header.nROFs);
-  cc.ndigROF.resize(cc.header.nROFs);
-  cc.ndiaROF.resize(cc.header.nROFs);
-  cc.ndiaCrate.resize(cc.header.nROFs * 72);
-  //
-  cc.timeFrameInc.resize(cc.header.nDigits);
-  cc.timeTDCInc.resize(cc.header.nDigits);
-  cc.stripID.resize(cc.header.nDigits);
-  cc.chanInStrip.resize(cc.header.nDigits);
-  cc.tot.resize(cc.header.nDigits);
-  cc.pattMap.resize(pattVec.size());
-
-  uint16_t prevBC = cc.header.firstBC;
-  uint32_t prevOrbit = cc.header.firstOrbit;
-
   std::vector<Digit> digCopy;
+  int ndigTot = 0, nrofTot = 0, nrofIni = rofRecVec.size(), ndigIni = cdigVec.size();
+  uint16_t prevBC = 0;
+  uint32_t prevOrbit = 0;
+  LOGF(debug, "TOF compress %d ReadoutWindow with %ld digits", nrofIni, ndigIni);
+  if (!mIRFrameSelector.isSet()) {
+    cc.bcIncROF.reserve(nrofIni);
+    cc.orbitIncROF.reserve(nrofIni);
+    cc.ndigROF.reserve(nrofIni);
+    cc.ndiaROF.reserve(nrofIni);
+    cc.ndiaCrate.reserve(nrofIni * 72);
 
-  for (uint32_t irof = 0; irof < rofRecVec.size(); irof++) {
-    const auto& rofRec = rofRecVec[irof];
+    cc.timeFrameInc.reserve(ndigIni);
+    cc.timeTDCInc.reserve(ndigIni);
+    cc.stripID.reserve(ndigIni);
+    cc.chanInStrip.reserve(ndigIni);
+    cc.tot.reserve(ndigIni);
+  }
 
-    const auto& intRec = rofRec.getBCData();
-    int64_t rofInBC = intRec.toLong();
-    // define interaction record
-    if (intRec.orbit == prevOrbit) {
-      cc.orbitIncROF[irof] = 0;
-      cc.bcIncROF[irof] = intRec.bc - prevBC; // store increment of BC if in the same orbit
-    } else {
-      cc.orbitIncROF[irof] = intRec.orbit - prevOrbit;
-      cc.bcIncROF[irof] = intRec.bc; // otherwise, store absolute bc
-      prevOrbit = intRec.orbit;
-    }
-    prevBC = intRec.bc;
-    auto ndig = rofRec.size();
-    cc.ndigROF[irof] = ndig;
-    cc.ndiaROF[irof] = rofRec.sizeDia();
-    for (int icrate = 0; icrate < 72; icrate++) {
-      if (rofRec.isEmptyCrate(icrate)) {
-        cc.ndiaCrate[irof * 72 + icrate] = 0;
-      } else {
-        cc.ndiaCrate[irof * 72 + icrate] = rofRec.getDiagnosticInCrate(icrate) + 1; // shifted by one since -1 means crate not available (then to get unsigned int)
-      }
-    }
-
-    if (!ndig) { // no hits data for this ROF --> not fill
+  for (int rof0 = 0; rof0 < nrofIni; rof0++) {
+    const auto& rofRec = rofRecVec[rof0];
+    const auto ir = rofRec.getBCData();
+    if (mIRFrameSelector.isSet() && mIRFrameSelector.check(o2::dataformats::IRFrame{ir, ir + (o2::constants::lhc::LHCMaxBunches / 3 - 1)}) < 0) {
       continue;
     }
-
-    int idigMin = rofRec.first(), idigMax = idigMin + ndig;
-    int idig = idigMin;
-
-    // make a copy of digits
-    digCopy.clear();
-    for (; idig < idigMax; idig++) {
-      digCopy.emplace_back(cdigVec[idig]);
+    int64_t rofInBC = ir.toLong();
+    digCopy.clear(); // make a copy of digits
+    int ndig = rofRec.size(), idigMin = rofRec.first(), idigMax = idigMin + ndig;
+    for (int idig = idigMin; idig < idigMax; idig++) {
+      digCopy.push_back(cdigVec[idig]);
     }
-
     // sort digits according to time (ascending order)
-    std::sort(digCopy.begin(), digCopy.end(),
-              [](o2::tof::Digit a, o2::tof::Digit b) {
-                if (a.getBC() == b.getBC()) {
-                  return a.getTDC() < b.getTDC();
-                } else {
-                  return a.getBC() < b.getBC();
-                }
-              });
+    std::sort(digCopy.begin(), digCopy.end(), [](o2::tof::Digit a, o2::tof::Digit b) { return (a.getBC() == b.getBC()) ? (a.getTDC() < b.getTDC()) : a.getBC() < b.getBC(); });
 
-    int timeframe = 0;
-    int tdc = 0;
-    idig = idigMin;
-    for (; idig < idigMax; idig++) {
+    int timeframe = 0, tdc = 0, ndigAcc = 0;
+    for (int idig = idigMin; idig < idigMax; idig++) {
       const auto& dig = digCopy[idig - idigMin];
+      if (mIRFrameSelector.isSet() && mIRFrameSelector.check(dig.getIR()) < 0) {
+        continue;
+      }
+      ndigAcc++;
       int deltaBC = dig.getBC() - rofInBC;
       int ctimeframe = deltaBC / 64;
       int cTDC = (deltaBC % 64) * 1024 + dig.getTDC();
       if (ctimeframe == timeframe) {
-        cc.timeFrameInc[idig] = 0;
-        cc.timeTDCInc[idig] = cTDC - tdc;
+        cc.timeFrameInc.push_back(0);
+        cc.timeTDCInc.push_back(cTDC - tdc);
       } else {
-        cc.timeFrameInc[idig] = ctimeframe - timeframe;
-        cc.timeTDCInc[idig] = cTDC;
+        cc.timeFrameInc.push_back(ctimeframe - timeframe);
+        cc.timeTDCInc.push_back(cTDC);
         timeframe = ctimeframe;
       }
       tdc = cTDC;
 
       int chan = dig.getChannel();
-      cc.stripID[idig] = chan / Geo::NPADS;
-      cc.chanInStrip[idig] = chan % Geo::NPADS;
-      cc.tot[idig] = dig.getTOT();
-      LOGF(DEBUG, "%d) TOFBC = %d, deltaBC = %d, TDC = %d, CH=%d", irof, rofInBC, deltaBC, cTDC, chan);
-      LOGF(DEBUG, "%d) TF=%d, TDC=%d, STRIP=%d, CH=%d, TOT=%d", idig, cc.timeFrameInc[idig], cc.timeTDCInc[idig], cc.stripID[idig], cc.chanInStrip[idig], cc.tot[idig]);
+      cc.stripID.push_back(chan / Geo::NPADS);
+      cc.chanInStrip.push_back(chan % Geo::NPADS);
+      cc.tot.push_back(dig.getTOT());
+      LOGF(debug, "%d) TOFBC = %d, deltaBC = %d, TDC = %d, CH=%d", nrofTot, rofInBC, deltaBC, cTDC, chan);
+      LOGF(debug, "%d) TF=%d, TDC=%d, STRIP=%d, CH=%d, TOT=%d", idig, cc.timeFrameInc[idig], cc.timeTDCInc[idig], cc.stripID[idig], cc.chanInStrip[idig], cc.tot[idig]);
     }
+    ndigTot += ndigAcc;
+    if (ndigAcc || !mIRFrameSelector.isSet()) {
+      if (nrofTot == 0) { // very 1st ROF
+        prevOrbit = cc.header.firstOrbit = ir.orbit;
+        prevBC = cc.header.firstBC = ir.bc;
+      }
+      if (ir.orbit == prevOrbit) {
+        cc.orbitIncROF.push_back(0);
+        cc.bcIncROF.push_back(ir.bc - prevBC); // store increment of BC if in the same orbit
+      } else {
+        cc.orbitIncROF.push_back(ir.orbit - prevOrbit);
+        cc.bcIncROF.push_back(ir.bc); // otherwise, store absolute bc
+        prevOrbit = ir.orbit;
+      }
+      cc.ndigROF.push_back(ndigAcc);
+      cc.ndiaROF.push_back(rofRec.sizeDia());
+      cc.ndiaCrate.reserve(cc.ndiaCrate.size() + 72);
+      for (int icrate = 0; icrate < 72; icrate++) {
+        if (rofRec.isEmptyCrate(icrate)) {
+          cc.ndiaCrate.push_back(0);
+        } else {
+          cc.ndiaCrate.push_back(rofRec.getDiagnosticInCrate(icrate) + 1); // shifted by one since -1 means crate not available (then to get unsigned int)
+        }
+      }
+      prevBC = ir.bc;
+      nrofTot++;
+    }
+  } // loop over ROFs
+  if (nrofTot) {
+    cc.header.nROFs = nrofTot;
+    cc.header.nDigits = ndigTot;
+    cc.header.nPatternBytes = pattVec.size();
+    cc.pattMap.resize(cc.header.nPatternBytes);
+    memcpy(cc.pattMap.data(), pattVec.data(), cc.header.nPatternBytes); // RSTODO: do we need this?
   }
-  memcpy(cc.pattMap.data(), pattVec.data(), cc.header.nPatternBytes); // RSTODO: do we need this?
 }
 
 ///________________________________
-void CTFCoder::createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::OpType op)
+void CTFCoder::createCoders(const std::vector<char>& bufVec, o2::ctf::CTFCoderBase::OpType op)
 {
-  bool mayFail = true; // RS FIXME if the dictionary file is not there, do not produce exception
-  auto buff = readDictionaryFromFile<CTF>(dictPath, mayFail);
-  if (!buff.size()) {
-    if (mayFail) {
-      return;
-    }
-    throw std::runtime_error("Failed to create CTF dictionaty");
-  }
-  const auto* ctf = CTF::get(buff.data());
-
-  auto getFreq = [ctf](CTF::Slots slot) -> o2::rans::FrequencyTable {
-    o2::rans::FrequencyTable ft;
-    auto bl = ctf->getBlock(slot);
-    auto md = ctf->getMetadata(slot);
-    ft.addFrequencies(bl.getDict(), bl.getDict() + bl.getNDict(), md.min, md.max);
-    return std::move(ft);
-  };
-  auto getProbBits = [ctf](CTF::Slots slot) -> int {
-    return ctf->getMetadata(slot).probabilityBits;
-  };
-
+  const auto ctf = CTF::getImage(bufVec.data());
   CompressedInfos cc; // just to get member types
-#define MAKECODER(part, slot) createCoder<decltype(part)::value_type>(op, getFreq(slot), getProbBits(slot), int(slot))
+#define MAKECODER(part, slot) createCoder(op, std::get<rans::RenormedDenseHistogram<decltype(part)::value_type>>(ctf.getDictionary<decltype(part)::value_type>(slot, mANSVersion)), int(slot))
   // clang-format off
   MAKECODER(cc.bcIncROF,     CTF::BLCbcIncROF);
   MAKECODER(cc.orbitIncROF,  CTF::BLCorbitIncROF);
@@ -200,25 +172,20 @@ void CTFCoder::createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::
 size_t CTFCoder::estimateCompressedSize(const CompressedInfos& cc)
 {
   size_t sz = 0;
-  // clang-format off
   // RS FIXME this is very crude estimate, instead, an empirical values should be used
-#define VTP(vec) typename std::remove_reference<decltype(vec)>::type::value_type
-#define ESTSIZE(vec, slot) mCoders[int(slot)] ?                         \
-  rans::calculateMaxBufferSize(vec.size(), reinterpret_cast<const o2::rans::LiteralEncoder64<VTP(vec)>*>(mCoders[int(slot)].get())->getAlphabetRangeBits(), sizeof(VTP(vec)) ) : vec.size()*sizeof(VTP(vec))
 
-  sz += ESTSIZE(cc.bcIncROF,     CTF::BLCbcIncROF);
-  sz += ESTSIZE(cc.orbitIncROF,  CTF::BLCorbitIncROF);
-  sz += ESTSIZE(cc.ndigROF,      CTF::BLCndigROF);
-  sz += ESTSIZE(cc.ndiaROF,      CTF::BLCndiaROF);
-  sz += ESTSIZE(cc.ndiaCrate,    CTF::BLCndiaCrate);
-  sz += ESTSIZE(cc.timeFrameInc, CTF::BLCtimeFrameInc);
-  sz += ESTSIZE(cc.timeTDCInc,   CTF::BLCtimeTDCInc);
-  sz += ESTSIZE(cc.stripID,      CTF::BLCstripID);
-  sz += ESTSIZE(cc.chanInStrip,  CTF::BLCchanInStrip);
-  sz += ESTSIZE(cc.tot,          CTF::BLCtot);
-  sz += ESTSIZE(cc.pattMap,      CTF::BLCpattMap);
-  // clang-format on
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCbcIncROF), cc.bcIncROF);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCorbitIncROF), cc.orbitIncROF);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCndigROF), cc.ndigROF);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCndiaROF), cc.ndiaROF);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCndiaCrate), cc.ndiaCrate);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCtimeFrameInc), cc.timeFrameInc);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCtimeTDCInc), cc.timeTDCInc);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCstripID), cc.stripID);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCchanInStrip), cc.chanInStrip);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCtot), cc.tot);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLCpattMap), cc.pattMap);
   sz *= 2. / 3; // if needed, will be autoexpanded
-  LOG(DEBUG) << "Estimated output size is " << sz << " bytes";
+  LOG(debug) << "Estimated output size is " << sz << " bytes";
   return sz;
 }

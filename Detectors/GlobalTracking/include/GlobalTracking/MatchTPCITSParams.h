@@ -29,16 +29,27 @@ struct MatchTPCITSParams : public o2::conf::ConfigurableParamHelper<MatchTPCITSP
   enum ValidateMatchByFIT { Disable,
                             Prefer,
                             Require }; // flags for usage of FT0 in match validation
-
+  enum TimeOutliersPolicy {            // policy for matching timestamps outside of respective ITS ROF bracket
+    Tolerate,                          // accept as is
+    Adjust,                            // adjust to closest ITS bracket boundary
+    Reject                             // reject match
+  };
   bool runAfterBurner = true;                     ///< run afterburner for TPCtrack-ITScluster matching
   ValidateMatchByFIT validateMatchByFIT = Prefer; ///< when comparing ITS-TPC matches, prefer those which have time of Interaction Candidate
+  TimeOutliersPolicy ITSTimeOutliersPolicy = Adjust;
   float crudeAbsDiffCut[o2::track::kNParams] = {2.f, 2.f, 0.2f, 0.2f, 4.f};
   float crudeNSigma2Cut[o2::track::kNParams] = {49.f, 49.f, 49.f, 49.f, 49.f};
+
+  float XMatchingRef = 70.f; ///< reference radius to propagate tracks for matching
+  float ITSStepEffFraction = 0.5;     //< when correcting the ITS tracks for parameters difference between default PION and other PID hipothesis, use this fraction of propagated distance
+  float minBetaGammaForPIDDiff = 1.2; // account for difference between ITS and TPC PIDs used in propagation if TPC beta*gamma is below this
 
   float minTPCTrackR = 50.; ///< cut on minimal TPC tracks radius to consider for matching, 666*pt_gev*B_kgaus/5
   float minITSTrackR = 50.; ///< cut on minimal ITS tracks radius to consider for matching, 666*pt_gev*B_kgaus/5
   int minTPCClusters = 25; ///< minimum number of clusters to consider
-  int askMinTPCRow = 15;   ///< disregard tracks starting above this row
+  int askMinTPCRow[36] = { ///< disregard tracks starting above this row
+                          15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15,
+                          15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15};
 
   float cutMatchingChi2 = 30.f; ///< cut on matching chi2
 
@@ -56,17 +67,17 @@ struct MatchTPCITSParams : public o2::conf::ConfigurableParamHelper<MatchTPCITSP
 
   float tfEdgeTimeToleranceMUS = 1.; ///< corrected TPC time allowed to go out from the TF time edges by this amount
 
-  float maxVDriftUncertainty = 0.; ///< max assumed VDrift uncertainty, used only in VDrift calibration mode
+  float maxVDriftUncertainty = 0.02; ///< max assumed VDrift relative uncertainty, used only in VDrift calibration mode
+  float maxVDriftTrackQ2Pt = 1.0;    ///< use only tracks below this q/pt (with field only)
+  float maxVDritTimeOffset = 5.;     ///< max possible TDrift offset to calibrate
 
-  float maxTglForVDriftCalib = 1.; ///< maximum ITS tgl to collect data for VDrift calibration
-  int nBinsTglVDriftCalib = 50;    ///< number of bins in reference ITS tgl for VDrift calibration
-  int nBinsDTglVDriftCalib = 100;  ///< number of bins in delta tgl for VDrift calibration
+  float globalTimeBiasMUS = 0.; ///< global time shift to apply to assigned time, brute force way to eliminate bias wrt FIT
+  float globalTimeExtraErrorMUS = 0.; ///< extra error to add to global time estimate
 
   //___________________ AfterBurner params
   int requireToReachLayerAB = 5;   ///< AB tracks should reach at least this layer from above
-  int lowestLayerAB = 0;           ///< lowest layer to reach in AfterBurner
+  int lowestLayerAB = 3;           ///< lowest layer to reach in AfterBurner
   int minContributingLayersAB = 2; ///< AB tracks must have at least this amount on contributing layers
-  int maxHoleSizeAB = 1;           ///< between 2 contributing layers there should be at most this amount of non-contributing ones
   int maxABLinksOnLayer = 10;      ///< max prolongations for single seed from one to next layer
   int maxABFinalHyp = 20;          ///< max final hypotheses per TPC seed
   float cutABTrack2ClChi2 = 30.f;  ///< cut on AfterBurner track-cluster chi2
@@ -75,12 +86,24 @@ struct MatchTPCITSParams : public o2::conf::ConfigurableParamHelper<MatchTPCITSP
   float err2ABExtraY = 0.1 * 0.1;  ///< extra "systematic" error on Y
   float err2ABExtraZ = 0.1 * 0.1;  ///< extra "systematic" error on Z
 
+  int verbosity = 0; ///< verbosit level
+
   o2::base::Propagator::MatCorrType matCorr = o2::base::Propagator::MatCorrType::USEMatCorrLUT; /// Material correction type
 
   O2ParamDef(MatchTPCITSParams, "tpcitsMatch");
 };
 
 } // namespace globaltracking
+
+namespace framework
+{
+template <typename T>
+struct is_messageable;
+template <>
+struct is_messageable<o2::globaltracking::MatchTPCITSParams> : std::true_type {
+};
+} // namespace framework
+
 } // end namespace o2
 
 #endif

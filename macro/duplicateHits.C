@@ -17,12 +17,13 @@
 #include "DataFormatsCPV/Hit.h"
 #include "DataFormatsZDC/Hit.h"
 #include "SimulationDataFormat/MCEventHeader.h"
+#include "SimulationDataFormat/MCTrack.h"
+#include "SimulationDataFormat/TrackReference.h"
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "DetectorsCommonDataFormats/DetectorNameConf.h"
 #include "DetectorsCommonDataFormats/SimTraits.h"
-
 #ifdef ENABLE_UPGRADES
-#include "EndCapsSimulation/Hit.h"
+// todo: put upgrade detectors?
 #endif
 
 #endif
@@ -89,7 +90,7 @@ TTree* getHitTree(o2::parameters::GRPObject const* grp, const char* filebase, o2
   if (!grp->isDetReadOut(detid)) {
     return nullptr;
   }
-  std::string filename(o2::base::NameConf::getHitsFileName(detid, filebase).c_str());
+  std::string filename(o2::base::DetectorNameConf::getHitsFileName(detid, filebase).c_str());
 
   const char* mode = createnew ? "RECREATE" : "OPEN";
 
@@ -202,6 +203,7 @@ void duplicateHits(const char* filebase = "o2sim", const char* newfilebase = "o2
 
 #ifdef ENABLE_UPGRADES
   duplicateV<o2::itsmft::Hit>(grp, filebase, DetID::FT3, newfilebase, factor);
+  duplicateV<o2::itsmft::Hit>(grp, filebase, DetID::FCT, newfilebase, factor);
 #endif
 
   // duplicateACO(reftree);

@@ -16,22 +16,27 @@ o2_add_library(DetectorsCalibration
                    src/MeanVertexData.cxx
                    src/MeanVertexCalibrator.cxx
                    src/MeanVertexParams.cxx
+                   src/IntegratedClusterCalibrator.cxx
                PUBLIC_LINK_LIBRARIES O2::Headers
                    O2::CCDB
                    O2::CommonUtils
                    ROOT::Minuit
+                   O2::Framework
                    Microsoft.GSL::GSL
                    O2::ReconstructionDataFormats
+                   O2::DetectorsBase
                    O2::SimConfig
                    O2::DataFormatsCalibration)
 
 o2_target_root_dictionary(DetectorsCalibration
                           HEADERS include/DetectorsCalibration/TimeSlotCalibration.h
                                   include/DetectorsCalibration/TimeSlot.h
+                                  include/DetectorsCalibration/TimeSlotMetaData.h
                                   include/DetectorsCalibration/Utils.h
                                   include/DetectorsCalibration/MeanVertexData.h
                                   include/DetectorsCalibration/MeanVertexCalibrator.h
-                                  include/DetectorsCalibration/MeanVertexParams.h)
+                                  include/DetectorsCalibration/MeanVertexParams.h
+                                  include/DetectorsCalibration/IntegratedClusterCalibrator.h)
 
 o2_add_executable(ccdb-populator-workflow
                   COMPONENT_NAME calibration

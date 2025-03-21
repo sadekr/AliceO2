@@ -28,6 +28,8 @@
 #include "SimulationDataFormat/MCTruthContainer.h"
 #include "DetectorsBase/BaseDPLDigitizer.h"
 #include "SimConfig/DigiParams.h"
+#include "Framework/CCDBParamSpec.h"
+#include "DetectorsRaw/HBFUtils.h"
 
 using namespace o2::framework;
 using SubSpecificationType = o2::framework::DataAllocator::SubSpecificationType;
@@ -39,9 +41,6 @@ namespace cpv
 
 void DigitizerSpec::initDigitizerTask(framework::InitContext& ic)
 {
-  // init digitizer
-  mDigitizer.init();
-
   if (mHits) {
     delete mHits;
   }
@@ -49,36 +48,47 @@ void DigitizerSpec::initDigitizerTask(framework::InitContext& ic)
 
   auto simulatePileup = ic.options().get<int>("pileup");
   if (simulatePileup) {                                              // set readout time and dead time parameters
-    mReadoutTime = o2::cpv::CPVSimParams::Instance().mReadoutTimePU; //PHOS readout time in ns
-    mDeadTime = o2::cpv::CPVSimParams::Instance().mDeadTimePU;       //PHOS dead time (should include readout => mReadoutTime< mDeadTime)
+    mReadoutTime = o2::cpv::CPVSimParams::Instance().mReadoutTimePU; // PHOS readout time in ns
+    mDeadTime = o2::cpv::CPVSimParams::Instance().mDeadTimePU;       // PHOS dead time (should include readout => mReadoutTime< mDeadTime)
   } else {
-    mReadoutTime = o2::cpv::CPVSimParams::Instance().mReadoutTime; //PHOS readout time in ns
-    mDeadTime = o2::cpv::CPVSimParams::Instance().mDeadTime;       //PHOS dead time (should include readout => mReadoutTime< mDeadTime)
+    mReadoutTime = o2::cpv::CPVSimParams::Instance().mReadoutTime; // PHOS readout time in ns
+    mDeadTime = o2::cpv::CPVSimParams::Instance().mDeadTime;       // PHOS dead time (should include readout => mReadoutTime< mDeadTime)
   }
 }
-// helper function which will be offered as a service
-void DigitizerSpec::retrieveHits(const char* brname,
-                                 int sourceID,
-                                 int entryID)
+
+void DigitizerSpec::updateTimeDependentParams(framework::ProcessingContext& ctx)
 {
-  auto br = mSimChains[sourceID]->GetBranch(brname);
-  if (!br) {
-    LOG(ERROR) << "No branch found";
-    return;
+  static bool updateOnlyOnce = false;
+  if (!updateOnlyOnce) {
+    LOG(info) << "DigitizerSpec::run() : fetching o2::cpv::CPVSimParams from CCDB";
+    ctx.inputs().get<o2::cpv::CPVSimParams*>("simparams");
+    LOG(info) << "DigitizerSpec::run() : o2::cpv::CPVSimParams::Instance() now is following:";
+    o2::cpv::CPVSimParams::Instance().printKeyValues();
+
+    auto pedPtr = ctx.inputs().get<o2::cpv::Pedestals*>("peds");
+    mDigitizer.setPedestals(pedPtr.get());
+
+    auto badMapPtr = ctx.inputs().get<o2::cpv::BadChannelMap*>("badmap");
+    mDigitizer.setBadChannelMap(badMapPtr.get());
+
+    auto gainsPtr = ctx.inputs().get<o2::cpv::CalibParams*>("gains");
+    mDigitizer.setGains(gainsPtr.get());
+
+    // init digitizer
+    mDigitizer.init();
+
+    updateOnlyOnce = true;
   }
-  mHits->clear();
-  br->SetAddress(&mHits);
-  br->GetEntry(entryID);
 }
 
 void DigitizerSpec::run(framework::ProcessingContext& pc)
 {
-
+  updateTimeDependentParams(pc);
   // read collision context from input
   auto context = pc.inputs().get<o2::steer::DigitizationContext*>("collisioncontext");
   context->initSimChains(o2::detectors::DetID::CPV, mSimChains);
   auto& timesview = context->getEventRecords();
-  LOG(DEBUG) << "GOT " << timesview.size() << " COLLISSION TIMES";
+  LOG(debug) << "GOT " << timesview.size() << " COLLISSION TIMES";
 
   // if there is nothing to do ... return
   int n = timesview.size();
@@ -89,32 +99,44 @@ void DigitizerSpec::run(framework::ProcessingContext& pc)
   TStopwatch timer;
   timer.Start();
 
-  LOG(INFO) << " CALLING CPV DIGITIZATION ";
+  LOG(info) << " CALLING CPV DIGITIZATION ";
   std::vector<TriggerRecord> triggers;
 
   int indexStart = mDigitsOut.size();
   auto& eventParts = context->getEventParts();
-  //if this is last stream of hits and we can write directly to final vector of digits? Otherwize use temporary vectors
+  // if this is last stream of hits and we can write directly to final vector of digits? Otherwize use temporary vectors
   bool isLastStream = true;
-  double eventTime = timesview[0].getTimeNS() - o2::cpv::CPVSimParams::Instance().mDeadTime; //checked above that list not empty
-  int eventId;
+  double eventTime = timesview[0].getTimeNS() - o2::cpv::CPVSimParams::Instance().mDeadTime; // checked above that list not empty
+  int eventId = 0;
+
+  // the interaction record marking the timeframe start
+  auto firstTF = InteractionTimeRecord(o2::raw::HBFUtils::Instance().getFirstSampledTFIR(), 0);
+
   // loop over all composite collisions given from context
   // (aka loop over all the interaction records)
   for (int collID = 0; collID < n; ++collID) {
+    // Note: Very crude filter to neglect collisions coming before
+    // the first interaction record of the timeframe. Remove this, once these collisions can be handled
+    // within the digitization routine. Collisions before this timeframe might impact digits of this timeframe.
+    // See https://its.cern.ch/jira/browse/O2-5395.
+    if (timesview[collID] < firstTF) {
+      LOG(info) << "Too early: Not digitizing collision " << collID;
+      continue;
+    }
 
-    double dt = timesview[collID].getTimeNS() - eventTime; //start new PHOS readout, continue current or dead time?
-    if (dt > mReadoutTime && dt < mDeadTime) {             //dead time, skip event
+    double dt = timesview[collID].getTimeNS() - eventTime; // start new PHOS readout, continue current or dead time?
+    if (dt > mReadoutTime && dt < mDeadTime) {             // dead time, skip event
       continue;
     }
 
     if (dt >= o2::cpv::CPVSimParams::Instance().mDeadTime) { // start new event
-      //new event
+      // new event
       eventTime = timesview[collID].getTimeNS();
       dt = 0.;
       eventId = collID;
     }
 
-    //Check if next event has to be added to this read-out
+    // Check if next event has to be added to this read-out
     if (collID < n - 1) {
       isLastStream = (timesview[collID + 1].getTimeNS() - eventTime > mReadoutTime);
     } else {
@@ -129,37 +151,38 @@ void DigitizerSpec::run(framework::ProcessingContext& pc)
       // get the hits for this event and this source
       int source = part->sourceID;
       int entry = part->entryID;
-      retrieveHits("CPVHit", source, entry);
+      mHits->clear();
+      context->retrieveHits(mSimChains, "CPVHit", source, entry, mHits);
       part++;
-      if (part == eventParts[collID].end() && isLastStream) { //last stream, copy digits directly to output vector
+      if (part == eventParts[collID].end() && isLastStream) { // last stream, copy digits directly to output vector
         mDigitizer.processHits(mHits, mDigitsFinal, mDigitsOut, mLabels, collID, source, dt);
         mDigitsFinal.clear();
-        //finalyze previous event and clean
-        // Add trigger record
+        // finalyze previous event and clean
+        //  Add trigger record
         triggers.emplace_back(timesview[eventId], indexStart, mDigitsOut.size() - indexStart);
         indexStart = mDigitsOut.size();
         mDigitsFinal.clear();
-      } else { //Fill intermediate digitvector
+      } else { // Fill intermediate digitvector
         mDigitsTmp.swap(mDigitsFinal);
         mDigitizer.processHits(mHits, mDigitsTmp, mDigitsFinal, mLabels, collID, source, dt);
         mDigitsTmp.clear();
       }
     }
   }
-  LOG(DEBUG) << "Have " << mLabels.getNElements() << " CPV labels ";
+  LOG(debug) << "Have " << mLabels.getNElements() << " CPV labels ";
   // here we have all digits and we can send them to consumer (aka snapshot it onto output)
-  pc.outputs().snapshot(Output{"CPV", "DIGITS", 0, Lifetime::Timeframe}, mDigitsOut);
-  pc.outputs().snapshot(Output{"CPV", "DIGITTRIGREC", 0, Lifetime::Timeframe}, triggers);
+  pc.outputs().snapshot(Output{"CPV", "DIGITS", 0}, mDigitsOut);
+  pc.outputs().snapshot(Output{"CPV", "DIGITTRIGREC", 0}, triggers);
   if (pc.outputs().isAllowed({"CPV", "DIGITSMCTR", 0})) {
-    pc.outputs().snapshot(Output{"CPV", "DIGITSMCTR", 0, Lifetime::Timeframe}, mLabels);
+    pc.outputs().snapshot(Output{"CPV", "DIGITSMCTR", 0}, mLabels);
   }
   // CPV is always a triggered detector
-  const o2::parameters::GRPObject::ROMode roMode = o2::parameters::GRPObject::TRIGGERING;
-  LOG(DEBUG) << "CPV: Sending ROMode= " << roMode << " to GRPUpdater";
-  pc.outputs().snapshot(Output{"CPV", "ROMode", 0, Lifetime::Timeframe}, roMode);
+  const o2::parameters::GRPObject::ROMode roMode = o2::parameters::GRPObject::PRESENT;
+  LOG(debug) << "CPV: Sending ROMode= " << roMode << " to GRPUpdater";
+  pc.outputs().snapshot(Output{"CPV", "ROMode", 0}, roMode);
 
   timer.Stop();
-  LOG(INFO) << "Digitization took " << timer.CpuTime() << "s";
+  LOG(info) << "Digitization took " << timer.CpuTime() << "s";
 
   //  pc.services().get<o2::framework::ControlService>().endOfStream();
   // we should be only called once; tell DPL that this process is ready to exit
@@ -168,12 +191,15 @@ void DigitizerSpec::run(framework::ProcessingContext& pc)
 
 DataProcessorSpec getCPVDigitizerSpec(int channel, bool mctruth)
 {
+  // inputs
+  std::vector<o2::framework::InputSpec> inputs;
+  inputs.emplace_back("collisioncontext", "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe);
+  inputs.emplace_back("peds", "CPV", "CPV_Pedestals", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("CPV/Calib/Pedestals"));
+  inputs.emplace_back("badmap", "CPV", "CPV_BadMap", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("CPV/Calib/BadChannelMap"));
+  inputs.emplace_back("gains", "CPV", "CPV_Gains", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("CPV/Calib/Gains"));
+  inputs.emplace_back("simparams", "CPV", "CPV_SimPars", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("CPV/Config/CPVSimParams"));
 
-  // create the full data processor spec using
-  //  a name identifier
-  //  input description
-  //  algorithmic description (here a lambda getting called once to setup the actual processing function)
-  //  options that can be used for this processor (here: input file names where to take the hits)
+  // outputs
   std::vector<OutputSpec> outputs;
   outputs.emplace_back("CPV", "DIGITS", 0, Lifetime::Timeframe);
   outputs.emplace_back("CPV", "DIGITTRIGREC", 0, Lifetime::Timeframe);
@@ -183,7 +209,8 @@ DataProcessorSpec getCPVDigitizerSpec(int channel, bool mctruth)
   outputs.emplace_back("CPV", "ROMode", 0, Lifetime::Timeframe);
 
   return DataProcessorSpec{
-    "CPVDigitizer", Inputs{InputSpec{"collisioncontext", "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe}},
+    "CPVDigitizer",
+    inputs,
     outputs,
     AlgorithmSpec{o2::framework::adaptFromTask<DigitizerSpec>()},
     Options{{"pileup", VariantType::Int, 1, {"whether to run in continuous time mode"}}}};

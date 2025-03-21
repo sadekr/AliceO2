@@ -27,10 +27,12 @@
 #include "DataFormatsCPV/TriggerRecord.h"
 #include "CPVBase/Geometry.h"
 #include "CPVSimulation/RawWriter.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DataFormatsParameters/GRPObject.h"
 
 namespace bpo = boost::program_options;
+
+constexpr int DefRDHVersion = o2::raw::RDHUtils::getVersion<o2::header::RAWDataHeader>();
 
 int main(int argc, const char** argv)
 {
@@ -48,10 +50,11 @@ int main(int argc, const char** argv)
     add_option("help,h", "Print this help message");
     add_option("verbose,v", bpo::value<uint32_t>()->default_value(0), "Select verbosity level [0 = no output]");
     add_option("input-file,i", bpo::value<std::string>()->default_value("cpvdigits.root"), "Specifies digit input file.");
-    add_option("file-for,f", bpo::value<std::string>()->default_value("all"), "single file per: all,cru,link");
+    add_option("file-for,f", bpo::value<std::string>()->default_value("all"), "single file per: all,cruendpoint,link");
     add_option("output-dir,o", bpo::value<std::string>()->default_value("./"), "output directory for raw data");
+    add_option("rdh-version,r", bpo::value<uint32_t>()->default_value(DefRDHVersion), "RDH version to use");
+    add_option("enable-padding", bpo::value<bool>()->default_value(false)->implicit_value(true), "enable GBT word padding to 128 bits even for RDH V7");
     add_option("debug,d", bpo::value<uint32_t>()->default_value(0), "Select debug output level [0 = no debug output]");
-    add_option("ccdb-url,c", bpo::value<std::string>()->default_value("http://ccdb-test.cern.ch:8080"), "CCDB Url ['localtest' for local testing]");
     add_option("hbfutils-config,u", bpo::value<std::string>()->default_value(std::string(o2::base::NameConf::DIGITIZATIONCONFIGFILE)), "config file for HBFUtils (or none)");
     add_option("configKeyValues", bpo::value<std::string>()->default_value(""), "comma-separated configKeyValues");
 
@@ -83,14 +86,20 @@ int main(int argc, const char** argv)
        outputdir = vm["output-dir"].as<std::string>(),
        filefor = vm["file-for"].as<std::string>();
 
-  auto ccdbUrl = vm["ccdb-url"].as<std::string>();
+  auto rdhV = vm["rdh-version"].as<uint32_t>();
+  auto enablePadding = vm["enable-padding"].as<bool>();
+
+  if (rdhV < 7 && !enablePadding) {
+    enablePadding = true;
+    LOG(info) << "padding is always ON for RDH version " << rdhV;
+  }
 
   // if needed, create output directory
   if (!std::filesystem::exists(outputdir)) {
     if (!std::filesystem::create_directories(outputdir)) {
-      LOG(FATAL) << "could not create output directory " << outputdir;
+      LOG(fatal) << "could not create output directory " << outputdir;
     } else {
-      LOG(INFO) << "created output directory " << outputdir;
+      LOG(info) << "created output directory " << outputdir;
     }
   }
 
@@ -100,7 +109,7 @@ int main(int argc, const char** argv)
   TTreeReaderValue<std::vector<o2::cpv::TriggerRecord>> triggerbranch(*treereader, "CPVDigitTrigRecords");
 
   o2::cpv::RawWriter::FileFor_t granularity = o2::cpv::RawWriter::FileFor_t::kFullDet;
-  if ((filefor == "all") || (filefor == "cru")) { //CPV has only 1 cru so "all" is identical to "cru"
+  if ((filefor == "all") || (filefor == "cruendpoint")) { // CPV has only 1 cru so "all" is identical to "cruendpoint"
     granularity = o2::cpv::RawWriter::FileFor_t::kFullDet;
   } else if (filefor == "link") {
     granularity = o2::cpv::RawWriter::FileFor_t::kLink;
@@ -112,17 +121,18 @@ int main(int argc, const char** argv)
   o2::cpv::RawWriter rawwriter;
   rawwriter.setOutputLocation(outputdir.data());
   rawwriter.setFileFor(granularity);
-  rawwriter.setCcdbUrl(ccdbUrl.data());
+  rawwriter.setCcdbUrl(o2::base::NameConf::getCCDBServer().c_str());
+  rawwriter.setRDHVersion(rdhV);
+  rawwriter.setDataFormat(enablePadding ? 0 : 2);
   rawwriter.init();
   rawwriter.getWriter().setContinuousReadout(grp->isDetContinuousReadOut(o2::detectors::DetID::CPV)); // must be set explicitly
 
   // Loop over all entries in the tree, where each tree entry corresponds to a time frame
-  for (auto en : *treereader) {
-    LOG(DEBUG) << "RawCreator::main() : I call rawwriter.digitsToRaw(). "
-               << "Sending following tree: ";
-    for (int i = 0; i < (*triggerbranch).size(); i++) {
-      LOG(DEBUG) << (*triggerbranch)[i];
-    }
+  // First version of for loop causes fault Optimizer???
+  //  for (auto evnt = treereader->begin(); evnt != treereader->end(); ++evnt) {
+  // for (auto evnt : *treereader) {
+  while (treereader->Next()) {
+    // (void*)evnt;
     rawwriter.digitsToRaw(*digitbranch, *triggerbranch);
   }
   rawwriter.getWriter().writeConfFile("CPV", "RAWDATA", o2::utils::Str::concat_string(outputdir, "/CPVraw.cfg"));

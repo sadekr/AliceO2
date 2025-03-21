@@ -19,11 +19,12 @@
 #include <unordered_map>
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
+#include "Framework/CCDBParamSpec.h"
 #include "Framework/DataRef.h"
 #include "Framework/InputRecordWalker.h"
 #include "Headers/DataHeader.h"
 #include "DetectorsBase/CTFCoderBase.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 
@@ -32,32 +33,36 @@ namespace o2
 namespace mid
 {
 
-EntropyEncoderSpec::EntropyEncoderSpec()
+EntropyEncoderSpec::EntropyEncoderSpec(bool selIR) : mCTFCoder(o2::ctf::CTFCoderBase::OpType::Encoder), mSelIR(selIR)
 {
   mTimer.Stop();
   mTimer.Reset();
 }
 
+void EntropyEncoderSpec::finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj)
+{
+  if (mCTFCoder.finaliseCCDB<CTF>(matcher, obj)) {
+    return;
+  }
+}
+
 void EntropyEncoderSpec::init(o2::framework::InitContext& ic)
 {
-  std::string dictPath = ic.options().get<std::string>("ctf-dict");
-  mCTFCoder.setMemMarginFactor(ic.options().get<float>("mem-factor"));
-  if (!dictPath.empty() && dictPath != "none") {
-    mCTFCoder.createCoders(dictPath, o2::ctf::CTFCoderBase::OpType::Encoder);
-  }
+  mCTFCoder.init<CTF>(ic);
 }
 
 void EntropyEncoderSpec::run(ProcessingContext& pc)
 {
   auto cput = mTimer.CpuTime();
   mTimer.Start(false);
-
+  mCTFCoder.updateTimeDependentParams(pc, true);
   CTFHelper::TFData tfData;
   std::vector<InputSpec>
     filter = {
       {"check", ConcreteDataTypeMatcher{header::gDataOriginMID, "DATA"}, Lifetime::Timeframe},
       {"check", ConcreteDataTypeMatcher{header::gDataOriginMID, "DATAROF"}, Lifetime::Timeframe},
     };
+  size_t insize = 0;
   for (auto const& inputRef : InputRecordWalker(pc.inputs(), filter)) {
     auto const* dh = framework::DataRefUtils::getHeader<o2::header::DataHeader*>(inputRef);
     if (dh->subSpecification >= NEvTypes) {
@@ -65,43 +70,56 @@ void EntropyEncoderSpec::run(ProcessingContext& pc)
     }
     if (DataRefUtils::match(inputRef, "cols")) {
       tfData.colData[dh->subSpecification] = pc.inputs().get<gsl::span<o2::mid::ColumnData>>(inputRef);
+      insize += tfData.colData[dh->subSpecification].size() * sizeof(o2::mid::ColumnData);
     }
     if (DataRefUtils::match(inputRef, "rofs")) {
       tfData.rofData[dh->subSpecification] = pc.inputs().get<gsl::span<o2::mid::ROFRecord>>(inputRef);
+      insize += tfData.rofData[dh->subSpecification].size() * sizeof(o2::mid::ROFRecord);
     }
   }
+  if (mSelIR) {
+    mCTFCoder.setSelectedIRFrames(pc.inputs().get<gsl::span<o2::dataformats::IRFrame>>("selIRFrames"));
+  }
   // build references for looping over the data in BC increasing direction
-  tfData.buildReferences();
+  tfData.buildReferences(mCTFCoder.getIRFramesSelector());
 
-  auto& buffer = pc.outputs().make<std::vector<o2::ctf::BufferType>>(Output{header::gDataOriginMID, "CTFDATA", 0, Lifetime::Timeframe});
-  mCTFCoder.encode(buffer, tfData);
-  auto eeb = CTF::get(buffer.data()); // cast to container pointer
-  eeb->compactify();                  // eliminate unnecessary padding
-  buffer.resize(eeb->size());         // shrink buffer to strictly necessary size
-  //  eeb->print();
+  auto& buffer = pc.outputs().make<std::vector<o2::ctf::BufferType>>(Output{header::gDataOriginMID, "CTFDATA", 0});
+  auto iosize = mCTFCoder.encode(buffer, tfData);
+  pc.outputs().snapshot({"ctfrep", 0}, iosize);
+  iosize.rawIn = insize;
+  if (mSelIR) {
+    mCTFCoder.getIRFramesSelector().clear();
+  }
   mTimer.Stop();
-  LOG(INFO) << "Created encoded data of size " << eeb->size() << " for MID in " << mTimer.CpuTime() - cput << " s";
+  LOG(info) << iosize.asString() << " in " << mTimer.CpuTime() - cput << " s";
 }
 
 void EntropyEncoderSpec::endOfStream(EndOfStreamContext& ec)
 {
-  LOGF(INFO, "MID Entropy Encoding total timing: Cpu: %.3e Real: %.3e s in %d slots",
+  LOGF(info, "MID Entropy Encoding total timing: Cpu: %.3e Real: %.3e s in %d slots",
        mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
 }
 
-DataProcessorSpec getEntropyEncoderSpec()
+DataProcessorSpec getEntropyEncoderSpec(bool selIR)
 {
   std::vector<InputSpec> inputs;
   inputs.emplace_back("rofs", ConcreteDataTypeMatcher(header::gDataOriginMID, "DATAROF"), Lifetime::Timeframe);
   inputs.emplace_back("cols", ConcreteDataTypeMatcher(header::gDataOriginMID, "DATA"), Lifetime::Timeframe);
-
+  inputs.emplace_back("ctfdict", header::gDataOriginMID, "CTFDICT", 0, Lifetime::Condition, ccdbParamSpec("MID/Calib/CTFDictionaryTree"));
+  if (selIR) {
+    inputs.emplace_back("selIRFrames", "CTF", "SELIRFRAMES", 0, Lifetime::Timeframe);
+  }
   return DataProcessorSpec{
     "mid-entropy-encoder",
     inputs,
-    Outputs{{header::gDataOriginMID, "CTFDATA", 0, Lifetime::Timeframe}},
-    AlgorithmSpec{adaptFromTask<EntropyEncoderSpec>()},
-    Options{{"ctf-dict", VariantType::String, o2::base::NameConf::getCTFDictFileName(), {"File of CTF encoding dictionary"}},
-            {"mem-factor", VariantType::Float, 1.f, {"Memory allocation margin factor"}}}};
+    Outputs{{header::gDataOriginMID, "CTFDATA", 0, Lifetime::Timeframe},
+            {{"ctfrep"}, header::gDataOriginMID, "CTFENCREP", 0, Lifetime::Timeframe}},
+    AlgorithmSpec{adaptFromTask<EntropyEncoderSpec>(selIR)},
+    Options{{"ctf-dict", VariantType::String, "ccdb", {"CTF dictionary: empty or ccdb=CCDB, none=no external dictionary otherwise: local filename"}},
+            {"irframe-margin-bwd", VariantType::UInt32, 0u, {"margin in BC to add to the IRFrame lower boundary when selection is requested"}},
+            {"irframe-margin-fwd", VariantType::UInt32, 0u, {"margin in BC to add to the IRFrame upper boundary when selection is requested"}},
+            {"mem-factor", VariantType::Float, 1.f, {"Memory allocation margin factor"}},
+            {"ans-version", VariantType::String, {"version of ans entropy coder implementation to use"}}}};
 }
 
 } // namespace mid

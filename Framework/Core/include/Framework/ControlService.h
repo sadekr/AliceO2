@@ -11,6 +11,8 @@
 #ifndef O2_FRAMEWORK_CONTROLSERVICE_H_
 #define O2_FRAMEWORK_CONTROLSERVICE_H_
 
+#include "Framework/ThreadSafetyAnalysis.h"
+#include "Framework/ServiceRegistryRef.h"
 #include "Framework/ServiceHandle.h"
 #include <mutex>
 
@@ -39,7 +41,7 @@ class ControlService
  public:
   constexpr static ServiceKind service_kind = ServiceKind::Global;
 
-  ControlService(ServiceRegistry& registry, DeviceState& deviceState);
+  ControlService(ServiceRegistryRef registry, DeviceState& deviceState);
   /// Compatibility with old API.
   void readyToQuit(bool all) { this->readyToQuit(all ? QuitRequest::All : QuitRequest::Me); }
   /// Signal control that we are potentially ready to quit some / all
@@ -49,12 +51,16 @@ class ControlService
   void endOfStream();
   /// Report the current streaming state of a given device
   void notifyStreamingState(StreamingState state);
+  /// Push a generic key/value pair to the driver
+  void push(std::string_view key, std::string_view value, int64_t timestamp);
+  /// Report the current FairMQ state of a given device
+  void notifyDeviceState(std::string state);
 
  private:
   bool mOnce = false;
-  ServiceRegistry& mRegistry;
-  DeviceState& mDeviceState;
-  DriverClient& mDriverClient;
+  ServiceRegistryRef mRegistry;
+  DeviceState& mDeviceState O2_DPL_GUARDED_BY(mMutex);
+  DriverClient& mDriverClient O2_DPL_GUARDED_BY(mMutex);
   std::mutex mMutex;
 };
 

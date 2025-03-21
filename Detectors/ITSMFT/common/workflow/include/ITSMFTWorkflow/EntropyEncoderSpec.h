@@ -20,6 +20,7 @@
 #include "Headers/DataHeader.h"
 #include <TStopwatch.h>
 #include "ITSMFTReconstruction/CTFCoder.h"
+#include "ITSMFTReconstruction/LookUp.h"
 
 namespace o2
 {
@@ -29,20 +30,25 @@ namespace itsmft
 class EntropyEncoderSpec : public o2::framework::Task
 {
  public:
-  EntropyEncoderSpec(o2::header::DataOrigin orig);
+  EntropyEncoderSpec(o2::header::DataOrigin orig, bool selIR);
   ~EntropyEncoderSpec() override = default;
   void run(o2::framework::ProcessingContext& pc) final;
   void init(o2::framework::InitContext& ic) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void updateTimeDependentParams(o2::framework::ProcessingContext& pc);
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   o2::header::DataOrigin mOrigin = o2::header::gDataOriginInvalid;
   o2::itsmft::CTFCoder mCTFCoder;
+  LookUp mPattIdConverter;
+  int mStrobeLength = 0;
+  bool mSelIR = false;
   TStopwatch mTimer;
 };
 
 /// create a processor spec
-framework::DataProcessorSpec getEntropyEncoderSpec(o2::header::DataOrigin orig);
+framework::DataProcessorSpec getEntropyEncoderSpec(o2::header::DataOrigin orig, bool selIR = false);
 
 } // namespace itsmft
 } // namespace o2

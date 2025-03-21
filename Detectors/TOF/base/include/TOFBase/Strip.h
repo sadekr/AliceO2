@@ -80,11 +80,12 @@ class Strip
   /// reset points container
   o2::tof::Digit* findDigit(ULong64_t key);
 
-  Int_t addDigit(Int_t channel, Int_t tdc, Int_t tot, uint64_t bc, Int_t lbl = 0, uint32_t triggerorbit = 0, uint16_t triggerbunch = 0); // returns the MC label
+  Int_t addDigit(Int_t channel, Int_t tdc, Int_t tot, uint64_t bc, Int_t lbl = 0, uint32_t triggerorbit = 0, uint16_t triggerbunch = 0, float geanttime = 0, double t0 = 0); // returns the MC label
 
   void fillOutputContainer(std::vector<o2::tof::Digit>& digits);
 
   static int mDigitMerged;
+  std::map<ULong64_t, o2::tof::Digit>& getDigitMap() { return mDigits; }
 
  protected:
   Int_t mStripIndex = -1;                      ///< Strip ID

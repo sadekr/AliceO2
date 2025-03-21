@@ -11,26 +11,18 @@
 
 #include <vector>
 #include <string>
+#include <thread>
 #include "Algorithm/RangeTokenizer.h"
 #include "Framework/WorkflowSpec.h"
 #include "Framework/ConfigParamSpec.h"
-#include "Framework/CompletionPolicy.h"
-#include "Framework/CompletionPolicyHelpers.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "TPCWorkflow/TPCIntegrateIDCSpec.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DetectorsRaw/HBFUtils.h"
 #include "TPCSimulation/IDCSim.h"
 #include "TPCBase/Sector.h"
 
 using namespace o2::framework;
-
-// customize the completion policy
-void customize(std::vector<o2::framework::CompletionPolicy>& policies)
-{
-  using o2::framework::CompletionPolicy;
-  policies.push_back(CompletionPolicyHelpers::defineByName("tpc-idc-integrateidc.*", CompletionPolicy::CompletionOp::Consume));
-}
 
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
@@ -39,6 +31,7 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
   const int defaultlanes = std::max(1u, std::thread::hardware_concurrency() / 2);
 
   std::vector<ConfigParamSpec> options{
+    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}},
     {"nOrbits", VariantType::Int, 12, {"number of orbits for which the IDCs are integrated"}},
     {"outputFormat", VariantType::String, "Sim", {"setting the output format type: 'Sim'=IDC simulation format, 'Real'=real output format of CRUs (not implemented yet)"}},
     {"debug", VariantType::Bool, false, {"create debug tree"}},
@@ -62,6 +55,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
   if (!confDig.empty() && confDig != "none") {
     o2::conf::ConfigurableParam::updateFromFile(confDig, "HBFUtils");
   }
+  o2::conf::ConfigurableParam::updateFromString(config.options().get<std::string>("configKeyValues"));
   o2::conf::ConfigurableParam::writeINI("o2tpcintegrateidc_configuration.ini");
 
   const auto& hbfu = o2::raw::HBFUtils::Instance();

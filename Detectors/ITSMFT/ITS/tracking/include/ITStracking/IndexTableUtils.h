@@ -16,12 +16,6 @@
 #ifndef TRACKINGITSU_INCLUDE_INDEXTABLEUTILS_H_
 #define TRACKINGITSU_INCLUDE_INDEXTABLEUTILS_H_
 
-#ifndef GPUCA_GPUCODE_DEVICE
-#include <array>
-#include <utility>
-#include <vector>
-#endif
-
 #include "ITStracking/Constants.h"
 #include "ITStracking/Configuration.h"
 #include "ITStracking/Definitions.h"
@@ -32,7 +26,6 @@ namespace o2
 {
 namespace its
 {
-
 class IndexTableUtils
 {
  public:
@@ -43,29 +36,33 @@ class IndexTableUtils
   GPUhdi() int getPhiBinIndex(const float) const;
   GPUhdi() int getBinIndex(const int, const int) const;
   GPUhdi() int countRowSelectedBins(const int*, const int, const int, const int) const;
+  GPUhdi() void print() const;
 
   GPUhdi() int getNzBins() const { return mNzBins; }
   GPUhdi() int getNphiBins() const { return mNphiBins; }
   GPUhdi() float getLayerZ(int i) const { return mLayerZ[i]; }
+  GPUhdi() void setNzBins(const int zBins) { mNzBins = zBins; }
+  GPUhdi() void setNphiBins(const int phiBins) { mNphiBins = phiBins; }
 
  private:
   int mNzBins = 0;
   int mNphiBins = 0;
   float mInversePhiBinSize = 0.f;
-  std::vector<float> mLayerZ;
-  std::vector<float> mInverseZBinSize;
+  float mLayerZ[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  float mInverseZBinSize[8] = {0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
 };
 
 template <class T>
 inline void IndexTableUtils::setTrackingParameters(const T& params)
 {
   mInversePhiBinSize = params.PhiBins / constants::math::TwoPi;
-  mInverseZBinSize.resize(params.LayerZ.size());
   mNzBins = params.ZBins;
   mNphiBins = params.PhiBins;
-  mLayerZ = params.LayerZ;
-  for (unsigned int iL{0}; iL < mInverseZBinSize.size(); ++iL) {
-    mInverseZBinSize[iL] = 0.5f * params.ZBins / params.LayerZ[iL];
+  for (int iLayer{0}; iLayer < params.LayerZ.size(); ++iLayer) {
+    mLayerZ[iLayer] = params.LayerZ[iLayer];
+  }
+  for (unsigned int iLayer{0}; iLayer < params.LayerZ.size(); ++iLayer) {
+    mInverseZBinSize[iLayer] = 0.5f * params.ZBins / params.LayerZ[iLayer];
   }
 }
 
@@ -96,6 +93,14 @@ GPUhdi() int IndexTableUtils::countRowSelectedBins(const int* indexTable, const 
   const int maxBinIndex{firstBinIndex + maxZBinIndex - minZBinIndex + 1};
 
   return indexTable[maxBinIndex] - indexTable[firstBinIndex];
+}
+
+GPUhdi() void IndexTableUtils::print() const
+{
+  printf("NzBins: %d, NphiBins: %d, InversePhiBinSize: %f\n", mNzBins, mNphiBins, mInversePhiBinSize);
+  for (int iLayer{0}; iLayer < 7; ++iLayer) {
+    printf("Layer %d: Z: %f, InverseZBinSize: %f\n", iLayer, mLayerZ[iLayer], mInverseZBinSize[iLayer]);
+  }
 }
 } // namespace its
 } // namespace o2

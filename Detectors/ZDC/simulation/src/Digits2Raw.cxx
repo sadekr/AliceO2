@@ -31,22 +31,22 @@ void Digits2Raw::processDigits(const std::string& outDir, const std::string& fil
   mIsContinuous = sopt.continuous;
 
   if (!mModuleConfig) {
-    LOG(FATAL) << "Missing ModuleConfig configuration object";
+    LOG(fatal) << "Missing ModuleConfig configuration object";
     return;
   }
 
   if (!mSimCondition) {
-    LOG(FATAL) << "Missing SimCondition configuration object";
+    LOG(fatal) << "Missing SimCondition configuration object";
     return;
   }
 
   if (mNEmpty < 0) {
-    LOG(FATAL) << "Bunch crossing map is not initialized";
+    LOG(fatal) << "Bunch crossing map is not initialized";
     return;
   }
 
   if (mNEmpty == 0) {
-    LOG(WARNING) << "Bunch crossing map has zero clean empty bunches";
+    LOG(warning) << "Bunch crossing map has zero clean empty bunches";
   }
 
   setTriggerMask();
@@ -61,6 +61,8 @@ void Digits2Raw::processDigits(const std::string& outDir, const std::string& fil
   mFLPID = uint16_t(0);
   mEndPointID = uint32_t(0);
   // TODO: assign FeeID from configuration object
+  // N.B. Now the electronics has the possibility to reconfigure FEE ID in order to match
+  // what is expected from simulation. The FEE ID should never change in the future
   for (int ilink = 0; ilink < NLinks; ilink++) {
     uint64_t FeeID = uint64_t(ilink);
     std::string outFileLink = o2::utils::Str::concat_string(outDir, "/", "ZDC");
@@ -68,10 +70,10 @@ void Digits2Raw::processDigits(const std::string& outDir, const std::string& fil
       outFileLink += fmt::format("_{}", mFLP);
       if (mFileFor != "flp") {
         outFileLink += fmt::format("_cru{}_{}", mCruID, mEndPointID);
-        if (mFileFor != "cru") {
+        if (mFileFor != "cruendpoint") {
           outFileLink += fmt::format("_lnk{}_feeid{}", ilink, FeeID);
           if (mFileFor != "link") {
-            LOG(FATAL) << "Not supported output file splitting: " << mFileFor;
+            LOG(fatal) << "Not supported output file splitting: " << mFileFor;
             throw std::runtime_error("invalid option provided for file grouping");
           }
         }
@@ -83,45 +85,54 @@ void Digits2Raw::processDigits(const std::string& outDir, const std::string& fil
 
   std::unique_ptr<TFile> digiFile(TFile::Open(fileDigitsName.c_str()));
   if (!digiFile || digiFile->IsZombie()) {
-    LOG(FATAL) << "Failed to open input digits file " << fileDigitsName;
+    LOG(fatal) << "Failed to open input digits file " << fileDigitsName;
     return;
   }
 
   TTree* digiTree = (TTree*)digiFile->Get("o2sim");
   if (!digiTree) {
-    LOG(FATAL) << "Failed to get digits tree";
+    LOG(fatal) << "Failed to get digits tree";
     return;
   }
 
   if (digiTree->GetBranch("ZDCDigitBC")) {
     digiTree->SetBranchAddress("ZDCDigitBC", &mzdcBCDataPtr);
   } else {
-    LOG(FATAL) << "Branch ZDCDigitBC is missing";
+    LOG(fatal) << "Branch ZDCDigitBC is missing";
     return;
   }
 
   if (digiTree->GetBranch("ZDCDigitCh")) {
     digiTree->SetBranchAddress("ZDCDigitCh", &mzdcChDataPtr);
   } else {
-    LOG(FATAL) << "Branch ZDCDigitCh is missing";
+    LOG(fatal) << "Branch ZDCDigitCh is missing";
     return;
   }
 
   if (digiTree->GetBranch("ZDCDigitOrbit")) {
     digiTree->SetBranchAddress("ZDCDigitOrbit", &mzdcPedDataPtr);
   } else {
-    LOG(FATAL) << "Branch ZDCDigitOrbit is missing";
+    LOG(fatal) << "Branch ZDCDigitOrbit is missing";
     return;
   }
 
   if (digiTree->GetBranchStatus("ZDCDigitLabels")) {
     digiTree->SetBranchStatus("ZDCDigitLabel*", 0);
   }
-
+  int nBCadd = 0;
+  // TODO: fix the conversion logic
+  // If first stored bunch is not in first digitized orbit the empty orbits
+  // at the beginning of the simulation are not converted to raw data
+  // If last orbits are empty they are not inserted in raw data
+  // Logic is not tested if digiTree has more than one entry
+  // The resulting file has less orbits. However the missing orbits have no signals
+  // and threefore are not used in reconstruction -> this fix has low priority
   for (int ient = 0; ient < digiTree->GetEntries(); ient++) {
     digiTree->GetEntry(ient);
     mNbc = mzdcBCData.size();
-    LOG(INFO) << "Entry " << ient << " : " << mNbc << " BCs stored";
+    if (mVerbosity > 0) {
+      LOG(info) << "Entry " << ient << ": processing " << mNbc << " BCs stored";
+    }
     for (int ibc = 0; ibc < mNbc; ibc++) {
       mBCD = mzdcBCData[ibc];
       convertDigits(ibc);
@@ -130,8 +141,12 @@ void Digits2Raw::processDigits(const std::string& outDir, const std::string& fil
       if (ibc == (mNbc - 1)) {
         // For last event we need to close last orbit (if it is needed)
         if (mzdcBCData[ibc].ir.bc != 3563) {
+          if (mVerbosity > 1) {
+            LOG(info) << "Closing last orbit " << mzdcBCData[ibc].ir.orbit;
+          }
           insertLastBunch(ibc, mzdcBCData[ibc].ir.orbit);
           writeDigits();
+          nBCadd++;
         }
       } else {
         auto this_orbit = mzdcBCData[ibc].ir.orbit;
@@ -142,11 +157,16 @@ void Digits2Raw::processDigits(const std::string& outDir, const std::string& fil
         }
         // We may need to insert more than one orbit
         for (auto orbit = this_orbit; orbit < next_orbit; orbit++) {
+          if (mVerbosity > 1) {
+            LOG(info) << "Inserting last bunch for orbit " << orbit;
+          }
           insertLastBunch(ibc, orbit);
           writeDigits();
+          nBCadd++;
         }
       }
     }
+    LOG(info) << "Entry " << ient << " Converted BCs: " << mNbc << " + added@3563:" << nBCadd << " = " << mNbc + nBCadd;
   }
   digiFile->Close();
 }
@@ -172,14 +192,16 @@ void Digits2Raw::setTriggerMask()
       }
     }
     mPrintTriggerMask += "]";
+#ifdef O2_ZDC_DEBUG
     uint32_t mytmask = mTriggerMask >> (im * NChPerModule);
     printf("Trigger mask for module %d 0123 %s%s%s%s\n", im,
            mytmask & 0x1 ? "T" : "N",
            mytmask & 0x2 ? "T" : "N",
            mytmask & 0x4 ? "T" : "N",
            mytmask & 0x8 ? "T" : "N");
+#endif
   }
-  printf("trigger_mask=0x%08x %s\n", mTriggerMask, mPrintTriggerMask.data());
+  printf("trigger_mask=0x%08x %s", mTriggerMask, mPrintTriggerMask.data());
 }
 
 //______________________________________________________________________________
@@ -192,7 +214,7 @@ inline void Digits2Raw::resetSums(uint32_t orbit)
       mPed[im][ic] = 0;
     }
   }
-  mLastOrbit = orbit;
+  mLatestOrbit = orbit;
   mLastNEmpty = 0;
 }
 
@@ -210,21 +232,13 @@ inline void Digits2Raw::updatePedestalReference(int bc)
       }
     }
     if (io == mzdcPedData.size()) {
-      LOG(FATAL) << "Cannot find orbit";
+      LOG(fatal) << "Cannot find orbit";
     }
-
     for (int32_t im = 0; im < NModules; im++) {
       for (int32_t ic = 0; ic < NChPerModule; ic++) {
         // Identify connected channel
         auto id = mModuleConfig->modules[im].channelID[ic];
-        double myped = mzdcPedData[io].data[id] + 32768.;
-        if (myped < 0) {
-          myped = 0;
-        }
-        if (myped > 65535) {
-          myped = 65535;
-        }
-        mPed[im][ic] = myped;
+        mPed[im][ic] = *((uint16_t*)&mzdcPedData[io].data[id]);
       }
     }
   } else if (mEmpty[bc] > 0 && mEmpty[bc] != mLastNEmpty) {
@@ -245,14 +259,17 @@ inline void Digits2Raw::updatePedestalReference(int bc)
         mSumPed[im][ic] += gRandom->Gaus(12. * deltan * base_m, 12. * k * base_s * TMath::Sqrt(deltan / k));
         // Adding in quadrature the RMS of pedestal electronic noise
         mSumPed[im][ic] += gRandom->Gaus(0, base_n * TMath::Sqrt(12. * deltan));
-        double myped = TMath::Nint(8. * mSumPed[im][ic] / double(mEmpty[bc]) / 12. + 32768);
-        if (myped < 0) {
-          myped = 0;
+        double myped = mSumPed[im][ic] / double(mEmpty[bc]) / 12.;  // Average current pedestal
+        myped = TMath::Nint(myped / mModuleConfig->baselineFactor); // Convert into digitized pedestal
+        int16_t theped = myped;
+        // Correct for overflow and underflow
+        if (myped < -32768) {
+          theped = -32768;
         }
-        if (myped > 65535) {
-          myped = 65535;
+        if (myped > 32767) {
+          myped = 32767;
         }
-        mPed[im][ic] = myped;
+        mPed[im][ic] = *((uint16_t*)&theped);
       }
     }
     mLastNEmpty = mEmpty[bc];
@@ -325,12 +342,14 @@ inline void Digits2Raw::assignTriggerBits(int ibc, uint16_t bc, uint32_t orbit, 
 //______________________________________________________________________________
 void Digits2Raw::insertLastBunch(int ibc, uint32_t orbit)
 {
+  // Inserting last bunch in the orbit. This is not present in digits because information is stored in the
+  // OrbitData structure
 
   // Orbit and bunch crossing identifiers
   uint16_t bc = 3563;
 
   // Reset scalers at orbit change
-  if (orbit != mLastOrbit) {
+  if (orbit != mLatestOrbit) {
     resetSums(orbit);
   }
 
@@ -383,13 +402,14 @@ void Digits2Raw::insertLastBunch(int ibc, uint32_t orbit)
 //______________________________________________________________________________
 void Digits2Raw::convertDigits(int ibc)
 {
+  // Creating raw data from a bunch crossing that is actually present in digits
 
   // Orbit and bunch crossing identifiers
   uint16_t bc = mBCD.ir.bc;
   uint32_t orbit = mBCD.ir.orbit;
 
   // Reset scalers at orbit change
-  if (orbit != mLastOrbit) {
+  if (orbit != mLatestOrbit) {
     resetSums(orbit);
   }
 
@@ -470,8 +490,14 @@ void Digits2Raw::writeDigits()
         uint64_t FeeID = 2 * im + ic / 2;
         if (mModuleConfig->modules[im].readChannel[ic]) {
           for (int32_t iw = 0; iw < o2::zdc::NWPerBc; iw++) {
-            gsl::span<char> payload{reinterpret_cast<char*>(&mZDC.data[im][ic].w[iw][0]), data_size};
-            mWriter.addData(FeeID, mCruID, mLinkID, mEndPointID, ir, payload);
+            if (mEnablePadding) {
+              gsl::span<char> payload{reinterpret_cast<char*>(&mZDC.data[im][ic].w[iw][0]), data_size};
+              mWriter.addData(FeeID, mCruID, mLinkID, mEndPointID, ir, payload);
+            } else {
+              gsl::span<char> payload{reinterpret_cast<char*>(&mZDC.data[im][ic].w[iw][0]), PayloadPerGBTW};
+              o2::zdc::Digits2Raw::print_gbt_word((const uint32_t*)&mZDC.data[im][ic].w[iw][0]);
+              mWriter.addData(FeeID, mCruID, mLinkID, mEndPointID, ir, payload);
+            }
           }
           addedChData[ic] = true;
         }
@@ -520,6 +546,10 @@ void Digits2Raw::print_gbt_word(const uint32_t* word, const ModuleConfig* module
     printf("NULL\n");
     return;
   }
+  union {
+    uint16_t uns;
+    int16_t sig;
+  } word16;
   unsigned __int128 val = word[2];
   val = val << 32;
   val = val | word[1];
@@ -531,10 +561,8 @@ void Digits2Raw::print_gbt_word(const uint32_t* word, const ModuleConfig* module
   ULong64_t msb = val >> 64;
   uint32_t a = word[0];
   uint32_t b = word[1];
-  uint32_t c = word[2];
-  //uint32_t d=(msb>>32)&0xffffffff;
-  //printf("\n%llx %llx ",lsb,msb);
-  //printf("\n%8x %8x %8x %8x ",d,c,b,a);
+  uint16_t c = *((uint16_t*)&word[2]);
+  // printf("\nGBTW: %04x %08x %08x\n",c,b,a);
   if ((a & 0x3) == 0) {
     uint32_t myorbit = (val >> 48) & 0xffffffff;
     uint32_t mybc = (val >> 36) & 0xfff;
@@ -545,12 +573,12 @@ void Digits2Raw::print_gbt_word(const uint32_t* word, const ModuleConfig* module
     }
     printf("%04x %08x %08x ", c, b, a);
     uint32_t hits = (val >> 24) & 0xfff;
-    int32_t offset = (lsb >> 8) & 0xffff - 32768;
-    float foffset = offset / 8.;
+    word16.uns = (lsb >> 8) & 0xffff;
+    // float foffset = word16.sig * (moduleConfig == nullptr ? 1 : moduleConfig->baselineFactor);
     uint32_t board = (lsb >> 2) & 0xf;
     uint32_t ch = (lsb >> 6) & 0x3;
-    //printf("orbit %9u bc %4u hits %4u offset %+6i Board %2u Ch %1u", myorbit, mybc, hits, offset, board, ch);
-    printf("orbit %9u bc %4u hits %4u offset %+8.3f Board %2u Ch %1u", myorbit, mybc, hits, foffset, board, ch);
+    printf("orbit %9u bc %4u hits %4u offset %+6i Board %2u Ch %1u", myorbit, mybc, hits, word16.sig, board, ch);
+    // printf("orbit %9u bc %4u hits %4u offset %+9.3f Board %2u Ch %1u", myorbit, mybc, hits, foffset, board, ch);
     if (board >= NModules) {
       printf(" ERROR with board");
     }
@@ -578,7 +606,7 @@ void Digits2Raw::print_gbt_word(const uint32_t* word, const ModuleConfig* module
       }
       val = val >> 12;
     }
-    printf(" %5d %5d %5d %5d %5d %5d", s[0], s[1], s[2], s[3], s[4], s[5]);
+    printf(" %5d %5d %5d %5d %5d %5d%s%s", s[0], s[1], s[2], s[3], s[4], s[5], (a & 0x4) ? " DLOSS" : "", (a & 0x8) ? " ERROR" : "");
   } else if ((a & 0x3) == 2) {
     printf("%04x %08x %08x ", c, b, a);
     printf("%s %s %s %s %s %s ", a & 0x4 ? "H" : " ", a & 0x8 ? "TM" : "  ", a & 0x10 ? "T0" : "  ", a & 0x20 ? "T1" : "  ", a & 0x40 ? "T2" : "  ", a & 0x80 ? "T3" : "  ");
@@ -603,20 +631,54 @@ void Digits2Raw::print_gbt_word(const uint32_t* word, const ModuleConfig* module
 //______________________________________________________________________________
 void Digits2Raw::emptyBunches(std::bitset<3564>& bunchPattern)
 {
-  const int LHCMaxBunches = o2::constants::lhc::LHCMaxBunches;
+  // Check if mModuleConfig object has list of empty bunches
+  if (mModuleConfig->nBunchAverage <= 0) {
+    LOG(fatal) << "nBunchAverage = " << mModuleConfig->nBunchAverage;
+  }
+
+  // Analyze the list of empty bunches that is provided
   mNEmpty = 0;
-  for (int32_t ib = 0; ib < LHCMaxBunches; ib++) {
-    int32_t mb = (ib + 31) % LHCMaxBunches;                // beam gas from back of calorimeter (31 bc earlier than a colliding bunch)
-    int32_t m1 = (ib + 1) % LHCMaxBunches;                 // next bunch is colliding (position -1)
-    int32_t p1 = (ib - 1 + LHCMaxBunches) % LHCMaxBunches; // current bc is 1 bc after colliding (position +1)
-    int32_t p2 = (ib - 2 + LHCMaxBunches) % LHCMaxBunches; // current bc is 2 bc after colliding
-    int32_t p3 = (ib - 3 + LHCMaxBunches) % LHCMaxBunches; // current bc is 3 bc after colliding
-    if (bunchPattern[mb] || bunchPattern[m1] || bunchPattern[ib] || bunchPattern[p1] || bunchPattern[p2] || bunchPattern[p3]) {
-      mEmpty[ib] = mNEmpty;
-    } else {
-      mNEmpty++;
-      mEmpty[ib] = mNEmpty;
+  int ib = 0;
+  uint64_t one = 0x1;
+  for (int i = 0; i < mModuleConfig->NWMap; i++) {
+    uint64_t val = mModuleConfig->emptyMap[i];
+    for (int j = 0; j < 64; j++) {
+      if ((val & (one << j)) != 0) { // Empty bunch
+        mNEmpty++;
+        mEmpty[ib] = mNEmpty;
+      } else { // Not empty
+        mEmpty[ib] = mNEmpty;
+      }
+      ib++;
     }
   }
-  LOG(INFO) << "There are " << mNEmpty << " clean empty bunches";
+
+  // No list is provided: we prepare a list from collision context
+  if (mNEmpty == 0) {
+    const int LHCMaxBunches = o2::constants::lhc::LHCMaxBunches;
+    for (int32_t ib = 0; ib < LHCMaxBunches; ib++) {
+      int mb = (ib + 31) % o2::constants::lhc::LHCMaxBunches;                                    // beam gas from back of calorimeter (31 b.c. before)
+      int m1 = (ib + 1) % o2::constants::lhc::LHCMaxBunches;                                     // previous bunch (next is colliding)
+      int cb = ib;                                                                               // current bunch crossing
+      int p1 = (ib - 1 + o2::constants::lhc::LHCMaxBunches) % o2::constants::lhc::LHCMaxBunches; // colliding + 1 (-1 is colliding)
+      int p2 = (ib - 2 + o2::constants::lhc::LHCMaxBunches) % o2::constants::lhc::LHCMaxBunches; // colliding + 2 (-2 is colliding)
+      int p3 = (ib - 3 + o2::constants::lhc::LHCMaxBunches) % o2::constants::lhc::LHCMaxBunches; // colliding + 3 (-3 is colliding)
+      int p4 = (ib - 4 + o2::constants::lhc::LHCMaxBunches) % o2::constants::lhc::LHCMaxBunches; // colliding + 4 (-4 is colliding)
+      if (bunchPattern[mb] || bunchPattern[m1] || bunchPattern[ib] || bunchPattern[p1] || bunchPattern[p2] || bunchPattern[p3]) {
+        mEmpty[ib] = mNEmpty;
+      } else {
+        mNEmpty++;
+        mEmpty[ib] = mNEmpty;
+      }
+      if (mNEmpty == mModuleConfig->nBunchAverage) {
+        break;
+      }
+    }
+  }
+
+  // Check if there is a mismatch between requested and actual list
+  if (mNEmpty != 0 && mNEmpty != mModuleConfig->nBunchAverage) {
+    LOG(fatal) << "Mismatch with empty map mNEmpty = " << mNEmpty << " nBunchAverage = " << mModuleConfig->nBunchAverage;
+  }
+  LOG(info) << "There are " << mNEmpty << " clean empty bunches";
 }

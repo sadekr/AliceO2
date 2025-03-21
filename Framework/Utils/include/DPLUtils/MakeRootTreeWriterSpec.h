@@ -376,7 +376,7 @@ class MakeRootTreeWriterSpec
       auto outdir = ic.options().get<std::string>("output-dir");
       processAttributes->nEvents = ic.options().get<int>("nevents");
       if (processAttributes->nEvents > 0 && processAttributes->activeInputs.size() != processAttributes->nofBranches) {
-        LOG(WARNING) << "the n inputs serve in total m branches with n != m, this means that there will be data for\n"
+        LOG(warning) << "the n inputs serve in total m branches with n != m, this means that there will be data for\n"
                      << "different branches on the same input. Be aware that the --nevents option might lead to incomplete\n"
                      << "data in the output file as the number of processed input sets is counted";
       }
@@ -409,7 +409,7 @@ class MakeRootTreeWriterSpec
         processAttributes->writer->close();
       };
 
-      ic.services().get<CallbackService>().set(CallbackService::Id::Stop, finishWriting);
+      ic.services().get<CallbackService>().set<CallbackService::Id::Stop>(finishWriting);
 
       auto processingFct = [processAttributes](ProcessingContext& pc) {
         auto& writer = processAttributes->writer;

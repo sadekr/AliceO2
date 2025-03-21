@@ -9,7 +9,6 @@
 # granted to it by virtue of its status as an Intergovernmental Organization
 # or submit itself to any jurisdiction.
 
-if (ENABLE_UPGRADES)
 o2_add_executable(digitizer-workflow
                   COMPONENT_NAME sim
                   SOURCES src/CTPDigitizerSpec.cxx
@@ -19,7 +18,6 @@ o2_add_executable(digitizer-workflow
                           src/GRPUpdaterSpec.cxx
                           src/HMPIDDigitizerSpec.cxx
                           src/ITSMFTDigitizerSpec.cxx
-                          src/ITS3DigitizerSpec.cxx
                           src/MCHDigitizerSpec.cxx
                           src/MIDDigitizerSpec.cxx
                           src/PHOSDigitizerSpec.cxx
@@ -30,6 +28,8 @@ o2_add_executable(digitizer-workflow
                           src/TPCDigitizerSpec.cxx
                           src/ZDCDigitizerSpec.cxx
                           src/TOFDigitizerSpec.cxx
+                          $<$<BOOL:${ENABLE_UPGRADES}>:src/ITS3DigitizerSpec.cxx>
+                          $<$<BOOL:${ENABLE_UPGRADES}>:src/TRKDigitizerSpec.cxx>
                   PUBLIC_LINK_LIBRARIES O2::Framework
                                         O2::Steer
                                         O2::CommonConstants
@@ -46,10 +46,12 @@ o2_add_executable(digitizer-workflow
                                         O2::ITSSimulation
                                         O2::ITSMFTWorkflow
                                         O2::MCHSimulation
-                                        O2::MCHBase
-                                        O2::DataFormatsMCH
+                                        O2::MCHMappingImpl4
+                                        O2::MCHIO
+                                        O2::MCHDigitFiltering
                                         O2::MFTSimulation
                                         O2::MIDSimulation
+                                        O2::MIDRaw
                                         O2::PHOSSimulation
                                         O2::CPVSimulation
                                         O2::TOFSimulation
@@ -64,63 +66,11 @@ o2_add_executable(digitizer-workflow
                                         O2::ZDCSimulation
                                         O2::ZDCWorkflow
                                         O2::DetectorsRaw
-                                        O2::ITS3Simulation
-                                        O2::ITS3Workflow
-                                        )
-else()
-o2_add_executable(digitizer-workflow
-                  COMPONENT_NAME sim
-                  SOURCES src/CTPDigitizerSpec.cxx
-                          src/FT0DigitizerSpec.cxx
-                          src/FV0DigitizerSpec.cxx
-                          src/FDDDigitizerSpec.cxx
-                          src/GRPUpdaterSpec.cxx
-                          src/HMPIDDigitizerSpec.cxx
-                          src/ITSMFTDigitizerSpec.cxx
-                          src/MCHDigitizerSpec.cxx
-                          src/MIDDigitizerSpec.cxx
-                          src/PHOSDigitizerSpec.cxx
-                          src/CPVDigitizerSpec.cxx
-                          src/SimReaderSpec.cxx
-                          src/SimpleDigitizerWorkflow.cxx
-                          src/TPCDigitRootWriterSpec.cxx
-                          src/TPCDigitizerSpec.cxx
-                          src/ZDCDigitizerSpec.cxx
-                          src/TOFDigitizerSpec.cxx
-                  PUBLIC_LINK_LIBRARIES O2::Framework
-                                        O2::Steer
-                                        O2::CommonConstants
-                                        O2::EMCALSimulation
-                                        O2::EMCALWorkflow
-                                        O2::FT0Simulation
-                                        O2::FV0Simulation
-                                        O2::FDDSimulation
-                                        O2::CTPSimulation
-                                        O2::CTPWorkflowIO
-                                        O2::FDDWorkflow
-                                        O2::HMPIDSimulation
-                                        O2::ITSMFTSimulation
-                                        O2::ITSSimulation
-                                        O2::ITSMFTWorkflow
-                                        O2::MCHSimulation
-                                        O2::MCHBase
-                                        O2::MFTSimulation
-                                        O2::MIDSimulation
-                                        O2::PHOSSimulation
-                                        O2::CPVSimulation
-                                        O2::TOFSimulation
-                                        O2::TOFCalibration
-                                        O2::TOFReconstruction
-                                        O2::TOFWorkflowIO
-                                        O2::TPCSimulation
-                                        O2::TRDSimulation
-                                        O2::TRDWorkflow
-                                        O2::DataFormatsTRD
-                                        O2::ZDCSimulation
-                                        O2::ZDCWorkflow
-                                        O2::DetectorsRaw
-                                        )
-endif()
+                                        $<$<BOOL:${ENABLE_UPGRADES}>:O2::ITS3Simulation>
+                                        $<$<BOOL:${ENABLE_UPGRADES}>:O2::ITS3Workflow>
+                                        $<$<BOOL:${ENABLE_UPGRADES}>:O2::ITS3Align>
+                                        $<$<BOOL:${ENABLE_UPGRADES}>:O2::TRKSimulation>
+                                        $<$<BOOL:${ENABLE_UPGRADES}>:O2::TRKWorkflow>)
 
 
 o2_add_executable(mctruth-testworkflow
@@ -130,3 +80,11 @@ o2_add_executable(mctruth-testworkflow
                           src/MCTruthWriterSpec.cxx
                   PUBLIC_LINK_LIBRARIES O2::Framework
                                         O2::SimulationDataFormat)
+
+o2_add_executable(ccdbfetcher-testworkflow
+                  COMPONENT_NAME sim
+                  SOURCES src/CCDBFetcherTestWorkflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::Framework
+                                        O2::SimulationDataFormat
+                                        O2::DetectorsRaw
+                                        )

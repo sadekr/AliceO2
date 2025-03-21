@@ -63,13 +63,13 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
             if (loglevel > 0) {
               if (dh != lastDataHeader) {
                 if (!rdhprintout.str().empty()) {
-                  LOG(INFO) << rdhprintout.str();
+                  LOG(info) << rdhprintout.str();
                   rdhprintout.str(std::string());
                 }
                 // print the DataHeader information only for the first part or if we have high verbosity
                 if (loglevel > 1 || dh->splitPayloadIndex == 0) {
                   rdhprintout << fmt::format("DH: {}/{}/{}", dh->dataOrigin, dh->dataDescription, dh->subSpecification) << "  "
-                              << " TF " << dh->tfCounter << " Run " << dh->runNumber << " |";
+                              << " TF " << dh->tfCounter << " firstOrbit " << dh->firstTForbit << " Run " << dh->runNumber << " |";
 
                   // at high verbosity print part number, otherwise only the total number of parts
                   if (loglevel > 1) {
@@ -86,14 +86,14 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
                   }
                   rdhprintout << std::endl;
                 }
-                rdhprintout << DPLRawParser::RDHInfo(it) << std::endl;
+                rdhprintout << DPLRawParser<>::RDHInfo(it) << std::endl;
               }
               rdhprintout << it << "  payload size " << it.size() << std::endl;
             }
             lastDataHeader = dh;
           }
           if (loglevel > 0) {
-            LOG(INFO) << rdhprintout.str();
+            LOG(info) << rdhprintout.str();
           }
         }); }},
     Options{

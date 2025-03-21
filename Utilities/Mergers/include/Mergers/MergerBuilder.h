@@ -48,8 +48,10 @@ class MergerBuilder
 
   void setName(std::string);
   void setInputSpecs(const framework::Inputs&);
-  void setOutputSpec(const framework::OutputSpec&);
+  void setOutputSpec(const framework::OutputSpec& outputSpec);
+  void setOutputSpecMovingWindow(const framework::OutputSpec& outputSpec);
   void setTopologyPosition(size_t layer, size_t id);
+  void setTimePipeline(size_t timepipeline);
   void setConfig(MergerConfig);
 
   framework::DataProcessorSpec buildSpec();
@@ -57,9 +59,11 @@ class MergerBuilder
   /// \brief Configures mergers to consume any data immediately.
   static void customizeInfrastructure(std::vector<framework::CompletionPolicy>&);
 
-  static inline std::string mergerOutputBinding() { return "out"; };
+  static inline framework::DataProcessorLabel mergerLabel() { return {"merger"}; }
+  static inline std::string mergerIntegralOutputBinding() { return "out"; };
+  static inline std::string mergerMovingWindowOutputBinding() { return "mw_out"; };
   static inline std::string mergerIdString() { return "MERGER"; };
-  static inline header::DataOrigin mergerDataOrigin() { return header::DataOrigin("MRGR"); };
+  static inline header::DataOrigin mergerDataOrigin() { return {"MRGR"}; };
   static inline header::DataDescription mergerDataDescription(std::string name)
   {
     header::DataDescription description;
@@ -75,8 +79,10 @@ class MergerBuilder
   std::string mName;
   size_t mId{0};
   size_t mLayer{1};
+  size_t mTimePipeline{1};
   framework::Inputs mInputSpecs;
-  framework::OutputSpec mOutputSpec;
+  framework::OutputSpec mOutputSpecIntegral;
+  framework::OutputSpec mOutputSpecMovingWindow;
   MergerConfig mConfig;
 };
 

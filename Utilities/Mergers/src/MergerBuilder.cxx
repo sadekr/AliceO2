@@ -23,6 +23,7 @@
 
 #include "Mergers/MergerBuilder.h"
 #include "Mergers/IntegratingMerger.h"
+#include "Framework/TimerParamSpec.h"
 
 using namespace o2::framework;
 
@@ -31,7 +32,8 @@ namespace o2::mergers
 
 MergerBuilder::MergerBuilder() : mName("INVALID"),
                                  mInputSpecs{},
-                                 mOutputSpec{header::gDataOriginInvalid, header::gDataDescriptionInvalid},
+                                 mOutputSpecIntegral{header::gDataOriginInvalid, header::gDataDescriptionInvalid},
+                                 mOutputSpecMovingWindow{header::gDataOriginInvalid, header::gDataDescriptionInvalid},
                                  mConfig{}
 {
 }
@@ -47,15 +49,26 @@ void MergerBuilder::setTopologyPosition(size_t layer, size_t id)
   mId = id;
 }
 
+void MergerBuilder::setTimePipeline(size_t timepipeline)
+{
+  mTimePipeline = timepipeline;
+}
+
 void MergerBuilder::setInputSpecs(const framework::Inputs& inputs)
 {
   mInputSpecs = inputs;
 }
 
-void MergerBuilder::setOutputSpec(const framework::OutputSpec& output)
+void MergerBuilder::setOutputSpec(const framework::OutputSpec& outputSpec)
 {
-  mOutputSpec = output;
-  mOutputSpec.binding = {MergerBuilder::mergerOutputBinding()};
+  mOutputSpecIntegral = outputSpec;
+  mOutputSpecIntegral.binding = {MergerBuilder::mergerIntegralOutputBinding()};
+}
+
+void MergerBuilder::setOutputSpecMovingWindow(const framework::OutputSpec& outputSpec)
+{
+  mOutputSpecMovingWindow = outputSpec;
+  mOutputSpecMovingWindow.binding = {MergerBuilder::mergerMovingWindowOutputBinding()};
 }
 
 void MergerBuilder::setConfig(MergerConfig config)
@@ -67,22 +80,27 @@ framework::DataProcessorSpec MergerBuilder::buildSpec()
 {
   framework::DataProcessorSpec merger;
 
-  merger.name = mergerIdString() + "-" + mName + std::to_string(mLayer) + "l-" + std::to_string(mId);
+  merger.name = mConfig.detectorName + "-" + mergerIdString() + "-" + mName + std::to_string(mLayer) + "l-" + std::to_string(mId);
 
   merger.inputs = mInputSpecs;
 
-  merger.outputs.push_back(mOutputSpec);
-  framework::DataAllocator::SubSpecificationType subSpec = DataSpecUtils::getOptionalSubSpec(mOutputSpec).value();
-  if (DataSpecUtils::validate(mOutputSpec) == false) {
+  merger.outputs.push_back(mOutputSpecIntegral);
+  framework::DataAllocator::SubSpecificationType subSpec = DataSpecUtils::getOptionalSubSpec(mOutputSpecIntegral).value();
+  if (DataSpecUtils::validate(mOutputSpecIntegral) == false) {
     // inner layer => generate output spec according to scheme
     subSpec = mergerSubSpec(mLayer, mId);
-    merger.outputs[0] = OutputSpec{{mergerOutputBinding()},
+    merger.outputs[0] = OutputSpec{{mergerIntegralOutputBinding()},
                                    mergerDataOrigin(),
                                    mergerDataDescription(mName),
-                                   subSpec}; // it servers as a unique merger output ID
+                                   subSpec, // it servers as a unique merger output ID
+                                   Lifetime::Sporadic};
   } else {
     // last layer
-    merger.outputs[0].binding = {mergerOutputBinding()};
+    merger.outputs[0].binding = {mergerIntegralOutputBinding()};
+  }
+
+  if (mConfig.publishMovingWindow.value == PublishMovingWindow::Yes) {
+    merger.outputs.push_back(mOutputSpecMovingWindow);
   }
 
   if (mConfig.inputObjectTimespan.value == InputObjectsTimespan::LastDifference) {
@@ -91,16 +109,29 @@ framework::DataProcessorSpec MergerBuilder::buildSpec()
     merger.algorithm = framework::adaptFromTask<FullHistoryMerger>(mConfig, subSpec);
   }
 
-  merger.inputs.push_back({"timer-publish", "MRGR", mergerDataDescription("timer-" + mName), mergerSubSpec(mLayer, mId), framework::Lifetime::Timer});
-  merger.options.push_back({"period-timer-publish", framework::VariantType::Int, static_cast<int>(mConfig.publicationDecision.param * 1000000), {"timer period"}});
+  // Create the TimerSpec for cycleDurations
+  std::vector<o2::framework::TimerSpec> timers;
+  for (auto& [cycleDuration, validity] : mConfig.publicationDecision.param.decision) {
+    timers.push_back({cycleDuration * 1000000000 /*µs*/, validity});
+  }
+
+  merger.inputs.push_back({"timer-publish", "TMR", mergerDataDescription(mName), mergerSubSpec(mLayer, mId), framework::Lifetime::Timer, timerSpecs(timers)});
+  merger.labels.push_back(mergerLabel());
+  merger.labels.insert(merger.labels.end(), mConfig.labels.begin(), mConfig.labels.end());
+  std::sort(merger.labels.begin(), merger.labels.end());
+  merger.labels.erase(std::unique(merger.labels.begin(), merger.labels.end()), merger.labels.end());
+  merger.maxInputTimeslices = mTimePipeline;
 
   return std::move(merger);
 }
 
 void MergerBuilder::customizeInfrastructure(std::vector<framework::CompletionPolicy>& policies)
 {
-  // each merger's name contains the common ID string and should always consume
-  policies.push_back(CompletionPolicyHelpers::defineByName(".*" + MergerBuilder::mergerIdString() + ".*", CompletionPolicy::CompletionOp::Consume));
+  auto matcher = [label = mergerLabel()](framework::DeviceSpec const& device) {
+    return std::find(device.labels.begin(), device.labels.end(), label) != device.labels.end();
+  };
+  // each merger's name contains the common label and should always consume
+  policies.emplace_back(CompletionPolicyHelpers::consumeWhenAny("MergerCompletionPolicy", matcher));
 }
 
 } // namespace o2::mergers

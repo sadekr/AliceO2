@@ -17,13 +17,11 @@
 
 #include "GPUTPCGMMergerTypes.h"
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 struct GPUTPCClusterRejection {
   template <bool C, class T = void, class S = void>
-  static constexpr inline bool GetProtectionStatus(int attach, bool& physics, bool& protect, T* counts = nullptr, S* mev200 = nullptr)
+  static constexpr inline bool GetProtectionStatus(int32_t attach, bool& physics, bool& protect, T* counts = nullptr, S* mev200 = nullptr)
   {
     (void)counts; // Avoid incorrect -Wunused-but-set-parameter warning
     (void)mev200;
@@ -61,13 +59,12 @@ struct GPUTPCClusterRejection {
     }
   }
 
-  static constexpr inline bool GetIsRejected(int attach)
+  static constexpr inline bool GetIsRejected(int32_t attach)
   {
     bool physics = false, protect = false;
     return GetProtectionStatus<false>(attach, physics, protect);
   }
 };
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

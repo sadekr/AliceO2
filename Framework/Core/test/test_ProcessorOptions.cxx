@@ -19,7 +19,7 @@ using namespace o2::framework;
 
 #define ASSERT_ERROR(condition)                                                                      \
   if ((condition) == false) {                                                                        \
-    LOG(FATAL) << R"(Test condition ")" #condition R"(" failed at )" << __FILE__ << ":" << __LINE__; \
+    LOG(fatal) << R"(Test condition ")" #condition R"(" failed at )" << __FILE__ << ":" << __LINE__; \
   }
 
 // This is how you can define your processing in a declarative way
@@ -45,7 +45,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const&)
             }
             // there is nothing to do, simply stop the workflow but we have to send at least one message
             // to make sure that the callback of the consumer is called
-            ctx.outputs().make<int>(Output{"TST", "TEST", 0, Lifetime::Timeframe}) = 42;
+            ctx.outputs().make<int>(Output{"TST", "TEST", 0}) = 42;
             ctx.services().get<ControlService>().endOfStream();
             *isReady = true;
           };
@@ -94,10 +94,10 @@ WorkflowSpec defineDataProcessing(ConfigContext const&)
           ASSERT_ERROR(anotheroption == "hello-aliceo2");
 
           auto data = std::make_shared<int>(0);
-          ic.services().get<CallbackService>().set(CallbackService::Id::EndOfStream,
-                                                   [data](EndOfStreamContext& context) {
-                                                     ASSERT_ERROR(*data == 42);
-                                                   });
+          ic.services().get<CallbackService>().set<CallbackService::Id::EndOfStream>(
+            [data](EndOfStreamContext& context) {
+              ASSERT_ERROR(*data == 42);
+            });
           return [data](ProcessingContext& ctx) {
             // there is nothing to do, simply stop the workflow
             *data = ctx.inputs().get<int>("in");

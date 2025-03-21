@@ -25,6 +25,7 @@
 #include "Framework/WorkflowSpec.h"
 #include "Framework/SerializationMethods.h"
 #include "DPLUtils/DPLRawParser.h"
+#include "DetectorsRaw/RDHUtils.h"
 
 #include <iostream>
 #include <vector>
@@ -47,16 +48,16 @@ class RawDataReaderSpec : public Task
   {
     DPLRawParser parser(pc.inputs());
     mRawReader.clear();
-    LOG(INFO) << "FDD RawDataReaderSpec";
+    LOG(info) << "FDD RawDataReaderSpec";
     uint64_t count = 0;
     for (auto it = parser.begin(), end = parser.end(); it != end; ++it) {
       //Proccessing each page
       count++;
-      auto rdhPtr = it.get_if<o2::header::RAWDataHeader>();
+      auto rdhPtr = reinterpret_cast<const o2::header::RDHAny*>(it.raw());
       gsl::span<const uint8_t> payload(it.data(), it.size());
-      mRawReader.process(payload, rdhPtr->linkID, int(0));
+      mRawReader.process(payload, o2::raw::RDHUtils::getLinkID(rdhPtr), int(0));
     }
-    LOG(INFO) << "Pages: " << count;
+    LOG(info) << "Pages: " << count;
     mRawReader.accumulateDigits();
     mRawReader.makeSnapshot(pc);
   }
@@ -66,7 +67,7 @@ class RawDataReaderSpec : public Task
 template <typename RawReader>
 framework::DataProcessorSpec getFDDRawDataReaderSpec(const RawReader& rawReader)
 {
-  LOG(INFO) << "DataProcessorSpec initDataProcSpec() for RawReaderFDD";
+  LOG(info) << "DataProcessorSpec initDataProcSpec() for RawReaderFDD";
   std::vector<OutputSpec> outputSpec;
   RawReader::prepareOutputSpec(outputSpec);
   return DataProcessorSpec{

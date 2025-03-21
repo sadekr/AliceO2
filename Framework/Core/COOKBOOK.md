@@ -28,7 +28,7 @@ for (const auto& element : data) {
 
 #### How do I report failure for a given Algorithm?
 
-Whenever the driver process spots an error message, i.e. an error printed via `LOG(ERROR)` facility, when the driver process quits, it will exit with a exit code of 1. This includes any exception reported by the default exception handler.
+Whenever the driver process spots an error message, i.e. an error printed via `LOG(error)` facility, when the driver process quits, it will exit with a exit code of 1. This includes any exception reported by the default exception handler.
 
 This comes handy, for example in tests.
 
@@ -87,6 +87,16 @@ export O2DPLDEBUG='xterm -hold -e sudo gdb attach $O2DEBUGGEDPID &'
 Be sure to use single quotes to avoid direct expansion of O2DEBUGGEDPID variable.
 The `&` character add the end is needed to start gdb in a separate process.
 
+### Dumping cores
+
+By default DPL does its best to catch exceptions and avoid core dumps. This behaviour can however be changed by exporting the `O2_NO_CATCHALL_EXCEPTIONS` environment variable. E.g.:
+
+```bash
+export O2_NO_CATCHALL_EXCEPTIONS=1
+```
+
+in the shell where you are running your workflow.
+
 ### Dumping stacktraces on a signal
 
 If you are on linux you can get stacktraces on a various signals via the:
@@ -100,7 +110,7 @@ option, where `<signal>` can be: all, segv, bus, ill, abrt, fpe and sys.
 
 ### Debug GUI
 
-The demonstator also includes a simple GUI to help debugging problems:
+DPL also includes a simple GUI to help debugging problems:
 
 ![](https://user-images.githubusercontent.com/10544/29307499-75bb8550-81a2-11e7-9aa6-96b7613288b5.png)
 
@@ -110,10 +120,38 @@ The GUI provides the following facilities:
 * One log window  per DataProcessor, allowing filtering and  triggering on log
   messages
 * Metrics inspector
+* A Device Inspector
+
+by default the GUI runs as natively on your Linux desktop (using OpenGL) or
+on macOS (using Metal as a back end). It is also possible to run the GUI
+remotely by exporting the environment variable `DPL_DRIVER_REMOTE_GUI`, e.g.:
+
+```bash
+export DPL_DRIVER_REMOTE_GUI=1
+```
+
+Note that in this case your workflow should be started with the `-b` option and that you should have properly loaded the environment with `alienv enter ...`. In the stdout you should see the control port of the driver:
+```bash
+[INFO] Driver listening on port: 34855
+```
+
+Notice you can customise the port to your preference using the `DPL_REMOTE_GUI_PORT` variable.
+
+In order to connect to this port with your browser you should go to https://aliceo2group.github.io/DebugGUI/remote/remote.html, enter the port and click on the `LAUNCH` button. If you are running the DebugGUI remotely, but still the processing is done on your laptop (e.g. because the native DebugGUI is not working for some reason) you can download the web page and then open the local html file in your browser.
+
+![DebugGUI](https://user-images.githubusercontent.com/26281793/192991412-f26a271d-919a-4dd5-af2b-6a8425d6d1eb.png)
+
+After launching you can select "interactive" mode on the right and click on "fit" in order to adjust the visualization to your browser window size. When running everything on one machine you can also reduce the latency from 200 to 80 for example to make it more responsive.
+
+![DebugGUI_Running](https://user-images.githubusercontent.com/26281793/192991486-7cdb799b-470a-455b-a2de-65b7d9355ec7.png)
+
+
+Notice that in this setup, you might have to adjust your browser sensibility
+to [CORS](https://en.wikipedia.org/wiki/Cross-origin_resource_sharing). Mac users should try to use Safari if Chrome does not work. In addition, it may be necessary to setup a SOCKS proxy to the remote machine running the DPL workflow.
 
 ### Integrating with non-DPL devices
 
-Given the Data Processing Layer comes somewhat later in the design of O2, it's possible that you already have some topology of devices which you want to integrate, without having to port them to the DPL itself. Alternatively, your devices might not satisfy the requirements of the Data Processing Layer and therefore require a "raw" `FairMQDevice`, fully customised to your needs. This is fully supported and we provide means to ingest foreign, non-DPL FairMQDevices produced, messages into a DPL workflow. This is done via the help of a "proxy" data processor which connects to the foreign device, receives its inputs, optionally converts them to a format understood by the Data Processing Layer, and then pumps them to the right Data Processor Specs. In order to have such a device in your workflow, you can use the [`specifyExternalFairMQDeviceProxy`][specifyExternalFairMQDeviceProxy] helper to instanciate it. For an example of how to use it you can look at
+Given the Data Processing Layer comes somewhat later in the design of O2, it's possible that you already have some topology of devices which you want to integrate, without having to port them to the DPL itself. Alternatively, your devices might not satisfy the requirements of the Data Processing Layer and therefore require a "raw" `fair::mq::Device`, fully customised to your needs. This is fully supported and we provide means to ingest foreign, non-DPL FairMQ devices produced, messages into a DPL workflow. This is done via the help of a "proxy" data processor which connects to the foreign device, receives its inputs, optionally converts them to a format understood by the Data Processing Layer, and then pumps them to the right Data Processor Specs. In order to have such a device in your workflow, you can use the [`specifyExternalFairMQDeviceProxy`][specifyExternalFairMQDeviceProxy] helper to instanciate it. For an example of how to use it you can look at
 [`Framework/TestWorkflows/src/test_RawDeviceInjector.cxx`][rawDeviceInjectorExample]. The `specifyExternalFairMQDeviceProxy` takes four arguments:
 
 ```cpp
@@ -139,7 +177,7 @@ to create an out-of-band channel as specified in `channel-configuration` and hen
 Sometimes it's handy to customise or generalise the workflow creation based on
 external inputs. For example you might want to change the number of workers for
 a given task or disable part of the topology if a given detector should not be
-enabled. 
+enabled.
 
 This can be done by implementing the function:
 
@@ -147,7 +185,7 @@ This can be done by implementing the function:
 void customize(std::vector<o2::framework::ConfigParamSpec> &workflowOptions)
 ```
 
-**before** including the `Framework/runDataProcessing.h` (this will most likely 
+**before** including the `Framework/runDataProcessing.h` (this will most likely
 change in the future). Each ConfigParamSpec will be added to the configuration
 mechanism (e.g. the command line options) allowing you to modify them. Such options
 will then be made available at workflow creation time via the `ConfigContext`
@@ -164,7 +202,7 @@ by some other data processor before the computation declared in yours can happen
 Sometimes it's however desirable to customise such a behavior, so that some action
 on the record can happen even if it's not complete. For example you might want
 to start computing some quantity as a given message arrives and then complete the
-computation once the record is complete. This is done by specifying by customising 
+computation once the record is complete. This is done by specifying by customising
 the data processing CompletionPolicy. This can be done using the usual **Customization
 mechanism** where a:
 
@@ -180,7 +218,7 @@ expressed by a `CompletionOp` to take on a given input record.
 
 Possible actions include:
 
-* `CompletionPolicy::CompletionOp::Consume`: run the data processing callback and 
+* `CompletionPolicy::CompletionOp::Consume`: run the data processing callback and
   mark the available fields in the input as consumed.
 * `CompletionPolicy::CompletionOp::Process`: run the data processing callback, but do
   not consume the field, which will be available when the next message for the field
@@ -207,13 +245,13 @@ customize(std::vector<o2::framework::ChannelConfigurationPolicy> &policies)
 ```
 
 **before** including `Framework/runDataProcessing.h` (this will most likely
-change in the future). You can then extend the policies vector with your own 
+change in the future). You can then extend the policies vector with your own
 `ChannelConfigurationPolicy`. For each device to device edge, the system will
 invoke the `ChannelConfigurationPolicy::match` callback with the ids of the
 producer and of the consumer as arguments. If the callback returns `true`,
 the `ChannelConfigurationPolicy::modifyInput` and
-`ChannelConfigurationPolicy::modifyOutput` will be invoked passing the input and 
-output channel associated to the two devices, giving the opportunity to modify 
+`ChannelConfigurationPolicy::modifyOutput` will be invoked passing the input and
+output channel associated to the two devices, giving the opportunity to modify
 the matching channels.
 
 ## Getting objects from the CCDB
@@ -235,7 +273,7 @@ If the timestamp is not specified, DPL will look it up in the `DataProcessingHea
 ## Lifetime support
 
 While initially foreseen in the design, Lifetime for Inputs / Outputs has not
-yet being implemented correctly. However, once that happens, the following behaviors 
+yet being implemented correctly. However, once that happens, the following behaviors
 will be implemented (naming foreseen to change). Once implemented it will be possible
 to specify the following Lifetime types:
 
@@ -268,6 +306,23 @@ InputSpec{"*", "CLUSTERS"}, InputSpec{"*", "TRACKS"}
 
 i.e. the first message which arrives will define the wildcard for all the other input
 spec in the definition.
+
+## Building a data query by string
+
+The C++ API is not the only way an InputSpec can be constructed. This can be done
+also by string via the `DataDescriptorQueryBuilder::parse` method. E.g.:
+
+
+```cpp
+DataDescriptorQueryBuilder::parse("label:orig/description/0?lifetime=condition");
+```
+
+is equivalent of:
+
+```cpp
+InputSpec{"label", "orig", "description", 0, Lifetime::Condition};
+```
+
 
 ### Data flow parallelism
 
@@ -328,7 +383,7 @@ DataProcessorSpec{
   AlgorithmSpec{[](InitContext &setup) {
      return [](ProcessingContext &ctx) {
   // Create a single output.
-    LOG(DEBUG) << "Invoked" << std::endl;
+    LOG(debug) << "Invoked" << std::endl;
   };
 }
 // ...
@@ -391,10 +446,10 @@ or with a constructor using only 3 arguments (without the default value).
 E.g.
 ```cpp
   { {"opt1", VariantType::String, "def1", {"Command line option 1"}},    // constructor with default value def1
-    {"opt2", VariantType::Int, {"Command line option 2"}},               // constructor without default value  
+    {"opt2", VariantType::Int, {"Command line option 2"}},               // constructor without default value
     {"opt3", VariantType::Float, 10., {"Command line option 3"}} }
 ```
-    
+
 (the available VariantType are listed in Framework/Variant.h).
 
 The options are internally filled into an object of type ConfigParamRegistry and forwarded to the InitCallback of the respective AlgorithmSpec as part of the argument of type InitContext. The ConfigParamRegistry is finally accessed with InitContext::options().
@@ -405,7 +460,7 @@ ConfigParamRegistry opts = ic.options();  // with InitContext ic;
 ```
 
 
-ConfigParamRegistry has the two methods `isSet(key)` and `get<T>(key)`.  
+ConfigParamRegistry has the two methods `isSet(key)` and `get<T>(key)`.
 
 To read the option value use the `get<T>` method with the appropriate type `T`, e.g.
 
@@ -433,7 +488,7 @@ By default DPL exposes the following metrics to the back-end specified with:
 
 * `malformed_inputs`: number of messages which did not match the O2 DataModel
 * `dropped_computations`: number of messages which DPL could not process
-* `dropped_incoming_messages`: number of messages which DPL could 
+* `dropped_incoming_messages`: number of messages which DPL could
                              not accept in its own queue.
 * `relayed_messages`: number of messages received by DPL.
 
@@ -448,14 +503,18 @@ By default DPL exposes the following metrics to the back-end specified with:
 * `last_processing_rate_mb_s`: at what rate the last message was processed
 * `min_input_latency_ms`: the shortest it took for any message to be processed by this dataprocessor (since created)
 * `max_input_latency_ms`: the maximum it took for any message to be processed by this dataprocessor (since created)
-* `input_rate_mb_s`: 
+* `input_rate_mb_s`:
 
-Moreover if you specify `--resources-monitoring <poll-interval>` the 
+Moreover if you specify `--resources-monitoring <poll-interval>` the
 process monitoring metrics described at:
 
 <https://github.com/AliceO2Group/Monitoring/#process-monitoring>
 
 will be pushed every `<poll-interval>` seconds to the same backend and dumped in the `performanceMetrics.json` file on exit.
+
+One can also specify `--resources-monitoring-dump-interval <interval in seconds>` to regularly dump the file at a give interval.
+
+A value of 0 for the interval will disable the monitoring.
 
 ### Disabling monitoring
 
@@ -465,7 +524,7 @@ Sometimes (e.g. when running a child inside valgrind) it might be useful to disa
 some-workflow --monitoring-backend=no-op://
 ```
 
-notice that the GUI will not function properly if you do so.
+notice that the will not function properly if you do so.
 
 ## Profiling
 
@@ -478,3 +537,15 @@ perf script -i perf.data > profile.linux-perf.txt
 ```
 
 and then you can either upload it to https://www.speedscope.app or use chrome://tracing.
+
+## Internal debug log streams
+
+Debug log entries for several DPL components are now provided via the Signpost API.
+
+Such streams can be enabled using the "Signpost" part of the Device Inspector GUI or alternatively from the command line, by specifying the `--signposts <log name>,...` option or exporting the variable `DPL_SIGNPOSTS=<log name>,...`).
+
+Streams can be explicitly enabled or disabled in code using the `O2_SIGNPOST_ENABLE()` and `O2_SIGNPOST_DISABLE` macros.
+
+If a process is already running and you wish to enable one or more of its signposts logs, you can do so using the `o2-log` utility, passing the address of the log to enable and the PID of the running process. E.g. `o2-log -p <PID> -a <hook address of the signpost>`.
+
+Finally, on macOS, you can also use Instruments to visualise your Signpost, just like any other macOS application. In order to do so you need to enable the "Signpost" instrument, making sure you add `ch.cern.aliceo2.completion` to the list of loggers to watch.

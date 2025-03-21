@@ -13,6 +13,7 @@
 #define ALICEO2_TPC_CALDET_H_
 
 #include <memory>
+#include <numeric>
 #include <vector>
 #include <string>
 #include <cassert>
@@ -25,8 +26,8 @@
 
 #ifndef GPUCA_ALIGPUCODE
 #include <Framework/Logger.h>
-#include <boost/format.hpp>
-#include <boost/range/combine.hpp>
+#include <fmt/format.h>
+#include "Rtypes.h"
 #endif
 
 namespace o2
@@ -41,7 +42,7 @@ class CalDet
   using CalType = CalArray<T>;
 
  public:
-  CalDet() = default;
+  CalDet() { initData(); }
   CalDet(CalDet const&) = default;
   CalDet& operator=(CalDet const&) = default;
   ~CalDet() = default;
@@ -74,7 +75,13 @@ class CalDet
   const T getValue(const CRU cru, const size_t row, const size_t pad) const;
   const T getValue(const Sector sec, const int rowInSector, const int padInRow) const;
 
-  void setName(const std::string_view name) { mName = name.data(); }
+  void setName(const std::string_view name, bool nameCalArrays = true)
+  {
+    mName = name.data();
+    if (nameCalArrays) {
+      initData();
+    }
+  }
   const std::string& getName() const { return mName; }
 
   const CalDet& multiply(const T& val) { return *this *= val; }
@@ -82,6 +89,7 @@ class CalDet
   const CalDet& operator-=(const CalDet& other);
   const CalDet& operator*=(const CalDet& other);
   const CalDet& operator/=(const CalDet& other);
+  bool operator==(const CalDet& other) const;
 
   const CalDet& operator+=(const T& val);
   const CalDet& operator-=(const T& val);
@@ -96,13 +104,49 @@ class CalDet
   template <class U>
   friend CalDet<U> operator-(const CalDet<U>&, const CalDet<U>&);
 
+  template <typename U = T>
+  U getMean() const
+  {
+    if (mData.size() == 0) {
+      return U{0};
+    }
+
+    U nVal = 0;
+    U sum = 0;
+    for (const auto& data : mData) {
+      const auto& vals = data.getData();
+      sum += std::accumulate(vals.begin(), vals.end(), U{0});
+      nVal += static_cast<U>(vals.size());
+    }
+
+    return (nVal > 0) ? sum / nVal : U{0};
+  }
+
+  template <typename U = T>
+  U getSum() const
+  {
+    if (mData.size() == 0) {
+      return U{};
+    }
+
+    U sum{};
+    for (const auto& data : mData) {
+      const auto& vals = data.getData();
+      sum += data.template getSum<U>();
+    }
+
+    return sum;
+  }
+
  private:
-  std::string mName;          ///< name of the object
-  std::vector<CalType> mData; ///< internal CalArrays
-  PadSubset mPadSubset;       ///< Pad subset granularity
+  std::string mName;                     ///< name of the object
+  std::vector<CalType> mData;            ///< internal CalArrays
+  PadSubset mPadSubset = PadSubset::ROC; ///< Pad subset granularity
 
   /// initialize the data array depending on what is set as PadSubset
   void initData();
+
+  ClassDefNV(CalDet, 1)
 };
 
 //______________________________________________________________________________
@@ -111,15 +155,35 @@ inline const T CalDet<T>::getValue(const int sector, const int globalPadInSector
 {
   // This shold be a temporary speedup, a proper restructuring of Mapper and CalDet/CalArray is needed.
   // The default granularity for the moment should be ROC, for the assumptions below this should be assured
-  assert(mPadSubset == PadSubset::ROC);
-  int roc = sector;
+  const Mapper& mapper = Mapper::instance();
+  auto padPos = mapper.padPos(globalPadInSector); // global row in sector
+  const auto globalRow = padPos.getRow();
+
+  int rocNumber = sector;
   int padInROC = globalPadInSector;
   const int padsInIROC = Mapper::getPadsInIROC();
   if (globalPadInSector >= padsInIROC) {
-    roc += Mapper::getNumberOfIROCs();
+    rocNumber += Mapper::getNumberOfIROCs();
     padInROC -= padsInIROC;
   }
-  return mData[roc].getValue(padInROC);
+
+  switch (mPadSubset) {
+    case PadSubset::ROC: {
+      return mData[rocNumber].getValue(padInROC);
+      break;
+    }
+    case PadSubset::Partition: {
+      return T{};
+      break;
+    }
+    case PadSubset::Region: {
+      const ROC roc(rocNumber);
+      const auto mappedPad = padPos.getPad();
+      return mData[Mapper::REGION[globalRow] + roc.getSector() * Mapper::NREGIONS].getValue(Mapper::OFFSETCRUGLOBAL[globalRow] + mappedPad);
+      break;
+    }
+  }
+  return T{};
 }
 
 //______________________________________________________________________________
@@ -127,7 +191,7 @@ template <class T>
 inline const T CalDet<T>::getValue(const ROC roc, const size_t row, const size_t pad) const
 {
   // TODO: might need speedup and beautification
-  static const Mapper& mapper = Mapper::instance();
+  const Mapper& mapper = Mapper::instance();
 
   // bind row and pad to the maximum rows and pads in the requested region
   const size_t nRows = mapper.getNumberOfRowsROC(roc);
@@ -159,7 +223,7 @@ template <class T>
 inline const T CalDet<T>::getValue(const CRU cru, const size_t row, const size_t pad) const
 {
   // TODO: might need speedup and beautification
-  static const Mapper& mapper = Mapper::instance();
+  const Mapper& mapper = Mapper::instance();
   const auto& info = mapper.getPadRegionInfo(cru.region());
 
   // bind row and pad to the maximum rows and pads in the requested region
@@ -240,7 +304,7 @@ inline const CalDet<T>& CalDet<T>::operator+=(const CalDet& other)
   // make sure the calibration objects have the same substructure
   // TODO: perhaps make it independed of this
   if (mPadSubset != other.mPadSubset) {
-    LOG(ERROR) << "Pad subste type of the objects it not compatible";
+    LOG(error) << "Pad subste type of the objects it not compatible";
     return *this;
   }
 
@@ -257,7 +321,7 @@ inline const CalDet<T>& CalDet<T>::operator-=(const CalDet& other)
   // make sure the calibration objects have the same substructure
   // TODO: perhaps make it independed of this
   if (mPadSubset != other.mPadSubset) {
-    LOG(ERROR) << "Pad subste type of the objects it not compatible";
+    LOG(error) << "Pad subste type of the objects it not compatible";
     return *this;
   }
 
@@ -274,7 +338,7 @@ inline const CalDet<T>& CalDet<T>::operator*=(const CalDet& other)
   // make sure the calibration objects have the same substructure
   // TODO: perhaps make it independed of this
   if (mPadSubset != other.mPadSubset) {
-    LOG(ERROR) << "Pad subste type of the objects it not compatible";
+    LOG(error) << "Pad subste type of the objects it not compatible";
     return *this;
   }
 
@@ -291,7 +355,7 @@ inline const CalDet<T>& CalDet<T>::operator/=(const CalDet& other)
   // make sure the calibration objects have the same substructure
   // TODO: perhaps make it independed of this
   if (mPadSubset != other.mPadSubset) {
-    LOG(ERROR) << "Pad subste type of the objects it not compatible";
+    LOG(error) << "Pad subste type of the objects it not compatible";
     return *this;
   }
 
@@ -353,6 +417,25 @@ inline const CalDet<T>& CalDet<T>::operator=(const T& val)
 
 //______________________________________________________________________________
 template <class T>
+inline bool CalDet<T>::operator==(const CalDet& other) const
+{
+  // make sure the calibration objects have the same substructure
+  // TODO: perhaps make it independed of this
+  if (mPadSubset != other.mPadSubset) {
+    LOG(error) << "Pad subste type of the objects it not compatible";
+    return false;
+  }
+
+  for (size_t i = 0; i < mData.size(); ++i) {
+    if (!(mData[i] == other.mData[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+//______________________________________________________________________________
+template <class T>
 CalDet<T> operator+(const CalDet<T>& c1, const CalDet<T>& c2)
 {
   CalDet<T> ret(c1);
@@ -376,28 +459,31 @@ void CalDet<T>::initData()
 
   // ---| Define number of sub pad regions |------------------------------------
   size_t size = 0;
+  bool hasData = mData.size() > 0;
   std::string frmt;
   switch (mPadSubset) {
     case PadSubset::ROC: {
       size = ROC::MaxROC;
-      frmt = "%1%_ROC_%2$02d";
+      frmt = "{}_ROC_{:02d}";
       break;
     }
     case PadSubset::Partition: {
       size = Sector::MAXSECTOR * mapper.getNumberOfPartitions();
-      frmt = "%1%_Partition_%2$02d";
+      frmt = "{}_Partition_{:02d}";
       break;
     }
     case PadSubset::Region: {
       size = Sector::MAXSECTOR * mapper.getNumberOfPadRegions();
-      frmt = "%1%_Region_%2$02d";
+      frmt = "{}_Region_{:02d}";
       break;
     }
   }
 
   for (size_t i = 0; i < size; ++i) {
-    mData.push_back(CalType(mPadSubset, i));
-    mData.back().setName(boost::str(boost::format(frmt) % mName % i));
+    if (!hasData) {
+      mData.push_back(CalType(mPadSubset, i));
+    }
+    mData[i].setName(fmt::format(fmt::runtime(frmt), mName, i));
   }
 }
 

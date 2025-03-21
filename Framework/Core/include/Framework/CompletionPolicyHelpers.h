@@ -12,7 +12,6 @@
 #define O2_FRAMEWORK_COMPLETIONPOLICYHELPERS_H_
 
 #include "Framework/ChannelSpec.h"
-#include "Framework/CompletionPolicyHelpers.h"
 #include "Framework/CompletionPolicy.h"
 #include "Headers/DataHeader.h"
 
@@ -32,13 +31,39 @@ struct CompletionPolicyHelpers {
   {
     return consumeWhenAll("consume-all", matcher);
   }
+
+  /// as consumeWhenAll, but ensures that records are processed with incremental timeSlice (DataHeader::startTime)
+  static CompletionPolicy consumeWhenAllOrdered(const char* name, CompletionPolicy::Matcher matcher);
+  /// Default matcher applies for all devices
+  static CompletionPolicy consumeWhenAllOrdered(CompletionPolicy::Matcher matcher = [](auto const&) -> bool { return true; })
+  {
+    return consumeWhenAllOrdered("consume-all-ordered", matcher);
+  }
+  static CompletionPolicy consumeWhenAllOrdered(std::string matchName);
+
   /// When any of the parts of the record have been received, consume them.
   static CompletionPolicy consumeWhenAny(const char* name, CompletionPolicy::Matcher matcher);
+
+#if __has_include(<fairmq/shmem/Message.h>)
+  /// When any of the parts which has arrived has a refcount of 1.
+  static CompletionPolicy consumeWhenAnyZeroCount(const char* name, CompletionPolicy::Matcher matcher);
+#endif
   /// Default matcher applies for all devices
   static CompletionPolicy consumeWhenAny(CompletionPolicy::Matcher matcher = [](auto const&) -> bool { return true; })
   {
     return consumeWhenAny("consume-any", matcher);
   }
+  static CompletionPolicy consumeWhenAny(std::string matchName);
+
+  /// When any of the parts of the record have been received, consume them.
+  static CompletionPolicy consumeWhenAnyWithAllConditions(const char* name, CompletionPolicy::Matcher matcher);
+  /// Default matcher applies for all devices
+  static CompletionPolicy consumeWhenAnyWithAllConditions(CompletionPolicy::Matcher matcher = [](auto const&) -> bool { return true; })
+  {
+    return consumeWhenAnyWithAllConditions("consume-any-all-conditions", matcher);
+  }
+  static CompletionPolicy consumeWhenAnyWithAllConditions(std::string matchName);
+
   /// When any of the parts of the record have been received, process the existing and free the associated payloads.
   /// This allows freeing things as early as possible, while still being able to wait
   /// all the parts before disposing the timeslice completely

@@ -8,6 +8,9 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
+#ifndef ALICEO2_EMCAL_BADCHANNELMAP
+#define ALICEO2_EMCAL_BADCHANNELMAP
+
 #include <iosfwd>
 #include <bitset>
 #include <Rtypes.h>
@@ -103,6 +106,7 @@ class BadChannelMap
   /// \brief Add bad cell to the container
   /// \param channelID Absolute ID of the bad channel
   /// \param mask type of the bad channel
+  /// \throw CalibContainerIndexException in case the cell ID exceeds the range of cells in EMCAL
   ///
   /// Adding new bad channel to the container. In case a cell
   /// with the same ID is already present in the container,
@@ -116,6 +120,7 @@ class BadChannelMap
   /// \brief Get the status of a certain cell
   /// \param channelID channel for which to obtain the channel status
   /// \return Mask status of the cell (GOOD_CELL if not registered)
+  /// \throw CalibContainerIndexException in case the cell ID exceeds the range of cells in EMCAL
   ///
   /// Provide the mask status of a cell. In case the cell is registered
   /// in the container the mask status registered is returned, otherwise
@@ -176,3 +181,5 @@ std::ostream& operator<<(std::ostream& in, const BadChannelMap::MaskType_t& mask
 } // namespace emcal
 
 } // namespace o2
+
+#endif

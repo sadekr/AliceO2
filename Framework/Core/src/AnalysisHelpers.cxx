@@ -8,39 +8,22 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#include "Framework/AnalysisHelpers.h"
-#include "Framework/RCombinedDS.h"
-#include "Framework/TableBuilder.h"
-#include "Framework/TableConsumer.h"
+#include "Framework/ExpressionHelpers.h"
 
-#include <ROOT/RDataFrame.hxx>
-#include <ROOT/RArrowDS.hxx>
-
-using namespace ROOT::RDF;
-
-namespace o2
+namespace o2::framework
 {
-namespace analysis
+void initializePartitionCaches(std::set<uint32_t> const& hashes, std::shared_ptr<arrow::Schema> const& schema, expressions::Filter const& filter, gandiva::NodePtr& tree, gandiva::FilterPtr& gfilter)
 {
-
-ROOT::RDataFrame doSingleLoopOn(std::unique_ptr<framework::TableConsumer>& input)
-{
-  auto flat = std::make_unique<RArrowDS>(input->asArrowTable(), std::vector<std::string>{});
-  ROOT::RDataFrame rdf(std::move(flat));
-  return rdf;
+  if (tree == nullptr) {
+    expressions::Operations ops = createOperations(filter);
+    if (isTableCompatible(hashes, ops)) {
+      tree = createExpressionTree(ops, schema);
+    } else {
+      throw std::runtime_error("Partition filter does not match declared table type");
+    }
+  }
+  if (gfilter == nullptr) {
+    gfilter = framework::expressions::createFilter(schema, framework::expressions::makeCondition(tree));
+  }
 }
-
-ROOT::RDataFrame doSelfCombinationsWith(std::unique_ptr<framework::TableConsumer>& input, std::string name, std::string grouping)
-{
-  auto table = input->asArrowTable();
-  using Index = RCombinedDSBlockJoinIndex<int>;
-  auto left = std::make_unique<RArrowDS>(table, std::vector<std::string>{});
-  auto right = std::make_unique<RArrowDS>(table, std::vector<std::string>{});
-  auto combined = std::make_unique<RCombinedDS>(std::move(left), std::move(right), std::make_unique<Index>(grouping, true, BlockCombinationRule::StrictlyUpper), name + "_", name + "bar_");
-
-  ROOT::RDataFrame rdf(std::move(combined));
-  return rdf;
-}
-
-} // namespace analysis
-} // namespace o2
+} // namespace o2::framework

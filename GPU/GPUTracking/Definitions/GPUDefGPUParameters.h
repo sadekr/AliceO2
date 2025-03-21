@@ -29,22 +29,87 @@
 
 // GPU Run Configuration
 #ifdef GPUCA_GPUCODE
-#if defined(GPUCA_GPUTYPE_VEGA)
+#if defined(GPUCA_GPUTYPE_MI2xx)
   #define GPUCA_WARP_SIZE 64
   #define GPUCA_THREAD_COUNT 256
-  #define GPUCA_LB_GPUTPCCreateSliceData 128
+  #define GPUCA_LB_GPUTPCCreateTrackingData 256
+  #define GPUCA_LB_GPUTPCStartHitsSorter 512, 1
+  #define GPUCA_LB_GPUTPCStartHitsFinder 1024
+  #define GPUCA_LB_GPUTPCTrackletConstructor 512, 2
+  #define GPUCA_LB_GPUTPCTrackletSelector 192, 3
+  #define GPUCA_LB_GPUTPCNeighboursFinder 1024, 1
+  #define GPUCA_LB_GPUTPCNeighboursCleaner 896
+  #define GPUCA_LB_GPUTPCExtrapolationTracking 256
+  #define GPUCA_LB_GPUTPCCFDecodeZS 64, 4
+  #define GPUCA_LB_GPUTPCCFDecodeZSLink GPUCA_WARP_SIZE
+  #define GPUCA_LB_GPUTPCCFDecodeZSDenseLink GPUCA_WARP_SIZE
+  #define GPUCA_LB_GPUTPCCFGather 1024, 1
+  #define GPUCA_LB_GPUTPCGMMergerTrackFit 128, 1
+  #define GPUCA_LB_GPUTPCGMMergerFollowLoopers 64, 12
+  #define GPUCA_LB_GPUTPCGMMergerSectorRefit 256
+  #define GPUCA_LB_GPUTPCGMMergerUnpackResetIds 256
+  #define GPUCA_LB_GPUTPCGMMergerUnpackGlobal 256
+  #define GPUCA_LB_GPUTPCGMMergerResolve_step0 512
+  #define GPUCA_LB_GPUTPCGMMergerResolve_step1 512
+  #define GPUCA_LB_GPUTPCGMMergerResolve_step2 512
+  #define GPUCA_LB_GPUTPCGMMergerResolve_step3 512
+  #define GPUCA_LB_GPUTPCGMMergerResolve_step4 512
+  #define GPUCA_LB_GPUTPCGMMergerClearLinks 256
+  #define GPUCA_LB_GPUTPCGMMergerMergeWithinPrepare 256
+  #define GPUCA_LB_GPUTPCGMMergerMergeSectorsPrepare 256
+  #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step0 512
+  #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step2 512
+  #define GPUCA_LB_GPUTPCGMMergerMergeCE 512
+  #define GPUCA_LB_GPUTPCGMMergerLinkExtrapolatedTracks 256
+  #define GPUCA_LB_GPUTPCGMMergerCollect 512
+  #define GPUCA_LB_GPUTPCGMMergerSortTracksPrepare 256
+  #define GPUCA_LB_GPUTPCGMMergerPrepareClusters_step0 256
+  #define GPUCA_LB_GPUTPCGMMergerPrepareClusters_step1 256
+  #define GPUCA_LB_GPUTPCGMMergerPrepareClusters_step2 256
+  #define GPUCA_LB_GPUTPCGMMergerFinalize_0 256
+  #define GPUCA_LB_GPUTPCGMMergerFinalize_1 256
+  #define GPUCA_LB_GPUTPCGMMergerFinalize_2 256
+  #define GPUCA_LB_GPUTPCCompressionKernels_step0attached 64, 2
+  #define GPUCA_LB_GPUTPCCompressionKernels_step1unattached 512, 2
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step0attached 128, 2
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step1unattached 64, 2
+  #define GPUCA_LB_GPUTPCCFCheckPadBaseline 64
+  #define GPUCA_LB_GPUTPCCFChargeMapFiller_fillIndexMap 512
+  #define GPUCA_LB_GPUTPCCFChargeMapFiller_fillFromDigits 512
+  #define GPUCA_LB_GPUTPCCFChargeMapFiller_findFragmentStart 512
+  #define GPUCA_LB_GPUTPCCFPeakFinder 512
+  #define GPUCA_LB_GPUTPCCFNoiseSuppression 512
+  #define GPUCA_LB_GPUTPCCFDeconvolution 512
+  #define GPUCA_LB_GPUTPCCFClusterizer 448
+  #define GPUCA_LB_COMPRESSION_GATHER 1024
+  #define GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP 5
+  #define GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE 20
+  #define GPUCA_ALTERNATE_BORDER_SORT 1
+  #define GPUCA_SORT_BEFORE_FIT 1
+  #define GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION 1
+  #define GPUCA_NO_ATOMIC_PRECHECK 1
+  #define GPUCA_DEDX_STORAGE_TYPE uint16_t
+  #define GPUCA_MERGER_INTERPOLATION_ERROR_TYPE half
+  #define GPUCA_COMP_GATHER_KERNEL 4
+  #define GPUCA_COMP_GATHER_MODE 3
+#elif defined(GPUCA_GPUTYPE_VEGA)
+  #define GPUCA_WARP_SIZE 64
+  #define GPUCA_THREAD_COUNT 256
+  #define GPUCA_LB_GPUTPCCreateTrackingData 128
   #define GPUCA_LB_GPUTPCStartHitsSorter 1024, 2
   #define GPUCA_LB_GPUTPCStartHitsFinder 1024
   #define GPUCA_LB_GPUTPCTrackletConstructor 256, 2
   #define GPUCA_LB_GPUTPCTrackletSelector 256, 8
   #define GPUCA_LB_GPUTPCNeighboursFinder 1024, 1
   #define GPUCA_LB_GPUTPCNeighboursCleaner 896
-  #define GPUCA_LB_GPUTPCGlobalTracking 256
+  #define GPUCA_LB_GPUTPCExtrapolationTracking 256
   #define GPUCA_LB_GPUTPCCFDecodeZS 64, 4
+  #define GPUCA_LB_GPUTPCCFDecodeZSLink GPUCA_WARP_SIZE
+  #define GPUCA_LB_GPUTPCCFDecodeZSDenseLink GPUCA_WARP_SIZE
   #define GPUCA_LB_GPUTPCCFGather 1024, 1
   #define GPUCA_LB_GPUTPCGMMergerTrackFit 64, 1
   #define GPUCA_LB_GPUTPCGMMergerFollowLoopers 256, 4, 200
-  #define GPUCA_LB_GPUTPCGMMergerSliceRefit 256
+  #define GPUCA_LB_GPUTPCGMMergerSectorRefit 256
   #define GPUCA_LB_GPUTPCGMMergerUnpackResetIds 256
   #define GPUCA_LB_GPUTPCGMMergerUnpackGlobal 256
   #define GPUCA_LB_GPUTPCGMMergerResolve_step0 256
@@ -54,11 +119,11 @@
   #define GPUCA_LB_GPUTPCGMMergerResolve_step4 256
   #define GPUCA_LB_GPUTPCGMMergerClearLinks 256
   #define GPUCA_LB_GPUTPCGMMergerMergeWithinPrepare 256
-  #define GPUCA_LB_GPUTPCGMMergerMergeSlicesPrepare 256
+  #define GPUCA_LB_GPUTPCGMMergerMergeSectorsPrepare 256
   #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step0 256
   #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step2 256
   #define GPUCA_LB_GPUTPCGMMergerMergeCE 256
-  #define GPUCA_LB_GPUTPCGMMergerLinkGlobalTracks 256
+  #define GPUCA_LB_GPUTPCGMMergerLinkExtrapolatedTracks 256
   #define GPUCA_LB_GPUTPCGMMergerCollect 512
   #define GPUCA_LB_GPUTPCGMMergerSortTracksPrepare 256
   #define GPUCA_LB_GPUTPCGMMergerPrepareClusters_step0 256
@@ -69,6 +134,8 @@
   #define GPUCA_LB_GPUTPCGMMergerFinalize_2 256
   #define GPUCA_LB_GPUTPCCompressionKernels_step0attached 192, 2
   #define GPUCA_LB_GPUTPCCompressionKernels_step1unattached 512, 2
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step0attached 128, 2
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step1unattached 64, 2
   #define GPUCA_LB_GPUTPCCFCheckPadBaseline 64
   #define GPUCA_LB_GPUTPCCFChargeMapFiller_fillIndexMap 512
   #define GPUCA_LB_GPUTPCCFChargeMapFiller_fillFromDigits 512
@@ -80,33 +147,32 @@
   #define GPUCA_LB_COMPRESSION_GATHER 1024
   #define GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP 5
   #define GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE 20
-  #define GPUCA_CONSTRUCTOR_IN_PIPELINE 1
-  #define GPUCA_SELECTOR_IN_PIPELINE 1
   #define GPUCA_ALTERNATE_BORDER_SORT 1
   #define GPUCA_SORT_BEFORE_FIT 1
   #define GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION 1
-  #define GPUCA_TRACKLET_SELECTOR_SLICE_COUNT 1
   #define GPUCA_NO_ATOMIC_PRECHECK 1
-  #define GPUCA_DEDX_STORAGE_TYPE unsigned short
+  #define GPUCA_DEDX_STORAGE_TYPE uint16_t
   #define GPUCA_MERGER_INTERPOLATION_ERROR_TYPE half
   #define GPUCA_COMP_GATHER_KERNEL 4
   #define GPUCA_COMP_GATHER_MODE 3
 #elif defined(GPUCA_GPUTYPE_AMPERE)
   #define GPUCA_WARP_SIZE 32
   #define GPUCA_THREAD_COUNT 512
-  #define GPUCA_LB_GPUTPCCreateSliceData 384
+  #define GPUCA_LB_GPUTPCCreateTrackingData 384
   #define GPUCA_LB_GPUTPCStartHitsSorter 512, 1
   #define GPUCA_LB_GPUTPCStartHitsFinder 512
   #define GPUCA_LB_GPUTPCTrackletConstructor 256, 2 // best single-kernel: 128, 4
   #define GPUCA_LB_GPUTPCTrackletSelector 192, 3    // best single-kernel: 128, 4
   #define GPUCA_LB_GPUTPCNeighboursFinder 640, 1    // best single-kernel: 768, 1
   #define GPUCA_LB_GPUTPCNeighboursCleaner 512
-  #define GPUCA_LB_GPUTPCGlobalTracking 128, 4
+  #define GPUCA_LB_GPUTPCExtrapolationTracking 128, 4
   #define GPUCA_LB_GPUTPCCFDecodeZS 64, 10
+  #define GPUCA_LB_GPUTPCCFDecodeZSLink GPUCA_WARP_SIZE
+  #define GPUCA_LB_GPUTPCCFDecodeZSDenseLink GPUCA_WARP_SIZE
   #define GPUCA_LB_GPUTPCCFGather 1024, 1
   #define GPUCA_LB_GPUTPCGMMergerTrackFit 64, 4
   #define GPUCA_LB_GPUTPCGMMergerFollowLoopers 64, 12
-  #define GPUCA_LB_GPUTPCGMMergerSliceRefit 32, 6
+  #define GPUCA_LB_GPUTPCGMMergerSectorRefit 32, 6
   #define GPUCA_LB_GPUTPCGMMergerUnpackResetIds 256
   #define GPUCA_LB_GPUTPCGMMergerUnpackGlobal 256
   #define GPUCA_LB_GPUTPCGMMergerResolve_step0 256
@@ -116,11 +182,11 @@
   #define GPUCA_LB_GPUTPCGMMergerResolve_step4 256, 4
   #define GPUCA_LB_GPUTPCGMMergerClearLinks 256
   #define GPUCA_LB_GPUTPCGMMergerMergeWithinPrepare 256
-  #define GPUCA_LB_GPUTPCGMMergerMergeSlicesPrepare 256, 2
+  #define GPUCA_LB_GPUTPCGMMergerMergeSectorsPrepare 256, 2
   #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step0 192
   #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step2 64, 2
   #define GPUCA_LB_GPUTPCGMMergerMergeCE 256
-  #define GPUCA_LB_GPUTPCGMMergerLinkGlobalTracks 256
+  #define GPUCA_LB_GPUTPCGMMergerLinkExtrapolatedTracks 256
   #define GPUCA_LB_GPUTPCGMMergerCollect 256, 2
   #define GPUCA_LB_GPUTPCGMMergerSortTracksPrepare 256
   #define GPUCA_LB_GPUTPCGMMergerPrepareClusters_step0 256
@@ -131,6 +197,8 @@
   #define GPUCA_LB_GPUTPCGMMergerFinalize_2 256
   #define GPUCA_LB_GPUTPCCompressionKernels_step0attached 64, 2
   #define GPUCA_LB_GPUTPCCompressionKernels_step1unattached 512, 3
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step0attached 32, 1
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step1unattached 32, 1
   #define GPUCA_LB_GPUTPCCFCheckPadBaseline 64,8
   #define GPUCA_LB_GPUTPCCFChargeMapFiller_fillIndexMap 448
   #define GPUCA_LB_GPUTPCCFChargeMapFiller_fillFromDigits 448
@@ -142,33 +210,32 @@
   #define GPUCA_LB_COMPRESSION_GATHER 1024
   #define GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP 4
   #define GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE 20
-  #define GPUCA_CONSTRUCTOR_IN_PIPELINE 1
-  #define GPUCA_SELECTOR_IN_PIPELINE 1
   #define GPUCA_ALTERNATE_BORDER_SORT 1
   #define GPUCA_SORT_BEFORE_FIT 1
   #define GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION 1
-  #define GPUCA_TRACKLET_SELECTOR_SLICE_COUNT 1
   #define GPUCA_NO_ATOMIC_PRECHECK 1
-  #define GPUCA_DEDX_STORAGE_TYPE unsigned short
+  #define GPUCA_DEDX_STORAGE_TYPE uint16_t
   #define GPUCA_MERGER_INTERPOLATION_ERROR_TYPE half
   #define GPUCA_COMP_GATHER_KERNEL 4
   #define GPUCA_COMP_GATHER_MODE 3
 #elif defined(GPUCA_GPUTYPE_TURING)
   #define GPUCA_WARP_SIZE 32
   #define GPUCA_THREAD_COUNT 512
-  #define GPUCA_LB_GPUTPCCreateSliceData 256
+  #define GPUCA_LB_GPUTPCCreateTrackingData 256
   #define GPUCA_LB_GPUTPCStartHitsSorter 512, 1
   #define GPUCA_LB_GPUTPCStartHitsFinder 512
   #define GPUCA_LB_GPUTPCTrackletConstructor 256, 2
   #define GPUCA_LB_GPUTPCTrackletSelector 192, 3
   #define GPUCA_LB_GPUTPCNeighboursFinder 640, 1
   #define GPUCA_LB_GPUTPCNeighboursCleaner 512
-  #define GPUCA_LB_GPUTPCGlobalTracking 192, 2
+  #define GPUCA_LB_GPUTPCExtrapolationTracking 192, 2
   #define GPUCA_LB_GPUTPCCFDecodeZS 64, 8
+  #define GPUCA_LB_GPUTPCCFDecodeZSLink GPUCA_WARP_SIZE
+  #define GPUCA_LB_GPUTPCCFDecodeZSDenseLink GPUCA_WARP_SIZE
   #define GPUCA_LB_GPUTPCCFGather 1024, 1
   #define GPUCA_LB_GPUTPCGMMergerTrackFit 32, 8
   #define GPUCA_LB_GPUTPCGMMergerFollowLoopers 128, 4
-  #define GPUCA_LB_GPUTPCGMMergerSliceRefit 64, 5
+  #define GPUCA_LB_GPUTPCGMMergerSectorRefit 64, 5
   #define GPUCA_LB_GPUTPCGMMergerUnpackResetIds 256
   #define GPUCA_LB_GPUTPCGMMergerUnpackGlobal 256
   #define GPUCA_LB_GPUTPCGMMergerResolve_step0 256
@@ -178,11 +245,11 @@
   #define GPUCA_LB_GPUTPCGMMergerResolve_step4 256, 4
   #define GPUCA_LB_GPUTPCGMMergerClearLinks 256
   #define GPUCA_LB_GPUTPCGMMergerMergeWithinPrepare 256
-  #define GPUCA_LB_GPUTPCGMMergerMergeSlicesPrepare 256, 2
+  #define GPUCA_LB_GPUTPCGMMergerMergeSectorsPrepare 256, 2
   #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step0 192
   #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step2 256
   #define GPUCA_LB_GPUTPCGMMergerMergeCE 256
-  #define GPUCA_LB_GPUTPCGMMergerLinkGlobalTracks 256
+  #define GPUCA_LB_GPUTPCGMMergerLinkExtrapolatedTracks 256
   #define GPUCA_LB_GPUTPCGMMergerCollect 128, 2
   #define GPUCA_LB_GPUTPCGMMergerSortTracksPrepare 256
   #define GPUCA_LB_GPUTPCGMMergerPrepareClusters_step0 256
@@ -193,19 +260,18 @@
   #define GPUCA_LB_GPUTPCGMMergerFinalize_2 256
   #define GPUCA_LB_GPUTPCCompressionKernels_step0attached 128
   #define GPUCA_LB_GPUTPCCompressionKernels_step1unattached 512, 2
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step0attached 32, 1
+  #define GPUCA_LB_GPUTPCDecompressionKernels_step1unattached 32, 1
   #define GPUCA_LB_COMPRESSION_GATHER 1024
   #define GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP 4
   #define GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE 20
-  #define GPUCA_CONSTRUCTOR_IN_PIPELINE 1
-  #define GPUCA_SELECTOR_IN_PIPELINE 1
   #define GPUCA_ALTERNATE_BORDER_SORT 1
   #define GPUCA_SORT_BEFORE_FIT 1
   #define GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION 1
-  #define GPUCA_TRACKLET_SELECTOR_SLICE_COUNT 1
   #define GPUCA_NO_ATOMIC_PRECHECK 1
   #define GPUCA_COMP_GATHER_KERNEL 4
   #define GPUCA_COMP_GATHER_MODE 3
-  #define GPUCA_DEDX_STORAGE_TYPE unsigned short
+  #define GPUCA_DEDX_STORAGE_TYPE uint16_t
   #define GPUCA_MERGER_INTERPOLATION_ERROR_TYPE half
   // #define GPUCA_USE_TEXTURES
 #elif defined(GPUCA_GPUTYPE_OPENCL)
@@ -219,8 +285,8 @@
   #ifndef GPUCA_THREAD_COUNT
     #define GPUCA_THREAD_COUNT 256
   #endif
-  #ifndef GPUCA_LB_GPUTPCCreateSliceData
-    #define GPUCA_LB_GPUTPCCreateSliceData 256
+  #ifndef GPUCA_LB_GPUTPCCreateTrackingData
+    #define GPUCA_LB_GPUTPCCreateTrackingData 256
   #endif
   #ifndef GPUCA_LB_GPUTPCTrackletConstructor
     #define GPUCA_LB_GPUTPCTrackletConstructor 256
@@ -234,11 +300,20 @@
   #ifndef GPUCA_LB_GPUTPCNeighboursCleaner
     #define GPUCA_LB_GPUTPCNeighboursCleaner 256
   #endif
-  #ifndef GPUCA_LB_GPUTPCGlobalTracking
-    #define GPUCA_LB_GPUTPCGlobalTracking 256
+  #ifndef GPUCA_LB_GPUTPCExtrapolationTracking
+    #define GPUCA_LB_GPUTPCExtrapolationTracking 256
   #endif
-  #ifndef GPUCA_LB_GPUTRDTrackerKernels
-    #define GPUCA_LB_GPUTRDTrackerKernels 512
+  #ifndef GPUCA_LB_GPUTRDTrackerKernels_gpuVersion
+    #define GPUCA_LB_GPUTRDTrackerKernels_gpuVersion 512
+  #endif
+  #ifndef GPUCA_LB_GPUTPCCreateOccupancyMap_fill
+    #define GPUCA_LB_GPUTPCCreateOccupancyMap_fill 256
+  #endif
+  #ifndef GPUCA_LB_GPUTPCCreateOccupancyMap_fold
+    #define GPUCA_LB_GPUTPCCreateOccupancyMap_fold 256
+  #endif
+  #ifndef GPUCA_LB_GPUTRDTrackerKernels_o2Version
+    #define GPUCA_LB_GPUTRDTrackerKernels_o2Version 512
   #endif
   #ifndef GPUCA_LB_GPUTPCConvertKernel
     #define GPUCA_LB_GPUTPCConvertKernel 256
@@ -249,8 +324,29 @@
   #ifndef GPUCA_LB_GPUTPCCompressionKernels_step1unattached
     #define GPUCA_LB_GPUTPCCompressionKernels_step1unattached 256
   #endif
+  #ifndef GPUCA_LB_GPUTPCDecompressionKernels_step0attached
+    #define GPUCA_LB_GPUTPCDecompressionKernels_step0attached 256
+  #endif
+  #ifndef GPUCA_LB_GPUTPCDecompressionKernels_step1unattached
+    #define GPUCA_LB_GPUTPCDecompressionKernels_step1unattached 256
+  #endif
+  #ifndef GPUCA_LB_GPUTPCDecompressionUtilKernels_sortPerSectorRow
+    #define GPUCA_LB_GPUTPCDecompressionUtilKernels_sortPerSectorRow 256
+  #endif
+    #ifndef GPUCA_LB_GPUTPCDecompressionUtilKernels_countFilteredClusters
+    #define GPUCA_LB_GPUTPCDecompressionUtilKernels_countFilteredClusters 256
+  #endif
+    #ifndef GPUCA_LB_GPUTPCDecompressionUtilKernels_storeFilteredClusters
+    #define GPUCA_LB_GPUTPCDecompressionUtilKernels_storeFilteredClusters 256
+  #endif
   #ifndef GPUCA_LB_GPUTPCCFDecodeZS
     #define GPUCA_LB_GPUTPCCFDecodeZS 128, 4
+  #endif
+  #ifndef GPUCA_LB_GPUTPCCFDecodeZSLink
+    #define GPUCA_LB_GPUTPCCFDecodeZSLink GPUCA_WARP_SIZE
+  #endif
+  #ifndef GPUCA_LB_GPUTPCCFDecodeZSDenseLink
+    #define GPUCA_LB_GPUTPCCFDecodeZSDenseLink GPUCA_WARP_SIZE
   #endif
   #ifndef GPUCA_LB_GPUTPCCFGather
     #define GPUCA_LB_GPUTPCCFGather 1024, 1
@@ -264,8 +360,8 @@
   #ifndef GPUCA_LB_GPUTPCGMMergerFollowLoopers
     #define GPUCA_LB_GPUTPCGMMergerFollowLoopers 256
   #endif
-  #ifndef GPUCA_LB_GPUTPCGMMergerSliceRefit
-    #define GPUCA_LB_GPUTPCGMMergerSliceRefit 256
+  #ifndef GPUCA_LB_GPUTPCGMMergerSectorRefit
+    #define GPUCA_LB_GPUTPCGMMergerSectorRefit 256
   #endif
   #ifndef GPUCA_LB_GPUTPCGMMergerUnpackResetIds
     #define GPUCA_LB_GPUTPCGMMergerUnpackResetIds 256
@@ -294,8 +390,8 @@
   #ifndef GPUCA_LB_GPUTPCGMMergerMergeWithinPrepare
     #define GPUCA_LB_GPUTPCGMMergerMergeWithinPrepare 256
   #endif
-  #ifndef GPUCA_LB_GPUTPCGMMergerMergeSlicesPrepare
-    #define GPUCA_LB_GPUTPCGMMergerMergeSlicesPrepare 256
+  #ifndef GPUCA_LB_GPUTPCGMMergerMergeSectorsPrepare
+    #define GPUCA_LB_GPUTPCGMMergerMergeSectorsPrepare 256
   #endif
   #ifndef GPUCA_LB_GPUTPCGMMergerMergeBorders_step0
     #define GPUCA_LB_GPUTPCGMMergerMergeBorders_step0 256
@@ -306,8 +402,8 @@
   #ifndef GPUCA_LB_GPUTPCGMMergerMergeCE
     #define GPUCA_LB_GPUTPCGMMergerMergeCE 256
   #endif
-  #ifndef GPUCA_LB_GPUTPCGMMergerLinkGlobalTracks
-    #define GPUCA_LB_GPUTPCGMMergerLinkGlobalTracks 256
+  #ifndef GPUCA_LB_GPUTPCGMMergerLinkExtrapolatedTracks
+    #define GPUCA_LB_GPUTPCGMMergerLinkExtrapolatedTracks 256
   #endif
   #ifndef GPUCA_LB_GPUTPCGMMergerCollect
     #define GPUCA_LB_GPUTPCGMMergerCollect 256
@@ -348,8 +444,8 @@
   #ifndef GPUCA_LB_GPUTPCGMO2Output_output
     #define GPUCA_LB_GPUTPCGMO2Output_output 256
   #endif
-  #ifndef GPUCA_LB_GPUITSFitterKernel
-    #define GPUCA_LB_GPUITSFitterKernel 256
+  #ifndef GPUCA_LB_GPUITSFitterKernels
+    #define GPUCA_LB_GPUITSFitterKernels 256
   #endif
   #ifndef GPUCA_LB_GPUTPCStartHitsFinder
     #define GPUCA_LB_GPUTPCStartHitsFinder 256
@@ -381,6 +477,9 @@
   #ifndef GPUCA_LB_GPUTPCCFClusterizer
     #define GPUCA_LB_GPUTPCCFClusterizer 512
   #endif
+  #ifndef GPUCA_LB_GPUTPCNNClusterizerKernels
+    #define GPUCA_LB_GPUTPCNNClusterizerKernels 512
+  #endif
   #ifndef GPUCA_LB_GPUTrackingRefitKernel_mode0asGPU
     #define GPUCA_LB_GPUTrackingRefitKernel_mode0asGPU 256
   #endif
@@ -399,13 +498,23 @@
 
 #define GPUCA_LB_GPUTPCCFNoiseSuppression_noiseSuppression GPUCA_LB_GPUTPCCFNoiseSuppression
 #define GPUCA_LB_GPUTPCCFNoiseSuppression_updatePeaks GPUCA_LB_GPUTPCCFNoiseSuppression
+
+#ifdef GPUCA_HAS_ONNX
+#define GPUCA_LB_GPUTPCNNClusterizerKernels_runCfClusterizer GPUCA_LB_GPUTPCNNClusterizerKernels
+#define GPUCA_LB_GPUTPCNNClusterizerKernels_fillInputNN GPUCA_LB_GPUTPCNNClusterizerKernels
+#define GPUCA_LB_GPUTPCNNClusterizerKernels_determineClass1Labels GPUCA_LB_GPUTPCNNClusterizerKernels
+#define GPUCA_LB_GPUTPCNNClusterizerKernels_determineClass2Labels GPUCA_LB_GPUTPCNNClusterizerKernels
+#define GPUCA_LB_GPUTPCNNClusterizerKernels_publishClass1Regression GPUCA_LB_GPUTPCNNClusterizerKernels
+#define GPUCA_LB_GPUTPCNNClusterizerKernels_publishClass2Regression GPUCA_LB_GPUTPCNNClusterizerKernels
+#endif
+
 #define GPUCA_LB_GPUTPCCFStreamCompaction_scanStart GPUCA_THREAD_COUNT_SCAN
 #define GPUCA_LB_GPUTPCCFStreamCompaction_scanUp GPUCA_THREAD_COUNT_SCAN
 #define GPUCA_LB_GPUTPCCFStreamCompaction_scanTop GPUCA_THREAD_COUNT_SCAN
 #define GPUCA_LB_GPUTPCCFStreamCompaction_scanDown GPUCA_THREAD_COUNT_SCAN
 #define GPUCA_LB_GPUTPCCFStreamCompaction_compactDigits GPUCA_THREAD_COUNT_SCAN
-#define GPUCA_LB_GPUTPCTrackletConstructor_singleSlice GPUCA_LB_GPUTPCTrackletConstructor
-#define GPUCA_LB_GPUTPCTrackletConstructor_allSlices GPUCA_LB_GPUTPCTrackletConstructor
+#define GPUCA_LB_GPUTPCTrackletConstructor_singleSector GPUCA_LB_GPUTPCTrackletConstructor
+#define GPUCA_LB_GPUTPCTrackletConstructor_allSectors GPUCA_LB_GPUTPCTrackletConstructor
 #define GPUCA_LB_GPUTPCCompressionGatherKernels_unbuffered GPUCA_LB_COMPRESSION_GATHER
 #define GPUCA_LB_GPUTPCCompressionGatherKernels_buffered32 GPUCA_LB_COMPRESSION_GATHER
 #define GPUCA_LB_GPUTPCCompressionGatherKernels_buffered64 GPUCA_LB_COMPRESSION_GATHER
@@ -426,12 +535,6 @@
   #ifndef GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE
   #define GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE 12
   #endif
-  #ifndef GPUCA_CONSTRUCTOR_IN_PIPELINE
-  #define GPUCA_CONSTRUCTOR_IN_PIPELINE 1
-  #endif
-  #ifndef GPUCA_SELECTOR_IN_PIPELINE
-  #define GPUCA_SELECTOR_IN_PIPELINE 0
-  #endif
   #ifndef GPUCA_ALTERNATE_BORDER_SORT
   #define GPUCA_ALTERNATE_BORDER_SORT 0
   #endif
@@ -440,9 +543,6 @@
   #endif
   #ifndef GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION
   #define GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION 0
-  #endif
-  #ifndef GPUCA_TRACKLET_SELECTOR_SLICE_COUNT
-  #define GPUCA_TRACKLET_SELECTOR_SLICE_COUNT 8                          // Currently must be smaller than avaiable MultiProcessors on GPU or will result in wrong results
   #endif
   #ifndef GPUCA_COMP_GATHER_KERNEL
   #define GPUCA_COMP_GATHER_KERNEL 0
@@ -453,12 +553,9 @@
 #else
   #define GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP 0
   #define GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE 0
-  #define GPUCA_CONSTRUCTOR_IN_PIPELINE 1
-  #define GPUCA_SELECTOR_IN_PIPELINE 1
   #define GPUCA_ALTERNATE_BORDER_SORT 0
   #define GPUCA_SORT_BEFORE_FIT 0
   #define GPUCA_MERGER_SPLIT_LOOP_INTERPOLATION 0
-  #define GPUCA_TRACKLET_SELECTOR_SLICE_COUNT 1
   #define GPUCA_THREAD_COUNT_FINDER 1
   #define GPUCA_COMP_GATHER_KERNEL 0
   #define GPUCA_COMP_GATHER_MODE 0
@@ -468,6 +565,12 @@
 #endif
 #ifndef GPUCA_MERGER_INTERPOLATION_ERROR_TYPE
 #define GPUCA_MERGER_INTERPOLATION_ERROR_TYPE float
+#endif
+#ifdef GPUCA_NO_FAST_MATH
+#undef GPUCA_MERGER_INTERPOLATION_ERROR_TYPE
+#define GPUCA_MERGER_INTERPOLATION_ERROR_TYPE float
+#undef GPUCA_DEDX_STORAGE_TYPE
+#define GPUCA_DEDX_STORAGE_TYPE float
 #endif
 
 #ifndef GPUCA_WARP_SIZE
@@ -479,7 +582,7 @@
 #endif
 
 #define GPUCA_MAX_THREADS 1024
-#define GPUCA_MAX_STREAMS 32
+#define GPUCA_MAX_STREAMS 36
 
 #define GPUCA_SORT_STARTHITS_GPU                                       // Sort the start hits when running on GPU
 #define GPUCA_ROWALIGNMENT 16                                          // Align of Row Hits and Grid
@@ -498,18 +601,16 @@
 #define GPUCA_GPU_STACK_SIZE         ((size_t)               8 * 1024) // Stack size per GPU thread
 #define GPUCA_GPU_HEAP_SIZE          ((size_t)       16 * 1025 * 1024) // Stack size per GPU thread
 
-#define GPUCA_MAX_SLICE_NTRACK (2 << 24)                               // Maximum number of tracks per slice (limited by track id format)
+#define GPUCA_MAX_SECTOR_NTRACK (2 << 24)                               // Maximum number of tracks per sector (limited by track id format)
 
 // #define GPUCA_KERNEL_DEBUGGER_OUTPUT
 
 // Some assertions to make sure out parameters are not invalid
-#ifdef GPUCA_NOCOMPAT
   static_assert(GPUCA_MAXN >= GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP, "Invalid GPUCA_NEIGHBOURS_FINDER_MAX_NNEIGHUP");
   static_assert(GPUCA_ROW_COUNT >= GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE, "Invalid GPUCA_TRACKLET_SELECTOR_HITS_REG_SIZE");
   #ifdef GPUCA_GPUCODE
     static_assert(GPUCA_M_FIRST(GPUCA_LB_GPUTPCCompressionKernels_step1unattached) * 2 <= GPUCA_TPC_COMP_CHUNK_SIZE, "Invalid GPUCA_TPC_COMP_CHUNK_SIZE");
   #endif
-#endif
 
 // Derived parameters
 #ifdef GPUCA_USE_TEXTURES
@@ -520,13 +621,8 @@
   #define GPUCA_SORT_STARTHITS
 #endif
 
-#if defined(__cplusplus) && __cplusplus >= 201703L
 #define GPUCA_NEW_ALIGNMENT (std::align_val_t{GPUCA_BUFFER_ALIGNMENT})
 #define GPUCA_OPERATOR_NEW_ALIGNMENT ,GPUCA_NEW_ALIGNMENT
-#else
-#define GPUCA_NEW_ALIGNMENT
-#define GPUCA_OPERATOR_NEW_ALIGNMENT
-#endif
 
-// clang-format on
+    // clang-format on
 #endif

@@ -22,6 +22,7 @@
 #include "TPCCalibration/CalibRawBase.h"
 
 class TH2D;
+class TH2Poly;
 
 namespace o2
 {
@@ -50,7 +51,11 @@ class SimpleEventDisplay : public CalibRawBase
   Int_t updateCRU(const CRU& cru, const Int_t row, const Int_t pad,
                   const Int_t timeBin, const Float_t signal) final { return 0; }
 
+  void updateSectorHists();
+
   CalPad* getCalPadMax() { return &mPadMax; }
+
+  CalPad* getCalPadOccupancy() { return &mPadOccupancy; }
 
   /// Set currently selected sector
   void setSelectedSector(Int_t selectedSector) { mSelectedSector = selectedSector; }
@@ -63,7 +68,16 @@ class SimpleEventDisplay : public CalibRawBase
 
   void setPedstals(CalPad* pedestals) { mPedestals = pedestals; }
 
+  void setSignalThreshold(Int_t signalThreshold) { mSignalThreshold = signalThreshold; }
+
+  void setShowOccupancy(bool showOccupancy) { mShowOccupancy = showOccupancy; }
+
   TH1D* makePadSignals(Int_t roc, Int_t row, Int_t pad);
+
+  TH2D* getSigIROC() const { return mHSigIROC; }
+  TH2D* getSigOROC() const { return mHSigOROC; }
+
+  void fillSectorHistSingleTimeBin(TH2Poly* h, Int_t timeBin);
 
   /// set time bin range
   void setTimeBinRange(int firstBin, int lastBin)
@@ -73,29 +87,35 @@ class SimpleEventDisplay : public CalibRawBase
     initHistograms();
   }
 
+  Int_t getFirstTimeBin() const { return mFirstTimeBin; }
+  Int_t getLastTimeBin() const { return mLastTimeBin; }
+
   /// Dummy end event
-  void endEvent() final{};
+  void endEvent() final {};
 
  private:
-  CalPad mPadMax;     //!< Cal Pad with max Entry per channel
-  TH2D* mHSigIROC;    //!< iroc signals
-  TH2D* mHSigOROC;    //!< oroc signals
-  CalPad* mPedestals; //!< Pedestal calibratino object
+  CalPad mPadMax;       ///< Cal Pad with max Entry per channel
+  CalPad mPadOccupancy; ///< Cal Pad with Occupancy per channel
+  TH2D* mHSigIROC;      ///< iroc signals
+  TH2D* mHSigOROC;      ///< oroc signals
+  CalPad* mPedestals;   ///< Pedestal calibratino object
 
-  Int_t mCurrentChannel; //!< current channel processed
-  Int_t mCurrentROC;     //!< current ROC processed
-  Int_t mLastSector;     //!< Last sector processed
-  Int_t mSelectedSector; //!< Sector selected for processing
-  Int_t mLastSelSector;  //!< Last sector selected for processing
-  Int_t mCurrentRow;     //!< current row processed
-  Int_t mCurrentPad;     //!< current pad processed
-  Float_t mMaxPadSignal; //!< maximum bin of current pad
-  Int_t mMaxTimeBin;     //!< time bin with maximum value
-  Bool_t mSectorLoop;    //!< only process one sector
-  Int_t mFirstTimeBin;   //!< first time bin to accept
-  Int_t mLastTimeBin;    //!< last time bin to accept
+  Int_t mCurrentChannel;  ///< current channel processed
+  Int_t mCurrentROC;      ///< current ROC processed
+  Int_t mLastSector;      ///< Last sector processed
+  Int_t mSelectedSector;  ///< Sector selected for processing
+  Int_t mLastSelSector;   ///< Last sector selected for processing
+  Int_t mCurrentRow;      ///< current row processed
+  Int_t mCurrentPad;      ///< current pad processed
+  Float_t mMaxPadSignal;  ///< maximum bin of current pad
+  Int_t mMaxTimeBin;      ///< time bin with maximum value
+  Bool_t mSectorLoop;     ///< only process one sector
+  Int_t mFirstTimeBin;    ///< first time bin to accept
+  Int_t mLastTimeBin;     ///< last time bin to accept
+  Int_t mSignalThreshold; ///< minimum adc value
+  Bool_t mShowOccupancy;  ///< true iff occupancy should be calculated, false otherwise
 
-  const Mapper& mTPCmapper; //! mapper
+  const Mapper& mTPCmapper; /// mapper
 
   void resetEvent() final;
   void initHistograms();

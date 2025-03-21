@@ -21,12 +21,12 @@
 #include "DataFormatsPHOS/MCLabel.h"
 #include "DataFormatsPHOS/TriggerRecord.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
+#include "PHOSBase/Geometry.h"
 
 namespace o2
 {
 namespace phos
 {
-class Geometry;
 
 class Clusterer
 {
@@ -46,11 +46,16 @@ class Clusterer
 
   void makeClusters(std::vector<Cluster>& clusters, std::vector<o2::phos::CluElement>& cluel);
 
-  void setBadMap(std::unique_ptr<BadChannelsMap>& m) { mBadMap = std::move(m); }
-  void setCalibration(std::unique_ptr<CalibParams>& c) { mCalibParams = std::move(c); }
+  void setBadMap(const o2::phos::BadChannelsMap* m) { mBadMap = m; }
+  void setCalibration(const o2::phos::CalibParams* c) { mCalibParams = c; }
+  void setL1phase(int phase)
+  {
+    mL1phase = phase;
+    mSkipL1phase = false;
+  }
 
  protected:
-  //Calibrate energy
+  // Calibrate energy
   inline float calibrate(float amp, short absId, bool isHighGain)
   {
     if (isHighGain) {
@@ -59,17 +64,30 @@ class Clusterer
       return amp * mCalibParams->getGain(absId) * mCalibParams->getHGLGRatio(absId);
     }
   }
-  //Calibrate time
-  inline float calibrateT(float time, short absId, bool isHighGain)
+  // Calibrate time
+  inline float calibrateT(float time, short absId, bool isHighGain, int bc)
   {
-    //Calibrate time
+    // L1phase correction
+    float shift = 0;
+    if (!mSkipL1phase) {
+      char relid[3];
+      o2::phos::Geometry::absToRelNumbering(absId, relid);
+      int ddl = (relid[0] - 1) * 4 + (relid[1] - 1) / 16 - 2;
+      int l1 = (mL1phase >> (ddl * 2)) & 3; // extract 2 bits corresponding to this ddl
+      l1 = bc % 4 - l1;
+      if (l1 < 0) {
+        l1 += 4;
+      }
+      shift = l1 * 25.e-9;
+    }
+    // Calibrate time
     if (isHighGain) {
-      return time - mCalibParams->getHGTimeCalib(absId);
+      return time - mCalibParams->getHGTimeCalib(absId) - shift;
     } else {
-      return time - mCalibParams->getLGTimeCalib(absId);
+      return time - mCalibParams->getLGTimeCalib(absId) - shift;
     }
   }
-  //Test Bad map
+  // Test Bad map
   inline bool isBadChannel(short absId) { return (!mBadMap->isChannelGood(absId)); }
 
   char getNumberOfLocalMax(Cluster& clu, std::vector<CluElement>& cluel);
@@ -80,17 +98,19 @@ class Clusterer
 
   double showerShape(double r2, double& deriv); // Parameterization of EM shower
 
-  void makeUnfolding(Cluster& clu, std::vector<Cluster>& clusters, std::vector<o2::phos::CluElement>& cluel); //unfold cluster with few local maxima
+  void makeUnfolding(Cluster& clu, std::vector<Cluster>& clusters, std::vector<o2::phos::CluElement>& cluel); // unfold cluster with few local maxima
   void unfoldOneCluster(Cluster& iniClu, char nMax, std::vector<Cluster>& clusters, std::vector<CluElement>& cluelements);
 
  protected:
-  static constexpr short NLOCMAX = 30; //Maximal number of local maxima in cluster
+  static constexpr short NLOCMAX = 30; // Maximal number of local maxima in cluster
   bool mProcessMC = false;
   int miCellLabel = 0;
   bool mFullCluOutput = false;               ///< Write output full of reduced (no contributed digits) clusters
-  Geometry* mPHOSGeom = nullptr;             ///< PHOS geometry
-  std::unique_ptr<CalibParams> mCalibParams; ///! Calibration coefficients
-  std::unique_ptr<BadChannelsMap> mBadMap;   ///! Bad map
+  bool mSkipL1phase = true;                  /// Do not correct for L1 phase
+  int mL1phase = 0;                          /// packed shifts for 14 ddls
+  Geometry* mPHOSGeom = nullptr;             ///! PHOS geometry
+  const CalibParams* mCalibParams = nullptr; ///! Calibration coefficients, Clusterizer not owner
+  const BadChannelsMap* mBadMap = nullptr;   ///! Bad map, Clusterizer not owner
 
   std::vector<CluElement> mCluEl; ///< internal vector of clusters
   std::vector<Digit> mTrigger;    ///< internal vector of clusters

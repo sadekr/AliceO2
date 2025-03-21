@@ -12,6 +12,7 @@
 /// \file   DigitDump.cxx
 /// \author Jens Wiechula, Jens.Wiechula@ikf.uni-frankfurt.de
 
+#include <cstddef>
 #include "TTree.h"
 #include "TString.h"
 
@@ -93,7 +94,7 @@ Int_t DigitDump::updateCRU(const CRU& cru, const Int_t row, const Int_t pad,
   if (mPadMask.size() && std::find(mPadMask.begin(), mPadMask.end(), std::array<int, 3>({int(cru.roc()), sectorRow, pad})) != mPadMask.end()) {
     return 1;
   }
-  //printf("updateCRU: %d, %d (%d, %d), %d, %d, %f, %f\n", int(cru), row, globalRow, sectorRow, pad, timeBin, signal, pedestal);
+  // printf("updateCRU: %d, %d (%d, %d), %d, %d, %f, %f\n", int(cru), row, globalRow, sectorRow, pad, timeBin, signal, pedestal);
 
   // fill digits
   addDigit(cru, signalCorr, globalRow, pad, timeBin);
@@ -140,13 +141,13 @@ void DigitDump::endEvent()
 void DigitDump::loadNoiseAndPedestal()
 {
   if (!mPedestalAndNoiseFile.size()) {
-    LOG(WARNING) << "No pedestal and noise file name set";
+    LOG(warning) << "No pedestal and noise file name set";
     return;
   }
 
   std::unique_ptr<TFile> f(TFile::Open(mPedestalAndNoiseFile.data()));
   if (!f || !f->IsOpen() || f->IsZombie()) {
-    LOG(FATAL) << "Could not open pedestal file: " << mPedestalAndNoiseFile;
+    LOG(fatal) << "Could not open pedestal file: " << mPedestalAndNoiseFile;
   }
 
   CalPad* pedestal{nullptr};
@@ -155,8 +156,8 @@ void DigitDump::loadNoiseAndPedestal()
   f->GetObject("Pedestals", pedestal);
   f->GetObject("Noise", noise);
 
-  mPedestal = std::move(std::unique_ptr<CalPad>(pedestal));
-  mNoise = std::move(std::unique_ptr<CalPad>(noise));
+  mPedestal = std::move(std::unique_ptr<const CalPad>(pedestal));
+  mNoise = std::move(std::unique_ptr<const CalPad>(noise));
 }
 
 //______________________________________________________________________________
@@ -213,7 +214,16 @@ void DigitDump::checkDuplicates(bool removeDuplicates)
       }
     }
     if (nDuplicates) {
-      LOGP(warning, "{} {} duplicate digits in sector {}", removeDuplicates ? "removed" : "found", nDuplicates, iSec);
+      static std::array<size_t, Sector::MAXSECTOR> nWarning{};
+      static std::array<size_t, Sector::MAXSECTOR> suppression{};
+      if (nWarning[iSec] < 5 || nWarning[iSec] == suppression[iSec]) {
+        LOGP(alarm, "{} {} duplicate digits in sector {}, warned {} times in this sector", removeDuplicates ? "removed" : "found", nDuplicates, iSec, nWarning[iSec]);
+        if (nWarning[iSec] == 4) {
+          suppression[iSec] = 10;
+        }
+        suppression[iSec] *= 10;
+      }
+      ++nWarning[iSec];
     }
   }
 }
@@ -222,7 +232,7 @@ void DigitDump::checkDuplicates(bool removeDuplicates)
 void DigitDump::removeCEdigits(uint32_t removeNtimeBinsBefore, uint32_t removeNtimeBinsAfter, std::array<std::vector<Digit>, Sector::MAXSECTOR>* removedDigits)
 {
   if (!mInitialized || !mTimeBinOccupancy.size()) {
-    LOGP(info, "Cannot calculate CE psition, mInitialized = {}, mTimeBinOccupancy.size() = {}", mInitialized, mTimeBinOccupancy.size());
+    LOGP(info, "Cannot calculate CE position, mInitialized = {}, mTimeBinOccupancy.size() = {}", mInitialized, mTimeBinOccupancy.size());
     return;
   }
   // ===| check if proper CE signal was found |===
@@ -261,14 +271,14 @@ void DigitDump::removeCEdigits(uint32_t removeNtimeBinsBefore, uint32_t removeNt
       continue;
     }
 
-    //LOGP(info, "processing sector iSec");
+    // LOGP(info, "processing sector iSec");
     const auto itFirstTB = std::lower_bound(digits.begin(), digits.end(),
                                             firstTimeBin,
                                             [](const auto& digit, const auto val) {
                                               return digit.getTimeStamp() < val;
                                             });
 
-    //LOGP(info, "first time bin to remove is {} at position {} / {}", *itFirstTB, std::distance(digits.begin(), itFirstTB), digits.size());
+    // LOGP(info, "first time bin to remove is {} at position {} / {}", *itFirstTB, std::distance(digits.begin(), itFirstTB), digits.size());
     if (itFirstTB == digits.end()) {
       continue;
     }
@@ -279,15 +289,15 @@ void DigitDump::removeCEdigits(uint32_t removeNtimeBinsBefore, uint32_t removeNt
                                              return val < digit.getTimeStamp();
                                            });
 
-    //LOGP(info, "last time bin to remove is {} at position {} / {}", *(itLastTB - 1), std::distance(digits.begin(), itLastTB), digits.size());
+    // LOGP(info, "last time bin to remove is {} at position {} / {}", *(itLastTB - 1), std::distance(digits.begin(), itLastTB), digits.size());
     if (removedDigits) {
-      //LOGP(info, "copy removed digits");
+      // LOGP(info, "copy removed digits");
       auto& cpDigits = (*removedDigits)[iSec];
       cpDigits.clear();
       std::copy(itFirstTB, itLastTB, std::back_inserter(cpDigits));
     }
 
-    //LOGP(info, "erasing {} digits", std::distance(itFirstTB, itLastTB));
+    // LOGP(info, "erasing {} digits", std::distance(itFirstTB, itLastTB));
     digits.erase(itFirstTB, itLastTB);
   }
 }

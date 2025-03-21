@@ -10,157 +10,303 @@
 // or submit itself to any jurisdiction.
 
 #include "MCHSimulation/DEDigitizer.h"
-#include "DetectorsRaw/HBFUtils.h"
-#include <cmath>
-#include <random>
 
-using o2::math_utils::Point3D;
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include "MCHSimulation/DigitizerParam.h"
+#include <TGeoGlobalMagField.h>
+#include "Field/MagneticField.h"
+
+/// Convert collision time to ROF time (ROF duration = 4 BC)
+std::pair<o2::InteractionRecord, uint8_t> time2ROFtime(const o2::InteractionRecord& time)
+{
+  auto bc = static_cast<uint8_t>(time.bc % 4);
+  return std::make_pair(o2::InteractionRecord(time.bc - bc, time.orbit), bc);
+}
+
+//_________________________________________________________________________________________________
 
 namespace o2::mch
 {
-
-DEDigitizer::DEDigitizer(int deId, o2::math_utils::Transform3D transformation)
+//_________________________________________________________________________________________________
+DEDigitizer::DEDigitizer(int deId, math_utils::Transform3D transformation, std::mt19937& random)
   : mDeId{deId},
     mResponse{deId < 300 ? Station::Type1 : Station::Type2345},
     mTransformation{transformation},
-    mSegmentation{o2::mch::mapping::segmentation(deId)},
-    mCharges(mSegmentation.nofPads()),
-    mLabels(mSegmentation.nofPads())
+    mSegmentation{mch::mapping::segmentation(deId)},
+    mRandom{random},
+    mMinChargeDist{DigitizerParam::Instance().minChargeMean, DigitizerParam::Instance().minChargeSigma},
+    mTimeDist{0., DigitizerParam::Instance().timeSigma},
+    mNoiseDist{0., DigitizerParam::Instance().noiseSigma},
+    mNoiseOnlyDist{DigitizerParam::Instance().noiseOnlyMean, DigitizerParam::Instance().noiseOnlySigma},
+    mNofNoisyPadsDist{DigitizerParam::Instance().noiseOnlyProba * mSegmentation.nofPads()},
+    mPadIdDist{0, mSegmentation.nofPads() - 1},
+    mBCDist{0, 3},
+    mFirstTFOrbit{0},
+    mSignals(mSegmentation.nofPads())
 {
 }
 
-void DEDigitizer::startCollision(o2::InteractionRecord collisionTime)
-{
-  mIR = collisionTime;
-  clear();
-}
-
-void DEDigitizer::process(const Hit& hit, int evID, int srcID)
+void DEDigitizer::processHit(const Hit& hit, const InteractionRecord& collisionTime, int evID, int srcID)
 {
   MCCompLabel label(hit.GetTrackID(), evID, srcID);
-  Point3D<float> pos(hit.GetX(), hit.GetY(), hit.GetZ());
 
-  //convert energy to charge
+  // convert energy to charge
   auto charge = mResponse.etocharge(hit.GetEnergyLoss());
+  auto chargeCorr = mResponse.chargeCorr();
+  auto chargeBending = chargeCorr * charge;
+  auto chargeNonBending = charge / chargeCorr;
 
-  auto time = mIR.differenceInBC(o2::raw::HBFUtils::Instance().orbitFirst);
-  // digit time will disappear anyway ? (same information in ROFRecord)
+  // local position of the charge distribution
+  auto exitPoint = hit.exitPoint();
+  auto entrancePoint = hit.entrancePoint();
+  math_utils::Point3D<float> lexit{};
+  math_utils::Point3D<float> lentrance{};
+  mTransformation.MasterToLocal(exitPoint, lexit);
+  mTransformation.MasterToLocal(entrancePoint, lentrance);
 
-  //transformation from global to local
-  Point3D<float> lpos;
-  mTransformation.MasterToLocal(pos, lpos);
+  auto hitlengthZ = lentrance.Z() - lexit.Z();
+  auto pitch = mResponse.getPitch();
 
-  auto anodpos = mResponse.getAnod(lpos.X());
-  auto fracplane = mResponse.chargeCorr();
-  auto chargebend = fracplane * charge;
-  auto chargenon = charge / fracplane;
+  math_utils::Point3D<float> lpos{};
 
-  //borders of charge gen.
-  auto xMin = anodpos - mResponse.getQspreadX() * mResponse.getSigmaIntegration() * 0.5;
-  auto xMax = anodpos + mResponse.getQspreadX() * mResponse.getSigmaIntegration() * 0.5;
-  auto yMin = lpos.Y() - mResponse.getQspreadY() * mResponse.getSigmaIntegration() * 0.5;
-  auto yMax = lpos.Y() + mResponse.getQspreadY() * mResponse.getSigmaIntegration() * 0.5;
-
-  //get segmentation for detector element
-  auto localX = anodpos;
+  if (abs(hitlengthZ) > pitch * 1.99) {
+    lpos.SetXYZ((lexit.X() + lentrance.X()) / 2., (lexit.Y() + lentrance.Y()) / 2., (lexit.Z() + lentrance.Z()) / 2.);
+  } else {
+    lpos.SetXYZ(lexit.X(), // take Bragg peak coordinates assuming electron drift parallel to z
+                lexit.Y(), // take Bragg peak coordinates assuming electron drift parallel to z
+                0.0);      // take wire position global coordinate negative
+  }
+  auto localX = mResponse.getAnod(lpos.X());
   auto localY = lpos.Y();
 
-  //get area for signal induction from segmentation
-  //single pad as check
-  int padidbendcent = 0;
-  int padidnoncent = 0;
-  int ndigits = 0;
+  // calculate angle between track and wire assuming wire perpendicular to z-axis
+  // take global coordinates to avoid issues with rotations of detection elements
+  // neglect rotation of chambers w.r.t. beam
+  auto thetawire = atan((exitPoint.Y() - entrancePoint.Y()) / (entrancePoint.Z() - exitPoint.Z()));
 
-  bool padexists = mSegmentation.findPadPairByPosition(localX, localY, padidbendcent, padidnoncent);
-  if (!padexists) {
-    LOGP(warning, "Did not find _any_ pad for localX,Y={},{} for DeId {}", localX, localY, mDeId);
-    return;
+  // local b-field
+  double b[3] = {0., 0., 0.};
+  double x[3] = {entrancePoint.X(), entrancePoint.Y(), entrancePoint.Z()};
+  if (TGeoGlobalMagField::Instance()->GetField()) {
+    TGeoGlobalMagField::Instance()->Field(x, b);
+  } else {
+    LOG(fatal) << "no b field in MCH DEDigitizer";
   }
 
-  std::vector<int> padids;
+  // calculate track betagamma
+  // assume beta = 1 and mass of charged muon to calculate track betagamma from particle energy
+  auto betagamma = hit.eTot() / 0.1056583745;
+  auto yAngleEffect = mResponse.inclandbfield(thetawire, betagamma, b[0]);
+  localY += yAngleEffect;
 
-  // get all pads within the defined bounding box ...
-  mSegmentation.forEachPadInArea(xMin, yMin, xMax, yMax, [&padids](int padid) {
-    padids.emplace_back(padid);
-  });
+  // borders of charge integration area
+  auto dxy = mResponse.getSigmaIntegration() * mResponse.getChargeSpread();
+  auto xMin = localX - dxy;
+  auto xMax = localX + dxy;
+  auto yMin = localY - dxy;
+  auto yMax = localY + dxy;
 
-  // ... and loop over all those pads to compute the charge on each of them
-  for (auto padid : padids) {
+  // loop over all pads within the defined bounding box to compute the charge on each of them
+  mSegmentation.forEachPadInArea(xMin, yMin, xMax, yMax, [&](int padid) {
     auto dx = mSegmentation.padSizeX(padid) * 0.5;
     auto dy = mSegmentation.padSizeY(padid) * 0.5;
-    auto xmin = (localX - mSegmentation.padPositionX(padid)) - dx;
-    auto xmax = xmin + 2 * dx;
-    auto ymin = (localY - mSegmentation.padPositionY(padid)) - dy;
-    auto ymax = ymin + 2 * dy;
-    auto q = mResponse.chargePadfraction(xmin, xmax, ymin, ymax);
-    if (mResponse.aboveThreshold(q)) {
-      if (mSegmentation.isBendingPad(padid)) {
-        q *= chargebend;
+    auto xPad = mSegmentation.padPositionX(padid) - localX;
+    auto yPad = mSegmentation.padPositionY(padid) - localY;
+    auto q = mResponse.chargePadfraction(xPad - dx, xPad + dx, yPad - dy, yPad + dy);
+    if (mResponse.isAboveThreshold(q)) {
+      q *= mSegmentation.isBendingPad(padid) ? chargeBending : chargeNonBending;
+      if (q > 0.f) {
+        addSignal(padid, collisionTime, q, label);
+      }
+    }
+  });
+}
+
+void DEDigitizer::addNoise(const InteractionRecord& firstIR, const InteractionRecord& lastIR)
+{
+  if (mNofNoisyPadsDist.mean() > 0.) {
+    auto firstROF = time2ROFtime(firstIR);
+    auto lastROF = time2ROFtime(lastIR);
+    for (auto ir = firstROF.first; ir <= lastROF.first; ir += 4) {
+      int nofNoisyPads = mNofNoisyPadsDist(mRandom);
+      for (auto i = 0; i < nofNoisyPads; ++i) {
+        addNoise(mPadIdDist(mRandom), ir);
+      }
+    }
+  }
+}
+
+size_t DEDigitizer::digitize(std::map<InteractionRecord, DigitsAndLabels>& irDigitsAndLabels)
+{
+  size_t nPileup = 0;
+  for (int padid = 0; padid < mSignals.size(); ++padid) {
+    auto& signals = mSignals[padid];
+
+    // add time dispersion to physical signal (noise-only signal is already randomly distributed)
+    if (mTimeDist.stddev() > 0.f) {
+      for (auto& signal : signals) {
+        if (!signal.labels.front().isNoise()) {
+          addTimeDispersion(signal);
+        }
+      }
+    }
+
+    // sort signals in time (needed to handle pileup)
+    if (DigitizerParam::Instance().handlePileup) {
+      std::sort(signals.begin(), signals.end(), [](const Signal& s1, const Signal& s2) {
+        return s1.rofIR < s2.rofIR || (s1.rofIR == s2.rofIR && s1.bcInROF < s2.bcInROF);
+      });
+    }
+
+    DigitsAndLabels* previousDigitsAndLabels = nullptr;
+    auto previousDigitBCStart = std::numeric_limits<int64_t>::min();
+    auto previousDigitBCEnd = std::numeric_limits<int64_t>::min();
+    float previousRawCharge = 0.f;
+    for (auto& signal : signals) {
+
+      auto rawCharge = signal.charge;
+      auto nSamples = mResponse.nSamples(rawCharge);
+
+      // add noise to physical signal and reject it if it is below threshold
+      // (not applied to noise-only signals, which are noise above threshold by definition)
+      if (!signal.labels.back().isNoise()) {
+        addNoise(signal, nSamples);
+        if (!isAboveThreshold(signal.charge)) {
+          continue;
+        }
+      }
+
+      // create a digit or add the signal to the previous one in case of overlap and if requested.
+      // a correct handling of pileup would require a complete simulation of the electronic signal
+      auto digitBCStart = signal.rofIR.toLong();
+      auto digitBCEnd = digitBCStart + 4 * nSamples - 1;
+      if (DigitizerParam::Instance().handlePileup && digitBCStart <= previousDigitBCEnd + 8) {
+        rawCharge += previousRawCharge;
+        auto minNSamples = (std::max(previousDigitBCEnd, digitBCEnd) + 1 - previousDigitBCStart) / 4;
+        nSamples = std::max(static_cast<uint32_t>(minNSamples), mResponse.nSamples(rawCharge));
+        appendLastDigit(previousDigitsAndLabels, signal, nSamples);
+        previousDigitBCEnd = previousDigitBCStart + 4 * nSamples - 1;
+        previousRawCharge = rawCharge;
+        ++nPileup;
       } else {
-        q *= chargenon;
-      }
-      if (q > 0) {
-        mCharges[padid] += q;
-        mLabels[padid].emplace_back(label);
+        previousDigitsAndLabels = addNewDigit(irDigitsAndLabels, padid, signal, nSamples);
+        previousDigitBCStart = digitBCStart;
+        previousDigitBCEnd = digitBCEnd;
+        previousRawCharge = rawCharge;
       }
     }
   }
-}
 
-void DEDigitizer::addNoise(float noiseProba)
-{
-  std::random_device rd;
-  std::mt19937 mt(rd());
-
-  float mean = noiseProba * mSegmentation.nofPads();
-  float sigma = mean / std::sqrt(mean);
-
-  std::normal_distribution<float> gaus(mean, sigma);
-
-  int nofNoisyPads = std::ceil(gaus(mt));
-
-  std::uniform_int_distribution<int> ids(0, mSegmentation.nofPads() - 1);
-
-  float chargeNoise = 1.2;
-  // FIXME: draw this also from some distribution (according to
-  // some parameters in DigitizerParam)
-  for (auto i = 0; i < nofNoisyPads; i++) {
-    auto padid = ids(mt);
-    mCharges[padid] += chargeNoise;
-    mLabels[padid].emplace_back(true);
-  }
-}
-
-void DEDigitizer::extractDigitsAndLabels(std::vector<Digit>& digits,
-                                         o2::dataformats::MCTruthContainer<o2::MCCompLabel>& labels)
-{
-  int dataindex = labels.getIndexedSize();
-  for (auto padid = 0; padid < mCharges.size(); ++padid) {
-    auto q = mCharges[padid];
-    if (q <= 0) {
-      continue;
-    }
-    // FIXME: this is just to compare with previous MCHDigitizer
-    auto signal = (uint32_t)q * mResponse.getInverseChargeThreshold();
-    auto padc = signal * mResponse.getChargeThreshold();
-    auto adc = mResponse.response(TMath::Nint(padc));
-    if (adc > 0) {
-      auto time = mIR.differenceInBC(o2::raw::HBFUtils::Instance().orbitFirst);
-      digits.emplace_back(mDeId, padid, adc, time, 1);
-      for (auto element : mLabels[padid]) {
-        labels.addElement(dataindex, element);
-      }
-      ++dataindex;
-    }
-  }
+  return nPileup;
 }
 
 void DEDigitizer::clear()
 {
-  std::fill(mCharges.begin(), mCharges.end(), 0);
-  for (auto& label : mLabels) {
-    label.clear();
+  for (auto& signals : mSignals) {
+    signals.clear();
   }
+}
+
+void DEDigitizer::addSignal(int padid, const InteractionRecord& collisionTime, float charge, const MCCompLabel& label)
+{
+  // convert collision time to ROF time
+  auto rofTime = time2ROFtime(collisionTime);
+
+  // search if we already have a signal for that pad in that ROF
+  auto& signals = mSignals[padid];
+  auto itSignal = std::find_if(signals.begin(), signals.end(),
+                               [&rofTime](const Signal& s) { return s.rofIR == rofTime.first; });
+
+  if (itSignal != signals.end()) {
+    // merge with the existing signal
+    itSignal->bcInROF = std::min(itSignal->bcInROF, rofTime.second);
+    itSignal->charge += charge;
+    itSignal->labels.push_back(label);
+  } else {
+    // otherwise create a new signal
+    signals.emplace_back(rofTime.first, rofTime.second, charge, label);
+  }
+}
+
+void DEDigitizer::addNoise(int padid, const InteractionRecord& rofIR)
+{
+  // search if we already have a signal for that pad in that ROF
+  auto& signals = mSignals[padid];
+  auto itSignal = std::find_if(signals.begin(), signals.end(), [&rofIR](const Signal& s) { return s.rofIR == rofIR; });
+
+  // add noise-only signal only if no signal found
+  if (itSignal == signals.end()) {
+    auto bc = static_cast<uint8_t>(mBCDist(mRandom));
+    auto charge = (mNoiseOnlyDist.stddev() > 0.f) ? mNoiseOnlyDist(mRandom) : mNoiseOnlyDist.mean();
+    if (charge > 0.f) {
+      signals.emplace_back(rofIR, bc, charge, MCCompLabel(true));
+    }
+  }
+}
+
+void DEDigitizer::addNoise(Signal& signal, uint32_t nSamples)
+{
+  if (mNoiseDist.stddev() > 0.f) {
+    signal.charge += mNoiseDist(mRandom) * std::sqrt(nSamples);
+  }
+}
+
+void DEDigitizer::addTimeDispersion(Signal& signal)
+{
+  auto time = signal.rofIR.toLong() + signal.bcInROF + std::llround(mTimeDist(mRandom));
+  // the time must be positive
+  if (time < 0) {
+    time = 0;
+  }
+  auto [ir, bc] = time2ROFtime(InteractionRecord::long2IR(time));
+  signal.rofIR = ir;
+  signal.bcInROF = bc;
+}
+
+bool DEDigitizer::isAboveThreshold(float charge)
+{
+  if (charge > 0.f) {
+    if (mMinChargeDist.stddev() > 0.f) {
+      return charge > mMinChargeDist(mRandom);
+    }
+    return charge > mMinChargeDist.mean();
+  }
+  return false;
+}
+
+DEDigitizer::DigitsAndLabels* DEDigitizer::addNewDigit(std::map<InteractionRecord, DigitsAndLabels>& irDigitsAndLabels,
+                                                       int padid, const Signal& signal, uint32_t nSamples) const
+{
+  uint32_t adc = std::round(signal.charge);
+  auto time = signal.rofIR.differenceInBC({0, mFirstTFOrbit});
+  nSamples = std::min(nSamples, 0x3FFU); // the number of samples must fit within 10 bits
+  bool saturated = false;
+  // the charge sum must fit within 20 bits
+  // FIXME: we should better handle charge saturation here
+  if (adc > 0xFFFFFU) {
+    adc = 0xFFFFFU;
+    saturated = true;
+  }
+
+  auto& digitsAndLabels = irDigitsAndLabels[signal.rofIR];
+  digitsAndLabels.first.emplace_back(mDeId, padid, adc, time, nSamples, saturated);
+  digitsAndLabels.second.addElements(digitsAndLabels.first.size() - 1, signal.labels);
+
+  return &digitsAndLabels;
+}
+
+void DEDigitizer::appendLastDigit(DigitsAndLabels* digitsAndLabels, const Signal& signal, uint32_t nSamples) const
+{
+  auto& lastDigit = digitsAndLabels->first.back();
+  uint32_t adc = lastDigit.getADC() + std::round(signal.charge);
+
+  lastDigit.setADC(std::min(adc, 0xFFFFFU));           // the charge sum must fit within 20 bits
+  lastDigit.setNofSamples(std::min(nSamples, 0x3FFU)); // the number of samples must fit within 10 bits
+  lastDigit.setSaturated(adc > 0xFFFFFU);              // FIXME: we should better handle charge saturation here
+  digitsAndLabels->second.addElements(digitsAndLabels->first.size() - 1, signal.labels);
 }
 
 } // namespace o2::mch

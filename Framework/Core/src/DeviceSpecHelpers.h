@@ -28,7 +28,6 @@
 #include "ResourceManager.h"
 #include "WorkflowHelpers.h"
 
-#include <FairMQDevice.h>
 #include <boost/program_options.hpp>
 
 #include <vector>
@@ -40,6 +39,8 @@ namespace o2::framework
 {
 struct InputChannelSpec;
 struct OutputChannelSpec;
+struct ConfigContext;
+struct DriverConfig;
 
 struct DeviceSpecHelpers {
   /// Helper to convert from an abstract dataflow specification, @a workflow,
@@ -50,30 +51,42 @@ struct DeviceSpecHelpers {
     std::vector<CompletionPolicy> const& completionPolicies,
     std::vector<DispatchPolicy> const& dispatchPolicies,
     std::vector<ResourcePolicy> const& resourcePolicies,
+    std::vector<CallbacksPolicy> const& callbacksPolicies,
+    std::vector<SendingPolicy> const& sendingPolicy,
+    std::vector<ForwardingPolicy> const& forwardingPolicies,
     std::vector<DeviceSpec>& devices,
     ResourceManager& resourceManager,
     std::string const& uniqueWorkflowId,
+    ConfigContext const& configContext,
     bool optimizeTopology = false,
     unsigned short resourcesMonitoringInterval = 0,
-    std::string const& channelPrefix = "");
+    std::string const& channelPrefix = "",
+    OverrideServiceSpecs const& overrideServices = {});
 
+  static void validate(WorkflowSpec const& workflow);
   static void dataProcessorSpecs2DeviceSpecs(
     const WorkflowSpec& workflow,
     std::vector<ChannelConfigurationPolicy> const& channelPolicies,
     std::vector<CompletionPolicy> const& completionPolicies,
+    std::vector<CallbacksPolicy> const& callbacksPolicies,
     std::vector<DeviceSpec>& devices,
     ResourceManager& resourceManager,
     std::string const& uniqueWorkflowId,
+    ConfigContext const& configContext,
     bool optimizeTopology = false,
     unsigned short resourcesMonitoringInterval = 0,
-    std::string const& channelPrefix = "")
+    std::string const& channelPrefix = "",
+    OverrideServiceSpecs const& overrideServices = {})
   {
     std::vector<DispatchPolicy> dispatchPolicies = DispatchPolicy::createDefaultPolicies();
     std::vector<ResourcePolicy> resourcePolicies = ResourcePolicy::createDefaultPolicies();
+    std::vector<SendingPolicy> sendingPolicies = SendingPolicy::createDefaultPolicies();
+    std::vector<ForwardingPolicy> forwardingPolicies = ForwardingPolicy::createDefaultPolicies();
     dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies,
-                                   dispatchPolicies, resourcePolicies, devices,
-                                   resourceManager, uniqueWorkflowId, optimizeTopology,
-                                   resourcesMonitoringInterval, channelPrefix);
+                                   dispatchPolicies, resourcePolicies, callbacksPolicies,
+                                   sendingPolicies, forwardingPolicies, devices,
+                                   resourceManager, uniqueWorkflowId, configContext, optimizeTopology,
+                                   resourcesMonitoringInterval, channelPrefix, overrideServices);
   }
 
   /// Helper to provide the channel configuration string for an input channel
@@ -109,18 +122,26 @@ struct DeviceSpecHelpers {
   static void prepareArguments(
     bool defaultQuiet,
     bool defaultStopped,
+    bool intereactive,
     unsigned short driverPort,
+    DriverConfig const& driverConfig,
     std::vector<DataProcessorInfo> const& processorInfos,
     std::vector<DeviceSpec> const& deviceSpecs,
     std::vector<DeviceExecution>& deviceExecutions,
     std::vector<DeviceControl>& deviceControls,
+    std::vector<ConfigParamSpec> const& detectedOptions,
     std::string const& uniqueWorkflowId);
+
+  /// Rework the environment string
+  /// * Substitute {timeslice<N>} with the actual value of the timeslice.
+  static std::string reworkTimeslicePlaceholder(std::string const& str, DeviceSpec const& spec);
 
   /// This takes the list of preprocessed edges of a graph
   /// and creates Devices and Channels which are related
   /// to the outgoing edges i.e. those which refer
   /// to the act of producing data.
   static void processOutEdgeActions(
+    ConfigContext const& configContext,
     std::vector<DeviceSpec>& devices,
     std::vector<DeviceId>& deviceIndex,
     std::vector<DeviceConnectionId>& connections,
@@ -131,8 +152,11 @@ struct DeviceSpecHelpers {
     const WorkflowSpec& workflow,
     const std::vector<OutputSpec>& outputs,
     std::vector<ChannelConfigurationPolicy> const& channelPolicies,
+    std::vector<SendingPolicy> const& sendingPolicies,
+    std::vector<ForwardingPolicy> const& forwardingPolicies,
     std::string const& channelPrefix,
-    ComputingOffer const& defaultOffer);
+    ComputingOffer const& defaultOffer,
+    OverrideServiceSpecs const& overrideServices = {});
 
   /// This takes the list of preprocessed edges of a graph
   /// and creates Devices and Channels which are related
@@ -150,11 +174,14 @@ struct DeviceSpecHelpers {
     const std::vector<LogicalForwardInfo>& availableForwardsInfo,
     std::vector<ChannelConfigurationPolicy> const& channelPolicies,
     std::string const& channelPrefix,
-    ComputingOffer const& defaultOffer);
+    ComputingOffer const& defaultOffer,
+    OverrideServiceSpecs const& overrideServices = {});
 
   /// return a description of all options to be forwarded to the device
   /// by default
   static boost::program_options::options_description getForwardedDeviceOptions();
+  /// @return whether a give DeviceSpec @a spec has a label @a label
+  static bool hasLabel(DeviceSpec const& spec, char const* label);
 };
 
 } // namespace o2::framework

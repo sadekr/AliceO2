@@ -12,8 +12,14 @@
 #define BOOST_TEST_MODULE Test HMPIDCTFIO
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
+
+#undef NDEBUG
+#include <cassert>
+
 #include <boost/test/unit_test.hpp>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/dataset.hpp>
+#include "CommonUtils/NameConf.h"
 #include "HMPIDReconstruction/CTFCoder.h"
 #include "DataFormatsHMP/CTF.h"
 #include "Framework/Logger.h"
@@ -24,8 +30,11 @@
 #include <cstring>
 
 using namespace o2::hmpid;
+namespace boost_data = boost::unit_test::data;
 
-BOOST_AUTO_TEST_CASE(CTFTest)
+inline std::vector<o2::ctf::ANSHeader> ANSVersions{o2::ctf::ANSVersionCompat, o2::ctf::ANSVersion1};
+
+BOOST_DATA_TEST_CASE(CTFTest, boost_data::make(ANSVersions), ansVersion)
 {
   std::vector<Trigger> triggers;
   std::vector<Digit> digits;
@@ -52,11 +61,12 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   std::vector<o2::ctf::BufferType> vec;
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Encoder);
+    coder.setANSVersion(ansVersion);
     coder.encode(vec, triggers, digits); // compress
   }
   sw.Stop();
-  LOG(INFO) << "Compressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Compressed in " << sw.CpuTime() << " s";
 
   // writing
   {
@@ -68,12 +78,12 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     ctfImage->appendToTree(ctfTree, "HMP");
     ctfTree.Write();
     sw.Stop();
-    LOG(INFO) << "Wrote to tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Wrote to tree in " << sw.CpuTime() << " s";
   }
 
   // reading
   vec.clear();
-  LOG(INFO) << "Start reading from tree ";
+  LOG(info) << "Start reading from tree ";
   {
     sw.Start();
     TFile flIn("test_ctf_hmpid.root");
@@ -81,7 +91,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     BOOST_CHECK(tree);
     o2::hmpid::CTF::readFromTree(vec, *(tree.get()), "HMP");
     sw.Stop();
-    LOG(INFO) << "Read back from tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Read back from tree in " << sw.CpuTime() << " s";
   }
 
   std::vector<Trigger> triggersD;
@@ -90,11 +100,11 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   const auto ctfImage = o2::hmpid::CTF::getImage(vec.data());
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Decoder);
     coder.decode(ctfImage, triggersD, digitsD); // decompress
   }
   sw.Stop();
-  LOG(INFO) << "Decompressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Decompressed in " << sw.CpuTime() << " s";
 
   BOOST_CHECK(triggersD.size() == triggers.size());
   BOOST_CHECK(digitsD.size() == digits.size());

@@ -18,7 +18,7 @@
 #include <iostream>
 #include <TParticle.h>
 #include <vector>
-#include <SimulationDataFormat/Stack.h>
+#include <DetectorsBase/Stack.h>
 #include <SimulationDataFormat/PrimaryChunk.h>
 #include <FairRootManager.h>
 #include <FairDetector.h>
@@ -63,19 +63,18 @@ class O2MCApplication : public O2MCApplicationBase
       det->EndOfEvent();
     }
     fStack->Reset();
-    LOG(INFO) << "This event/chunk did " << mStepCounter << " steps";
   }
 
   /** Define actions at the end of run */
   void FinishRun();
 
-  void attachSubEventInfo(FairMQParts&, o2::data::SubEventInfo const& info) const;
+  void attachSubEventInfo(fair::mq::Parts&, o2::data::SubEventInfo const& info) const;
 
   /** Generate primary particles */
   void GeneratePrimaries() override
   {
     // ordinarily we would call the event generator ...
-    LOG(DEBUG) << "O2MCApplication: Init primaries from external buffer " << mPrimaries.size();
+    LOG(debug) << "O2MCApplication: Init primaries from external buffer " << mPrimaries.size();
     GetStack()->Reset();
     // but here we init the stack from
     // a vector of particles that someone sets externally
@@ -87,12 +86,12 @@ class O2MCApplication : public O2MCApplicationBase
     mPrimaries = p;
   }
 
-  void setSimDataChannel(FairMQChannel* channel) { mSimDataChannel = channel; }
+  void setSimDataChannel(fair::mq::Channel* channel) { mSimDataChannel = channel; }
   void setSubEventInfo(o2::data::SubEventInfo* i);
 
   std::vector<TParticle> mPrimaries; //!
 
-  FairMQChannel* mSimDataChannel;                      //! generic channel on which to send sim data
+  fair::mq::Channel* mSimDataChannel;                  //! generic channel on which to send sim data
   o2::data::SubEventInfo* mSubEventInfo = nullptr;     //! what are we currently processing?
   std::vector<o2::base::Detector*> mActiveO2Detectors; //! active (data taking) o2 detectors
 

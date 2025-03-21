@@ -10,19 +10,22 @@
 // or submit itself to any jurisdiction.
 #include "Framework/Logger.h"
 #include "DPLWebSocket.h"
+#include "Framework/GuiCallbackContext.h"
 #include "Framework/RuntimeError.h"
 #include "Framework/DeviceSpec.h"
 #include "Framework/DeviceController.h"
 #include "Framework/DevicesManager.h"
 #include "DriverServerContext.h"
 #include "DriverClientContext.h"
-#include "GuiCallbackContext.h"
+#include "ControlWebSocketHandler.h"
 #include "HTTPParser.h"
 #include <algorithm>
 #include <atomic>
 #include <uv.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <memory>
+#include "ControlWebSocketHandler.h"
 
 namespace o2::framework
 {
@@ -36,14 +39,14 @@ static void my_alloc_cb(uv_handle_t* handle, size_t suggested_size, uv_buf_t* bu
 /// Free any resource associated with the device - driver channel
 void websocket_server_close_callback(uv_handle_t* handle)
 {
-  LOG(DEBUG) << "socket closed";
+  LOG(debug) << "socket closed";
   delete (WSDPLHandler*)handle->data;
   free(handle);
 }
 
 void ws_error_write_callback(uv_write_t* h, int status)
 {
-  LOG(ERROR) << "Error in write callback: " << uv_strerror(status);
+  LOG(error) << "Error in write callback: " << uv_strerror(status);
   if (h->data) {
     free(h->data);
   }
@@ -60,12 +63,12 @@ void websocket_server_callback(uv_stream_t* stream, ssize_t nread, const uv_buf_
     return;
   }
   if (nread == UV_EOF) {
-    LOG(DEBUG) << "websocket_server_callback: communication with driver closed";
+    LOG(detail) << "websocket_server_callback: communication with driver closed upon EOF";
     uv_close((uv_handle_t*)stream, websocket_server_close_callback);
     return;
   }
   if (nread < 0) {
-    LOG(ERROR) << "websocket_server_callback: Error while reading from websocket";
+    LOG(error) << "websocket_server_callback: Error while reading from websocket" << uv_strerror((int)nread);
     uv_close((uv_handle_t*)stream, websocket_server_close_callback);
     return;
   }
@@ -74,7 +77,7 @@ void websocket_server_callback(uv_stream_t* stream, ssize_t nread, const uv_buf_
     free(buf->base);
   } catch (RuntimeErrorRef& ref) {
     auto& err = o2::framework::error_from_ref(ref);
-    LOG(ERROR) << "Error while parsing request: " << err.what;
+    LOG(error) << "Error while parsing request: " << err.what;
   }
 }
 
@@ -83,7 +86,7 @@ void websocket_server_callback(uv_stream_t* stream, ssize_t nread, const uv_buf_
 void ws_handshake_done_callback(uv_write_t* h, int status)
 {
   if (status) {
-    LOG(ERROR) << "uv_write error: " << uv_err_name(status);
+    LOG(error) << "uv_write error: " << uv_err_name(status);
     free(h);
     return;
   }
@@ -112,7 +115,7 @@ struct GUIWebSocketHandler : public WebSocketHandler {
     mContext.gui->renderers.erase(mRenderer);
     uv_timer_stop(&(mRenderer->drawTimer));
     delete mRenderer;
-    LOGP(INFO, "RemoteGUI disconnected, {} left", mContext.gui->renderers.size());
+    LOGP(info, "RemoteGUI disconnected, {} left", mContext.gui->renderers.size());
   }
 
   void headers(std::map<std::string, std::string> const& headers) override {}
@@ -149,12 +152,12 @@ struct GUIWebSocketHandler : public WebSocketHandler {
       }
       case GUIOpcodes::Keydown: {
         char key = *frame;
-        mContext.gui->plugin->keyDown(key);
+        mContext.gui->plugin->keyEvent(key, true);
         break;
       }
       case GUIOpcodes::Keyup: {
         char key = *frame;
-        mContext.gui->plugin->keyUp(key);
+        mContext.gui->plugin->keyEvent(key, false);
         break;
       }
       case GUIOpcodes::Charin: {
@@ -164,10 +167,10 @@ struct GUIWebSocketHandler : public WebSocketHandler {
       }
     }
   }
-  void endFragmentation() override{};
-  void control(char const* frame, size_t s) override{};
-  void beginChunk() override{};
-  void endChunk() override{};
+  void endFragmentation() override {};
+  void control(char const* frame, size_t s) override {};
+  void beginChunk() override {};
+  void endChunk() override {};
 
   /// The driver context were we want to accumulate changes
   /// which we got from the websocket.
@@ -175,10 +178,9 @@ struct GUIWebSocketHandler : public WebSocketHandler {
   GuiRenderer* mRenderer;
 };
 
-WSDPLHandler::WSDPLHandler(uv_stream_t* s, DriverServerContext* context, std::unique_ptr<WebSocketHandler> h)
+WSDPLHandler::WSDPLHandler(uv_stream_t* s, DriverServerContext* context)
   : mStream{s},
-    mServerContext{context},
-    mHandler{std::move(h)}
+    mServerContext{context}
 {
 }
 
@@ -211,7 +213,8 @@ void populateHeader(std::map<std::string, std::string>& headers, std::string_vie
 
 void remoteGuiCallback(uv_timer_s* ctx)
 {
-  GuiRenderer* renderer = reinterpret_cast<GuiRenderer*>(ctx->data);
+  auto* renderer = reinterpret_cast<GuiRenderer*>(ctx->data);
+  assert(renderer);
 
   void* frame = nullptr;
   void* draw_data = nullptr;
@@ -220,23 +223,28 @@ void remoteGuiCallback(uv_timer_s* ctx)
   uint64_t frameLatency = frameStart - renderer->gui->frameLast;
 
   // if less than 15ms have passed reuse old frame
-  if (frameLatency / 1000000 > 15) {
+  if (renderer->gui->lastFrame == nullptr || frameLatency / 1000000 > 15) {
     renderer->gui->plugin->pollGUIPreRender(renderer->gui->window, (float)frameLatency / 1000000000.0f);
     draw_data = renderer->gui->plugin->pollGUIRender(renderer->gui->callback);
+    renderer->gui->plugin->pollGUIPostRender(renderer->gui->window, draw_data);
   } else {
     draw_data = renderer->gui->lastFrame;
   }
 
-  renderer->gui->plugin->getFrameRaw(draw_data, &frame, &size);
+  renderer->gui->plugin->getFrameRaw(draw_data, &frame, &size, renderer->updateTextures);
+  // For now we only sent the text atlas once
+  renderer->updateTextures = false;
   std::vector<uv_buf_t> outputs;
   encode_websocket_frames(outputs, (const char*)frame, size, WebSocketOpCode::Binary, 0);
   renderer->handler->write(outputs);
   free(frame);
 
+  renderer->guiConnected = true;
+
   if (frameLatency / 1000000 > 15) {
     uint64_t frameEnd = uv_hrtime();
-    *(renderer->gui->frameCost) = (frameEnd - frameStart) / 1000000;
-    *(renderer->gui->frameLatency) = frameLatency / 1000000;
+    *(renderer->gui->frameCost) = (frameEnd - frameStart) / 1000000.f;
+    *(renderer->gui->frameLatency) = frameLatency / 1000000.f;
     renderer->gui->frameLast = frameStart;
     renderer->gui->lastFrame = draw_data;
   }
@@ -266,18 +274,20 @@ void WSDPLHandler::endHeaders()
   if (mHeaders["sec-websocket-version"] != "13") {
     throw WSError{400, "Bad Request: wrong protocol version"};
   }
-  mHandler->headers(mHeaders);
   /// Create an appropriate reply
   LOG(debug) << "Got upgrade request with nonce " << mHeaders["sec-websocket-key"].c_str();
   std::string reply = encode_websocket_handshake_reply(mHeaders["sec-websocket-key"].c_str());
   mHandshaken = true;
 
   uv_buf_t bfr = uv_buf_init(strdup(reply.data()), reply.size());
-  uv_write_t* info_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+  auto* info_req = (uv_write_t*)malloc(sizeof(uv_write_t));
   uv_write(info_req, (uv_stream_t*)mStream, &bfr, 1, ws_handshake_done_callback);
   auto header = mHeaders.find("x-dpl-pid");
   if (header != mHeaders.end()) {
     LOG(debug) << "Driver connected to PID : " << header->second;
+    mHandler = std::make_unique<ControlWebSocketHandler>(*mServerContext);
+    mHandler->headers(mHeaders);
+
     for (size_t i = 0; i < mServerContext->infos->size(); ++i) {
       if (std::to_string((*mServerContext->infos)[i].pid) == header->second) {
         (*mServerContext->controls)[i].controller = new DeviceController{this};
@@ -285,7 +295,24 @@ void WSDPLHandler::endHeaders()
       }
     }
   } else {
-    LOG(INFO) << "Connection not bound to a PID";
+    if ((mServerContext->isDriver && getenv("DPL_DRIVER_REMOTE_GUI")) || ((mServerContext->isDriver == false) && getenv("DPL_DEVICE_REMOTE_GUI"))) {
+      LOG(info) << "Connection not bound to a PID";
+      auto* renderer = new GuiRenderer;
+      renderer->gui = mServerContext->gui;
+      renderer->handler = this;
+      uv_timer_init(mServerContext->loop, &(renderer->drawTimer));
+      renderer->drawTimer.data = renderer;
+      uv_timer_start(&(renderer->drawTimer), remoteGuiCallback, 0, 200);
+      mHandler = std::make_unique<GUIWebSocketHandler>(*mServerContext, renderer);
+      mHandler->headers(mHeaders);
+      mServerContext->gui->renderers.insert(renderer);
+
+      LOGP(info, "RemoteGUI connected, {} running", mServerContext->gui->renderers.size());
+    } else {
+      LOGP(warning, "Connection not bound to a PID however {} is not set. Skipping.",
+           mServerContext->isDriver ? "DPL_DRIVER_REMOTE_GUI" : "DPL_DEVICE_REMOTE_GUI");
+      throw WSError{418, "Remote GUI not enabled"};
+    }
   }
 }
 
@@ -298,7 +325,7 @@ void WSDPLHandler::body(char* data, size_t s)
 void ws_server_write_callback(uv_write_t* h, int status)
 {
   if (status) {
-    LOG(ERROR) << "uv_write error: " << uv_err_name(status);
+    LOG(error) << "uv_write error: " << uv_err_name(status);
     free(h);
     return;
   }
@@ -311,11 +338,11 @@ void ws_server_write_callback(uv_write_t* h, int status)
 void ws_server_bulk_write_callback(uv_write_t* h, int status)
 {
   if (status) {
-    LOG(ERROR) << "uv_write error: " << uv_err_name(status);
+    LOG(error) << "uv_write error: " << uv_err_name(status);
     free(h);
     return;
   }
-  std::vector<uv_buf_t>* buffers = (std::vector<uv_buf_t>*)h->data;
+  auto* buffers = (std::vector<uv_buf_t>*)h->data;
   if (buffers) {
     for (auto& b : *buffers) {
       free(b.base);
@@ -328,7 +355,7 @@ void ws_server_bulk_write_callback(uv_write_t* h, int status)
 void WSDPLHandler::write(char const* message, size_t s)
 {
   uv_buf_t bfr = uv_buf_init(strdup(message), s);
-  uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+  auto* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
   write_req->data = bfr.base;
   uv_write(write_req, (uv_stream_t*)mStream, &bfr, 1, ws_server_write_callback);
 }
@@ -338,8 +365,8 @@ void WSDPLHandler::write(std::vector<uv_buf_t>& outputs)
   if (outputs.empty()) {
     return;
   }
-  uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-  std::vector<uv_buf_t>* buffers = new std::vector<uv_buf_t>;
+  auto* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+  auto* buffers = new std::vector<uv_buf_t>;
   buffers->swap(outputs);
   write_req->data = buffers;
   uv_write(write_req, (uv_stream_t*)mStream, &buffers->at(0), buffers->size(), ws_server_bulk_write_callback);
@@ -348,11 +375,11 @@ void WSDPLHandler::write(std::vector<uv_buf_t>& outputs)
 /// Helper to return an error
 void WSDPLHandler::error(int code, char const* message)
 {
-  static char const* errorFMT = "HTTP/1.1 {} {}\r\ncontent-type: text/plain\r\n\r\n{}: {}\r\n";
+  static constexpr auto errorFMT = "HTTP/1.1 {} {}\r\ncontent-type: text/plain\r\n\r\n{}: {}\r\n";
   std::string error = fmt::format(errorFMT, code, message, code, message);
   char* reply = strdup(error.data());
   uv_buf_t bfr = uv_buf_init(reply, error.size());
-  uv_write_t* error_rep = (uv_write_t*)malloc(sizeof(uv_write_t));
+  auto* error_rep = (uv_write_t*)malloc(sizeof(uv_write_t));
   error_rep->data = reply;
   uv_write(error_rep, (uv_stream_t*)mStream, &bfr, 1, ws_error_write_callback);
 }
@@ -364,8 +391,9 @@ void close_client_websocket(uv_handle_t* stream)
 
 void websocket_client_callback(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf)
 {
-  DriverClientContext* context = (DriverClientContext*)stream->data;
-  context->state->loopReason |= DeviceState::WS_COMMUNICATION;
+  auto* context = (DriverClientContext*)stream->data;
+  auto& state = context->ref.get<DeviceState>();
+  state.loopReason |= DeviceState::WS_COMMUNICATION;
   assert(context->client);
   if (nread == 0) {
     return;
@@ -379,7 +407,7 @@ void websocket_client_callback(uv_stream_t* stream, ssize_t nread, const uv_buf_
   if (nread < 0) {
     // FIXME: improve error message
     // FIXME: should I close?
-    LOG(ERROR) << "Error while reading from websocket";
+    LOG(error) << "Error while reading from websocket";
     uv_read_stop(stream);
     uv_close((uv_handle_t*)stream, close_client_websocket);
     return;
@@ -387,31 +415,36 @@ void websocket_client_callback(uv_stream_t* stream, ssize_t nread, const uv_buf_
   try {
     LOG(debug) << "Data received from server";
     parse_http_request(buf->base, nread, context->client);
+    free(buf->base);
   } catch (RuntimeErrorRef& ref) {
     auto& err = o2::framework::error_from_ref(ref);
-    LOG(ERROR) << "Error while parsing request: " << err.what;
+    LOG(error) << "Error while parsing request: " << err.what;
   }
 }
 
 // FIXME: mNonce should be random
-WSDPLClient::WSDPLClient(uv_stream_t* s, std::unique_ptr<DriverClientContext> context, std::function<void()> handshake, std::unique_ptr<WebSocketHandler> handler)
-  : mStream{s},
-    mNonce{"dGhlIHNhbXBsZSBub25jZQ=="},
-    mContext{std::move(context)},
-    mHandshake{handshake},
-    mHandler{std::move(handler)}
+WSDPLClient::WSDPLClient()
+  : mNonce{"dGhlIHNhbXBsZSBub25jZQ=="}
 {
-  mContext->client = this;
+}
+
+void WSDPLClient::connect(ServiceRegistryRef ref, uv_stream_t* s, std::function<void()> handshake, std::unique_ptr<WebSocketHandler> handler)
+{
+  mStream = s;
+  mContext = std::make_unique<DriverClientContext>(DriverClientContext{.ref = ref, .client = this});
+  mHandshake = handshake;
+  mHandler = std::move(handler);
   s->data = mContext.get();
   uv_read_start((uv_stream_t*)s, (uv_alloc_cb)my_alloc_cb, websocket_client_callback);
 }
 
 void WSDPLClient::sendHandshake()
 {
+  auto& spec = mContext->ref.get<DeviceSpec const>();
   std::vector<std::pair<std::string, std::string>> headers = {
     {{"x-dpl-pid"}, std::to_string(getpid())},
-    {{"x-dpl-id"}, mContext->spec.id},
-    {{"x-dpl-name"}, mContext->spec.name}};
+    {{"x-dpl-id"}, spec.id},
+    {{"x-dpl-name"}, spec.name}};
   std::string handShakeString = encode_websocket_handshake_request("/", "dpl", 13, mNonce.c_str(), headers);
   this->write(handShakeString.c_str(), handShakeString.size());
 }
@@ -438,7 +471,7 @@ void WSDPLClient::header(std::string_view const& k, std::string_view const& v)
 void WSDPLClient::dumpHeaders()
 {
   for (auto [k, v] : mHeaders) {
-    LOG(INFO) << k << ": " << v;
+    LOG(info) << k << ": " << v;
   }
 }
 
@@ -461,7 +494,7 @@ void WSDPLClient::endHeaders()
     throw runtime_error_f(R"(Invalid accept received: "%s", expected "%s")", mHeaders["sec-websocket-accept"].c_str(), expectedAccept.c_str());
   }
 
-  LOG(INFO) << "Correctly handshaken websocket connection.";
+  LOG(info) << "Correctly handshaken websocket connection.";
   /// Create an appropriate reply
   mHandshaken = true;
   mHandshake();
@@ -469,23 +502,24 @@ void WSDPLClient::endHeaders()
 
 struct WriteRequestContext {
   uv_buf_t buf;
-  DeviceState* state;
+  ServiceRegistryRef ref;
 };
 
 struct BulkWriteRequestContext {
   std::vector<uv_buf_t> buffers;
-  DeviceState* state;
+  ServiceRegistryRef ref;
 };
 
 void ws_client_write_callback(uv_write_t* h, int status)
 {
-  WriteRequestContext* context = (WriteRequestContext*)h->data;
+  auto* context = (WriteRequestContext*)h->data;
   if (status) {
-    LOG(ERROR) << "uv_write error: " << uv_err_name(status);
+    LOG(error) << "uv_write error: " << uv_err_name(status);
     free(h);
     return;
   }
-  context->state->loopReason |= DeviceState::WS_COMMUNICATION;
+  auto& state = context->ref.get<DeviceState>();
+  state.loopReason |= (DeviceState::WS_COMMUNICATION | DeviceState::WS_READING);
   if (context->buf.base) {
     free(context->buf.base);
   }
@@ -495,10 +529,12 @@ void ws_client_write_callback(uv_write_t* h, int status)
 
 void ws_client_bulk_write_callback(uv_write_t* h, int status)
 {
-  BulkWriteRequestContext* context = (BulkWriteRequestContext*)h->data;
-  context->state->loopReason |= DeviceState::WS_COMMUNICATION;
+  auto* context = (BulkWriteRequestContext*)h->data;
+  auto& state = context->ref.get<DeviceState>();
+
+  state.loopReason |= (DeviceState::WS_COMMUNICATION | DeviceState::WS_WRITING);
   if (status < 0) {
-    LOG(ERROR) << "uv_write error: " << uv_err_name(status);
+    LOG(error) << "uv_write error: " << uv_err_name(status);
     free(h);
     return;
   }
@@ -520,10 +556,9 @@ void WSDPLClient::body(char* data, size_t s)
 /// Helper to return an error
 void WSDPLClient::write(char const* message, size_t s)
 {
-  WriteRequestContext* context = new WriteRequestContext;
+  auto* context = new WriteRequestContext{.ref = mContext->ref};
   context->buf = uv_buf_init(strdup(message), s);
-  context->state = mContext->state;
-  uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+  auto* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
   write_req->data = context;
   uv_write(write_req, (uv_stream_t*)mStream, &context->buf, 1, ws_client_write_callback);
 }
@@ -533,10 +568,9 @@ void WSDPLClient::write(std::vector<uv_buf_t>& outputs)
   if (outputs.empty()) {
     return;
   }
-  uv_write_t* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
-  BulkWriteRequestContext* context = new BulkWriteRequestContext;
+  auto* write_req = (uv_write_t*)malloc(sizeof(uv_write_t));
+  auto* context = new BulkWriteRequestContext{.ref = mContext->ref};
   context->buffers.swap(outputs);
-  context->state = mContext->state;
   write_req->data = context;
   uv_write(write_req, (uv_stream_t*)mStream, &context->buffers.at(0),
            context->buffers.size(), ws_client_bulk_write_callback);

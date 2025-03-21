@@ -11,7 +11,7 @@
 
 #include <TSystem.h>
 #include <TTree.h>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "Framework/Logger.h"
 #include "DataFormatsFDD/Digit.h"
 #include <TFile.h>
@@ -95,7 +95,7 @@ int main()
   std::cout << "\n===================================\n";
   std::cout << "\nTOTAL EVENTS: " << vecTotalEvents2.size() << std::endl;
   if (vecTotalEvents == vecTotalEvents2) {
-    std::cout << "TEST IS OK!\n";
+    std::cout << "\n TEST IS OK!\n";
   } else {
     std::cout << "\nDIFFERENCE BETWEEN SRC AND DEST\n";
     std::cout << "\n===============================\n";

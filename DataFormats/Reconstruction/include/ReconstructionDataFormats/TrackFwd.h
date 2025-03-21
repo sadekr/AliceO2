@@ -24,9 +24,7 @@
 #include "ReconstructionDataFormats/TrackUtils.h"
 #include "MathUtils/Primitive2D.h"
 
-namespace o2
-{
-namespace track
+namespace o2::track
 {
 
 using SMatrix55Sym = ROOT::Math::SMatrix<double, 5, 5, ROOT::Math::MatRepSym<double, 5>>;
@@ -79,13 +77,14 @@ class TrackParFwd
   Double_t getInvQPt() const { return mParameters(4); } // return Inverse charged pt
   Double_t getPt() const { return TMath::Abs(1.f / mParameters(4)); }
   Double_t getInvPt() const { return TMath::Abs(mParameters(4)); }
-  Double_t getPx() const { return TMath::Cos(getPhi()) * getPt(); } // return px
-  Double_t getPy() const { return TMath::Sin(getPhi()) * getPt(); } // return py
-  Double_t getPz() const { return getTanl() * getPt(); } // return pz
+  Double_t getPx() const { return TMath::Cos(getPhi()) * getPt(); }                   // return px
+  Double_t getPy() const { return TMath::Sin(getPhi()) * getPt(); }                   // return py
+  Double_t getPz() const { return getTanl() * getPt(); }                              // return pz
   Double_t getP() const { return getPt() * TMath::Sqrt(1. + getTanl() * getTanl()); } // return total momentum
   Double_t getInverseMomentum() const { return 1.f / getP(); }
 
-  Double_t getEta() const { return -TMath::Log(TMath::Tan((TMath::PiOver2() - TMath::ATan(getTanl())) / 2)); } // return total momentum
+  Double_t getTheta() const { return TMath::PiOver2() - TMath::ATan(getTanl()); }
+  Double_t getEta() const { return -TMath::Log(TMath::Tan(getTheta() / 2)); } // return total momentum
 
   Double_t getCurvature(double b) const
   {
@@ -169,6 +168,12 @@ class TrackParCovFwd : public TrackParFwd
   // Kalman filter/fitting
   bool update(const std::array<float, 2>& p, const std::array<float, 2>& cov);
 
+  // Propagate fwd track to vertex including MCS effects
+  bool propagateToVtxhelixWithMCS(double z, const std::array<float, 2>& p, const std::array<float, 2>& cov, double field, double x_over_X0);
+  bool propagateToVtxlinearWithMCS(double z, const std::array<float, 2>& p, const std::array<float, 2>& cov, double x_over_X0);
+
+  bool getCovXYZPxPyPzGlo(std::array<float, 21>& cv) const;
+
  private:
   /// Covariance matrix of track parameters, ordered as follows:    <pre>
   ///  <X,X>         <Y,X>           <PHI,X>       <TANL,X>        <INVQPT,X>
@@ -180,7 +185,6 @@ class TrackParCovFwd : public TrackParFwd
   ClassDefNV(TrackParCovFwd, 1);
 };
 
-} // namespace track
-} // namespace o2
+} // namespace o2::track
 
 #endif

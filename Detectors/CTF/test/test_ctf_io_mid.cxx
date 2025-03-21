@@ -12,8 +12,15 @@
 #define BOOST_TEST_MODULE Test MIDCTFIO
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
+
+#undef NDEBUG
+#include <cassert>
+
 #include <boost/test/unit_test.hpp>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/dataset.hpp>
+#include "CommonUtils/NameConf.h"
+#include "CommonUtils/IRFrameSelector.h"
 #include "MIDCTF/CTFCoder.h"
 #include "DataFormatsMID/CTF.h"
 #include "Framework/Logger.h"
@@ -24,8 +31,11 @@
 #include <cstring>
 
 using namespace o2::mid;
+namespace boost_data = boost::unit_test::data;
 
-BOOST_AUTO_TEST_CASE(CTFTest)
+inline std::vector<o2::ctf::ANSHeader> ANSVersions{o2::ctf::ANSVersionCompat, o2::ctf::ANSVersion1};
+
+BOOST_DATA_TEST_CASE(CTFTest, boost_data::make(ANSVersions), ansVersion)
 {
   std::array<std::vector<ColumnData>, NEvTypes> colData{};
   std::array<std::vector<ROFRecord>, NEvTypes> rofData{};
@@ -65,16 +75,18 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     tfData.colData[i] = {colData[i].data(), colData[i].size()};
     tfData.rofData[i] = {rofData[i].data(), rofData[i].size()};
   }
-  tfData.buildReferences();
+  o2::utils::IRFrameSelector irSelector;
+  tfData.buildReferences(irSelector);
 
   sw.Start();
   std::vector<o2::ctf::BufferType> vec;
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Encoder);
+    coder.setANSVersion(ansVersion);
     coder.encode(vec, tfData); // compress
   }
   sw.Stop();
-  LOG(INFO) << "Compressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Compressed in " << sw.CpuTime() << " s";
 
   // writing
   {
@@ -86,7 +98,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     ctfImage->appendToTree(ctfTree, "MID");
     ctfTree.Write();
     sw.Stop();
-    LOG(INFO) << "Wrote to tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Wrote to tree in " << sw.CpuTime() << " s";
   }
 
   // reading
@@ -98,7 +110,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
     BOOST_CHECK(tree);
     o2::mid::CTF::readFromTree(vec, *(tree.get()), "MID");
     sw.Stop();
-    LOG(INFO) << "Read back from tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Read back from tree in " << sw.CpuTime() << " s";
   }
 
   std::array<std::vector<ColumnData>, NEvTypes> colDataD{};
@@ -107,28 +119,28 @@ BOOST_AUTO_TEST_CASE(CTFTest)
   sw.Start();
   const auto ctfImage = o2::mid::CTF::getImage(vec.data());
   {
-    CTFCoder coder;
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Decoder);
     coder.decode(ctfImage, rofDataD, colDataD); // decompress
   }
   sw.Stop();
-  LOG(INFO) << "Decompressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Decompressed in " << sw.CpuTime() << " s";
 
   for (uint32_t it = 0; it < NEvTypes; it++) {
     const auto& rofsD = rofDataD[it];
     const auto& rofs = rofData[it];
     const auto& colsD = colDataD[it];
     const auto& cols = colData[it];
-    LOG(INFO) << "Test for event type " << it;
+    LOG(info) << "Test for event type " << it;
     BOOST_CHECK(rofsD.size() == rofs.size());
     BOOST_CHECK(colsD.size() == cols.size());
-    LOG(INFO) << " BOOST_CHECK rofsD.size() " << rofsD.size() << " rofs.size() " << rofData[0].size()
+    LOG(info) << " BOOST_CHECK rofsD.size() " << rofsD.size() << " rofs.size() " << rofData[0].size()
               << " BOOST_CHECK(colsD.size() " << colsD.size() << " cols.size()) " << colData[0].size();
 
     for (size_t i = 0; i < rofs.size(); i++) {
       const auto& dor = rofs[i];
       const auto& ddc = rofsD[i];
-      LOG(DEBUG) << " Orig.ROFRecord " << i << " " << dor.interactionRecord << " " << dor.firstEntry << " " << dor.nEntries;
-      LOG(DEBUG) << " Deco.ROFRecord " << i << " " << ddc.interactionRecord << " " << ddc.firstEntry << " " << ddc.nEntries;
+      LOG(debug) << " Orig.ROFRecord " << i << " " << dor.interactionRecord << " " << dor.firstEntry << " " << dor.nEntries;
+      LOG(debug) << " Deco.ROFRecord " << i << " " << ddc.interactionRecord << " " << ddc.firstEntry << " " << ddc.nEntries;
 
       BOOST_CHECK(dor.interactionRecord == ddc.interactionRecord);
       BOOST_CHECK(dor.firstEntry == ddc.firstEntry);
@@ -142,7 +154,7 @@ BOOST_AUTO_TEST_CASE(CTFTest)
       BOOST_CHECK(cor.columnId == cdc.columnId);
       for (int j = 0; j < 5; j++) {
         BOOST_CHECK(cor.patterns[j] == cdc.patterns[j]);
-        LOG(DEBUG) << "col " << i << " pat " << j << " : " << cor.patterns[j] << " : " << cdc.patterns[j];
+        LOG(debug) << "col " << i << " pat " << j << " : " << cor.patterns[j] << " : " << cdc.patterns[j];
       }
     }
   }

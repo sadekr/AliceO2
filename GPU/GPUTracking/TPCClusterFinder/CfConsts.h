@@ -17,11 +17,7 @@
 
 #include "clusterFinderDefs.h"
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
-{
-namespace cfconsts
+namespace o2::gpu::cfconsts
 {
 
 GPUconstexpr() tpccf::Delta2 InnerNeighbors[8] =
@@ -70,7 +66,7 @@ GPUconstexpr() tpccf::Delta2 OuterNeighbors[16] =
     {2, 2},
     {1, 2}};
 
-GPUconstexpr() uchar OuterToInner[16] =
+GPUconstexpr() uint8_t OuterToInner[16] =
   {
     0, 0, 0,
 
@@ -90,7 +86,7 @@ GPUconstexpr() uchar OuterToInner[16] =
 
 // outer to inner mapping change for the peak counting step,
 // as the other position is the position of the peak
-GPUconstexpr() uchar OuterToInnerInv[16] =
+GPUconstexpr() uint8_t OuterToInnerInv[16] =
   {
     1,
     0,
@@ -153,7 +149,7 @@ GPUconstexpr() tpccf::Delta2 NoiseSuppressionNeighbors[NOISE_SUPPRESSION_NEIGHBO
     {2, 2},
     {2, 3}};
 
-GPUconstexpr() uint NoiseSuppressionMinima[NOISE_SUPPRESSION_NEIGHBOR_NUM] =
+GPUconstexpr() uint32_t NoiseSuppressionMinima[NOISE_SUPPRESSION_NEIGHBOR_NUM] =
   {
     (1 << 8) | (1 << 9),
     (1 << 9),
@@ -190,8 +186,6 @@ GPUconstexpr() uint NoiseSuppressionMinima[NOISE_SUPPRESSION_NEIGHBOR_NUM] =
     (1 << 24),
     (1 << 24) | (1 << 25)};
 
-} // namespace cfconsts
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu::cfconsts
 
 #endif

@@ -18,7 +18,11 @@
 
 #include "ReconstructionDataFormats/GlobalTrackID.h"
 #include "DataFormatsGlobalTracking/RecoContainer.h"
-#include "EveWorkflow/EveConfiguration.h"
+#include "TPCCalibration/VDriftHelper.h"
+#include "DetectorsBase/GRPGeomHelper.h"
+#include "EMCALCalib/CellRecalibrator.h"
+#include "EMCALWorkflow/CalibLoader.h"
+#include "EveWorkflow/DetectorData.h"
 #include "Framework/Task.h"
 #include <memory>
 
@@ -46,12 +50,19 @@ class TPCFastTransform;
 class O2DPLDisplaySpec : public o2::framework::Task
 {
  public:
-  static constexpr float mWorkflowVersion = 1.02; // helps recognizing version of workflow which produce data
-  O2DPLDisplaySpec(bool useMC, o2::dataformats::GlobalTrackID::mask_t trkMask,
+  static constexpr auto allowedTracks = "ITS,TPC,MFT,MCH,MID,ITS-TPC,TPC-TRD,ITS-TPC-TOF,ITS-TPC-TRD,ITS-TPC-TRD-TOF,MCH-MID,MFT-MCH,MFT-MCH-MID,PHS,EMC,HMP";
+  static constexpr auto allowedClusters = "ITS,TPC,TRD,TOF,MFT,MCH,MID,PHS,EMC,HMP";
+
+  O2DPLDisplaySpec(bool disableWrite, bool useMC, o2::dataformats::GlobalTrackID::mask_t trkMask,
                    o2::dataformats::GlobalTrackID::mask_t clMask,
-                   std::shared_ptr<o2::globaltracking::DataRequest> dataRequest, std::string jsonPath,
-                   std::chrono::milliseconds timeInterval, int numberOfFiles, int numberOfTracks, bool eveHostNameMatch)
-    : mUseMC(useMC), mTrkMask(trkMask), mClMask(clMask), mDataRequest(dataRequest), mJsonPath(jsonPath), mTimeInteval(timeInterval), mNumberOfFiles(numberOfFiles), mNumberOfTracks(numberOfTracks), mEveHostNameMatch(eveHostNameMatch)
+                   std::shared_ptr<o2::globaltracking::DataRequest> dataRequest,
+                   std::shared_ptr<o2::base::GRPGeomRequest> gr,
+                   std::shared_ptr<o2::emcal::CalibLoader> emcCalibLoader,
+                   const std::string& jsonPath, const std::string& ext,
+                   std::chrono::milliseconds timeInterval,
+                   bool eveHostNameMatch)
+    : mDisableWrite(disableWrite), mUseMC(useMC), mTrkMask(trkMask), mClMask(clMask), mDataRequest(dataRequest), mGGCCDBRequest(gr), mEMCALCalibLoader(emcCalibLoader), mJsonPath(jsonPath), mExt(ext), mTimeInterval(timeInterval), mEveHostNameMatch(eveHostNameMatch), mRunType(o2::parameters::GRPECS::NONE)
+
   {
     this->mTimeStamp = std::chrono::high_resolution_clock::now() - timeInterval; // first run meets condition
   }
@@ -59,23 +70,30 @@ class O2DPLDisplaySpec : public o2::framework::Task
   void init(o2::framework::InitContext& ic) final;
   void run(o2::framework::ProcessingContext& pc) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
+  void updateTimeDependentParams(o2::framework::ProcessingContext& pc);
+
+  bool mDisableWrite = false; // skip writing result (for testing performance)
   bool mUseMC = false;
-  bool mEveHostNameMatch;                 // empty or correct hostname
-  std::string mJsonPath;                  // folder where files are stored
-  std::chrono::milliseconds mTimeInteval; // minimal interval between files in miliseconds
-  int mNumberOfFiles;                     // maximun number of files in folder - newer replaces older
-  int mNumberOfTracks;                    // maximun number of track in single file (0 means no limit)
+  bool mEveHostNameMatch;                  // empty or correct hostname
+  std::string mJsonPath;                   // folder where files are stored
+  std::string mExt;                        // extension of created files (".json" or ".root")
+  std::chrono::milliseconds mTimeInterval; // minimal interval between files in milliseconds
+  bool mPrimaryVertexTriggers;             // instead of drawing vertices with tracks (and maybe calorimeter triggers), draw vertices with calorimeter triggers (and maybe tracks)
+  int mEventCounter = 0;
   std::chrono::time_point<std::chrono::high_resolution_clock> mTimeStamp;
 
   o2::dataformats::GlobalTrackID::mask_t mTrkMask;
   o2::dataformats::GlobalTrackID::mask_t mClMask;
-  o2::itsmft::TopologyDictionary mITSDict;
-  o2::itsmft::TopologyDictionary mMFTDict;
-  std::unique_ptr<EveConfiguration> mConfig;
-  std::unique_ptr<o2::trd::GeometryFlat> mTrdGeo;
+  DetectorData mData;
+  o2::parameters::GRPECS::RunType mRunType;
   std::shared_ptr<o2::globaltracking::DataRequest> mDataRequest;
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
+  std::shared_ptr<o2::emcal::CalibLoader> mEMCALCalibLoader;
+  std::unique_ptr<o2::emcal::CellRecalibrator> mEMCALCalibrator;
+  o2::tpc::VDriftHelper mTPCVDriftHelper{};
 };
 
 } // namespace o2::event_visualisation

@@ -18,9 +18,9 @@
 #define O2_MID_TRACKER_H
 
 #include <vector>
+#include <unordered_set>
 #include <gsl/gsl>
-#include "DataFormatsMID/Cluster2D.h"
-#include "DataFormatsMID/Cluster3D.h"
+#include "DataFormatsMID/Cluster.h"
 #include "DataFormatsMID/ROFRecord.h"
 #include "DataFormatsMID/Track.h"
 #include "MIDBase/GeometryTransformer.h"
@@ -35,24 +35,20 @@ class Tracker
  public:
   Tracker(const GeometryTransformer& geoTrans);
 
-  /// Sets impact parameter cut
-  void setImpactParamCut(float impactParamCut) { mImpactParamCut = impactParamCut; }
   /// Gets the impact parameter cut
   inline float getImpactParamCut() const { return mImpactParamCut; }
-  /// Sets number of sigmas for cuts
-  void setSigmaCut(float sigmaCut) { mImpactParamCut = mSigmaCut; }
   /// Gets number of sigmas for cuts
   inline float getSigmaCut() const { return mSigmaCut; }
 
-  void process(gsl::span<const Cluster2D> clusters, bool accumulate = false);
-  void process(gsl::span<const Cluster2D> clusters, gsl::span<const ROFRecord> rofRecords);
+  void process(gsl::span<const Cluster> clusters, bool accumulate = false);
+  void process(gsl::span<const Cluster> clusters, gsl::span<const ROFRecord> rofRecords);
   bool init(bool keepAll = false);
 
   /// Gets the array of reconstructes tracks
   const std::vector<Track>& getTracks() { return mTracks; }
 
   /// Gets the array of associated clusters
-  const std::vector<Cluster3D>& getClusters() { return mClusters; }
+  const std::vector<Cluster>& getClusters() { return mClusters; }
 
   /// Gets the vector of tracks RO frame records
   const std::vector<ROFRecord>& getTrackROFRecords() { return mTrackROFRecords; }
@@ -61,36 +57,42 @@ class Tracker
   const std::vector<ROFRecord>& getClusterROFRecords() { return mClusterROFRecords; }
 
  private:
-  bool processSide(bool isRight, bool isInward);
-  bool tryAddTrack(const Track& track);
-  bool followTrackKeepAll(const Track& track, bool isRight, bool isInward);
-  bool followTrackKeepBest(const Track& track, bool isRight, bool isInward);
-  bool findAllClusters(Track& track, int clIdx, bool isRight, bool isInward, int chamber, int irpc);
-  bool findNextCluster(const Track& track, bool isRight, bool isInward, int chamber, int firstRPC, int lastRPC, Track& bestTrack) const;
+  void processSide(bool isRight, bool isInward);
+  void tryAddTrack(const Track& track);
+  void followTrackKeepAll(Track& track, bool isRight, bool isInward);
+  bool findAllClusters(const Track& track, bool isRight, int chamber, int firstRPC, int lastRPC, int nextChamber,
+                       std::unordered_set<int>& excludedClusters, bool excludeClusters);
+  void followTrackKeepBest(Track& track, bool isRight, bool isInward);
+  void findNextCluster(const Track& track, bool isRight, bool isInward, int chamber, int firstRPC, int lastRPC, Track& bestTrack) const;
   int getFirstNeighbourRPC(int rpc) const;
   int getLastNeighbourRPC(int rpc) const;
-  bool loadClusters(gsl::span<const Cluster2D>& clusters);
-  bool makeTrackSeed(Track& track, const Cluster3D& cl1, const Cluster3D& cl2) const;
-  double runKalmanFilter(Track& track, const Cluster3D& cluster) const;
-  double tryOneCluster(const Track& track, const Cluster3D& cluster, Track& newTrack) const;
-  void finalizeTrack(Track& track);
+  bool loadClusters(gsl::span<const Cluster>& clusters);
+  bool makeTrackSeed(Track& track, const Cluster& cl1, const Cluster& cl2) const;
+  void runKalmanFilter(Track& track, const Cluster& cluster) const;
+  bool tryOneCluster(const Track& track, int chamber, int clIdx, Track& newTrack) const;
+  void excludeUsedClusters(const Track& track, int ch1, int ch2, std::unordered_set<int>& excludedClusters) const;
+  bool skipOneChamber(Track& track) const;
+
+  static constexpr float SMT11Z = -1603.5; ///< Position of the first MID chamber (cm)
 
   float mImpactParamCut = 210.; ///< Cut on impact parameter
   float mSigmaCut = 5.;         ///< Number of sigmas cut
-  float mMaxChi2 = 1.e6;        ///< Maximum cut on chi2
+  float mMaxChi2 = 50.;         ///< Maximum cut on chi2 to attach a cluster (= 2 * mSigmaCut^2)
 
-  std::vector<std::pair<int, bool>> mClusterIndexes[72]; ///< Ordered arrays of clusters indexes
-  std::vector<Cluster3D> mClusters{};                    ///< 3D clusters
+  std::vector<int> mClusterIndexes[72]; ///< Ordered arrays of clusters indexes
+  std::vector<Cluster> mClusters{};     ///< 3D clusters
 
   std::vector<Track> mTracks{};                ///< Vector of tracks
   std::vector<ROFRecord> mTrackROFRecords{};   ///< List of track RO frame records
   std::vector<ROFRecord> mClusterROFRecords{}; ///< List of cluster RO frame records
+  size_t mFirstTrackOffset{0};                 ///! Offset for the first track in the current event
   size_t mTrackOffset{0};                      ///! Offset for the track in the current event
+  int mNTracksStep1{0};                        ///! Number of tracks found in the first tracking step
 
   GeometryTransformer mTransformer{}; ///< Geometry transformer
 
-  typedef bool (Tracker::*TrackerMemFn)(const Track&, bool, bool);
-  TrackerMemFn mFollowTrack{&Tracker::followTrackKeepBest}; ///! Choice of the function to follow the track
+  typedef void (Tracker::*TrackerMemFn)(Track&, bool, bool);
+  TrackerMemFn mFollowTrack{&Tracker::followTrackKeepAll}; ///! Choice of the function to follow the track
 };
 } // namespace mid
 } // namespace o2

@@ -18,9 +18,7 @@
 #include "GPUTPCGMTrackParam.h"
 #include "GPUTPCGMMergedTrackHit.h"
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 /**
  * @class GPUTPCGMMergedTrack
@@ -30,9 +28,9 @@ namespace gpu
 class GPUTPCGMMergedTrack
 {
  public:
-  GPUd() unsigned int NClusters() const { return mNClusters; }
-  GPUd() unsigned int NClustersFitted() const { return mNClustersFitted; }
-  GPUd() unsigned int FirstClusterRef() const { return mFirstClusterRef; }
+  GPUd() uint32_t NClusters() const { return mNClusters; }
+  GPUd() uint32_t NClustersFitted() const { return mNClustersFitted; }
+  GPUd() uint32_t FirstClusterRef() const { return mFirstClusterRef; }
   GPUd() const GPUTPCGMTrackParam& GetParam() const { return mParam; }
   GPUd() float GetAlpha() const { return mAlpha; }
   GPUd() GPUTPCGMTrackParam& Param()
@@ -52,9 +50,9 @@ class GPUTPCGMMergedTrack
   GPUd() bool CCE() const { return mFlags & 0x08; }
   GPUd() bool MergedLooper() const { return mFlags & 0x10; }
 
-  GPUd() void SetNClusters(int v) { mNClusters = v; }
-  GPUd() void SetNClustersFitted(int v) { mNClustersFitted = v; }
-  GPUd() void SetFirstClusterRef(int v) { mFirstClusterRef = v; }
+  GPUd() void SetNClusters(int32_t v) { mNClusters = v; }
+  GPUd() void SetNClustersFitted(int32_t v) { mNClustersFitted = v; }
+  GPUd() void SetFirstClusterRef(int32_t v) { mFirstClusterRef = v; }
   GPUd() void SetParam(const GPUTPCGMTrackParam& v) { mParam = v; }
   GPUd() void SetAlpha(float v) { mAlpha = v; }
   GPUd() void SetLastX(float v) { mLastX = v; }
@@ -100,30 +98,32 @@ class GPUTPCGMMergedTrack
       mFlags &= 0xEF;
     }
   }
-  GPUd() void SetFlags(unsigned char v) { mFlags = v; }
-  GPUd() void SetLegs(unsigned char v) { mLegs = v; }
-  GPUd() unsigned char Legs() const { return mLegs; }
+  GPUd() void SetFlags(uint8_t v) { mFlags = v; }
+  GPUd() void SetLegs(uint8_t v) { mLegs = v; }
+  GPUd() uint8_t Legs() const { return mLegs; }
 
   GPUd() const gputpcgmmergertypes::GPUTPCOuterParam& OuterParam() const { return mOuterParam; }
   GPUd() gputpcgmmergertypes::GPUTPCOuterParam& OuterParam() { return mOuterParam; }
 
  private:
-  GPUTPCGMTrackParam mParam;                        //* fitted track parameters
+  GPUTPCGMTrackParam mParam;                         //* fitted track parameters
   gputpcgmmergertypes::GPUTPCOuterParam mOuterParam; //* outer param
 
-  float mAlpha;                  //* alpha angle
-  float mLastX;                  //* outer X
-  float mLastY;                  //* outer Y
-  float mLastZ;                  //* outer Z
-  unsigned int mFirstClusterRef; //* index of the first track cluster in corresponding cluster arrays
-  unsigned int mNClusters;       //* number of track clusters
-  unsigned int mNClustersFitted; //* number of clusters used in fit
-  unsigned char mFlags;
-  unsigned char mLegs;
+  float mAlpha;              //* alpha angle
+  float mLastX;              //* outer X
+  float mLastY;              //* outer Y
+  float mLastZ;              //* outer Z
+  uint32_t mFirstClusterRef; //* index of the first track cluster in corresponding cluster arrays
+  // TODO: Change to 8 bit
+  uint32_t mNClusters;       //* number of track clusters
+  uint32_t mNClustersFitted; //* number of clusters used in fit
+  uint8_t mFlags;
+  uint8_t mLegs;
 
+#if !defined(GPUCA_STANDALONE)
   ClassDefNV(GPUTPCGMMergedTrack, 0);
+#endif
 };
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

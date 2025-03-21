@@ -74,15 +74,22 @@ NodeColor decideColorForNode(const DeviceInfo& info)
 /// Color choices
 const static ImColor INPUT_SLOT_COLOR = {150, 150, 150, 150};
 const static ImColor OUTPUT_SLOT_COLOR = {150, 150, 150, 150};
+const static ImColor NODE_LABEL_BACKGROUND_COLOR = {45, 45, 45, 255};
+const static ImColor NODE_LABEL_TEXT_COLOR = {244, 244, 244, 255};
 const static ImVec4& ERROR_MESSAGE_COLOR = PaletteHelpers::RED;
 const static ImVec4& WARNING_MESSAGE_COLOR = PaletteHelpers::YELLOW;
+const static ImColor ARROW_BACKGROUND_COLOR = {100, 100, 0};
+const static ImColor ARROW_HALFGROUND_COLOR = {170, 170, 70};
 const static ImColor ARROW_COLOR = {200, 200, 100};
+const static ImColor ARROW_SELECTED_COLOR = {200, 0, 100};
 const static ImU32 GRID_COLOR = ImColor(200, 200, 200, 40);
 const static ImColor NODE_BORDER_COLOR = {100, 100, 100};
 const static ImColor LEGEND_COLOR = {100, 100, 100};
 
 /// Layout choices
 const static float GRID_SZ = 64.0f;
+const static float ARROW_BACKGROUND_THICKNESS = 1.f;
+const static float ARROW_HALFGROUND_THICKNESS = 2.f;
 const static float ARROW_THICKNESS = 3.f;
 const static float NODE_BORDER_THICKNESS = 4.f;
 const static ImVec4 LEGEND_BACKGROUND_COLOR = {0.125, 0.180, 0.196, 1};
@@ -91,6 +98,10 @@ const static ImVec4 SLOT_EMPTY_COLOR = {0.275, 0.275, 0.275, 1.};
 const static ImVec4& SLOT_PENDING_COLOR = PaletteHelpers::RED;
 const static ImVec4& SLOT_DISPATCHED_COLOR = PaletteHelpers::YELLOW;
 const static ImVec4& SLOT_DONE_COLOR = PaletteHelpers::GREEN;
+
+/// Node size
+const float NODE_SLOT_RADIUS = 4.0f;
+const ImVec2 NODE_WINDOW_PADDING(8.0f, 8.0f);
 
 /// Displays a grid
 void displayGrid(bool show_grid, ImVec2 offset, ImDrawList* draw_list)
@@ -158,6 +169,21 @@ struct Group {
   }
 };
 
+constexpr int MAX_SLOTS = 512;
+constexpr int MAX_INPUT_VALUE_SIZE = 24;
+
+struct OldestPossibleInput {
+  size_t value;
+  char buffer[MAX_INPUT_VALUE_SIZE] = "unknown";
+  float textSize = ImGui::CalcTextSize("unknown").x;
+};
+
+struct OldestPossibleOutput {
+  size_t value;
+  char buffer[MAX_INPUT_VALUE_SIZE] = "unknown";
+  float textSize = ImGui::CalcTextSize("unknown").x;
+};
+
 // Private helper struct for the graph model
 struct Node {
   int ID;
@@ -167,6 +193,8 @@ struct Node {
   float Value;
   ImVec4 Color;
   int InputsCount, OutputsCount;
+  OldestPossibleInput oldestPossibleInput[MAX_SLOTS];
+  OldestPossibleOutput oldestPossibleOutput[MAX_SLOTS];
 
   Node(int id, int groupID, char const* name, float value, const ImVec4& color, int inputs_count, int outputs_count)
   {
@@ -213,9 +241,128 @@ struct NodeLink {
   }
 };
 
+/// Helper to draw metrics
+template <typename RECORD, typename ITEM, typename CONTEXT>
+struct MetricsPainter {
+  using NumRecordsCallback = std::function<size_t(void)>;
+  using RecordCallback = std::function<RECORD(size_t)>;
+  using NumItemsCallback = std::function<size_t(RECORD const&)>;
+  using ItemCallback = std::function<ITEM const&(RECORD const&, size_t)>;
+  using ValueCallback = std::function<int(ITEM const&)>;
+  using ColorCallback = std::function<ImU32(int value)>;
+  using ContextCallback = std::function<CONTEXT&()>;
+  using PaintCallback = std::function<void(int row, int column, int value, ImU32 color, CONTEXT const& context)>;
+
+  static void draw(const char* name,
+                   ImVec2 const& offset,
+                   ImVec2 const& sizeHint,
+                   CONTEXT const& context,
+                   NumRecordsCallback const& getNumRecords,
+                   RecordCallback const& getRecord,
+                   NumItemsCallback const& getNumItems,
+                   ItemCallback const& getItem,
+                   ValueCallback const& getValue,
+                   ColorCallback const& getColor,
+                   PaintCallback const& describeCell)
+  {
+    for (size_t ri = 0; ri < getNumRecords(); ++ri) {
+      auto record = getRecord(ri);
+      for (size_t ii = 0; ii < getNumItems(record); ++ii) {
+        auto item = getItem(record, ii);
+        int value = getValue(item);
+        ImU32 color = getColor(value);
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        describeCell(ri, ii, value, color, context);
+      }
+    }
+  }
+
+  static NumRecordsCallback metric1D()
+  {
+    return []() -> size_t { return 1UL; };
+  }
+
+  static NumRecordsCallback metric2D(Metric2DViewIndex& viewIndex)
+  {
+    return [&viewIndex]() -> size_t {
+      if (viewIndex.isComplete()) {
+        return viewIndex.w;
+      }
+      return 0;
+    };
+  }
+
+  static NumItemsCallback items1D()
+  {
+    return [](RECORD const& record) -> size_t { return 1UL; };
+  }
+
+  static NumItemsCallback items2D(Metric2DViewIndex const& viewIndex)
+  {
+    return [&viewIndex](int record) -> int {
+      if (viewIndex.isComplete()) {
+        return viewIndex.h;
+      }
+      return 0;
+    };
+  }
+
+  template <typename T>
+  static ItemCallback latestMetric(DeviceMetricsInfo const& metrics,
+                                   Metric2DViewIndex const& viewIndex)
+  {
+    return [&metrics, &viewIndex](RECORD const& record, size_t i) -> ITEM const& {
+      // Calculate the index in the viewIndex.
+      auto idx = record * viewIndex.h + i;
+      assert(viewIndex.indexes.size() > idx);
+      MetricInfo const& metricInfo = metrics.metrics[viewIndex.indexes[idx]];
+      auto& data = DeviceMetricsInfoHelpers::get<T, metricStorageSize<T>()>(metrics, metricInfo.storeIdx);
+      return data[(metricInfo.pos - 1) % data.size()];
+    };
+  }
+
+  template <typename T>
+  static RecordCallback simpleRecord()
+  {
+    return [](size_t i) -> int {
+      return i;
+    };
+  }
+
+  template <typename T>
+  static ValueCallback simpleValue()
+  {
+    return [](ITEM const& item) -> T { return item; };
+  }
+
+  static ColorCallback colorPalette(std::vector<ImU32> const& colors, int minValue, int maxValue)
+  {
+    return [colors, minValue, maxValue](int const& value) -> ImU32 {
+      if (value < minValue) {
+        return colors[0];
+      } else if (value > maxValue) {
+        return colors[colors.size() - 1];
+      } else {
+        int idx = (value - minValue) * (colors.size() - 1) / (maxValue - minValue);
+        return colors[idx];
+      }
+    };
+  }
+};
+
+/// Context to draw the labels with the metrics
+struct MetricLabelsContext {
+  ImVector<Node>* nodes;
+  int nodeIdx;
+  ImVector<NodePos>* positions;
+  ImDrawList* draw_list;
+  ImVec2 offset;
+};
+
 void showTopologyNodeGraph(WorkspaceGUIState& state,
                            std::vector<DeviceInfo> const& infos,
                            std::vector<DeviceSpec> const& specs,
+                           std::vector<DataProcessingStates> const& allStates,
                            std::vector<DataProcessorInfo> const& metadata,
                            std::vector<DeviceControl>& controls,
                            std::vector<DeviceMetricsInfo> const& metricsInfos)
@@ -240,7 +387,7 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
   static bool show_legend = true;
   static int node_selected = -1;
 
-  auto prepareChannelView = [&specs, &metadata](ImVector<Node>& nodeList, ImVector<Group>& groupList) {
+  auto prepareChannelView = [&specs, &metricsInfos, &metadata](ImVector<Node>& nodeList, ImVector<Group>& groupList) {
     struct LinkInfo {
       int specId;
       int outputId;
@@ -302,7 +449,7 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
         auto const& outName = input.name;
         auto const& out = linkToIndex.find(input.name);
         if (out == linkToIndex.end()) {
-          LOG(ERROR) << "Could not find suitable node for " << outName;
+          LOG(error) << "Could not find suitable node for " << outName;
           continue;
         }
         links.push_back(NodeLink{out->second.specId, out->second.outputId, si, ii});
@@ -428,9 +575,6 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
 
   ImGui::BeginGroup();
 
-  const float NODE_SLOT_RADIUS = 4.0f;
-  const ImVec2 NODE_WINDOW_PADDING(8.0f, 8.0f);
-
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1, 1));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 #if defined(ImGuiCol_ChildWindowBg)
@@ -458,15 +602,68 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
   // Display grid
   displayGrid(show_grid, offset, draw_list);
 
-  // Display links
-  draw_list->ChannelsSetCurrent(0); // Background
+  ImVec2 win_pos = ImGui::GetCursorScreenPos();
+  ImVec2 canvas_sz = ImGui::GetWindowSize();
+  // Display links but only if they are inside the view.
   for (int link_idx = 0; link_idx < links.Size; link_idx++) {
-    NodeLink* link = &links[link_idx];
-    ImVec2 p1 = offset + NodePos::GetOutputSlotPos(nodes, positions, link->InputIdx, link->InputSlot);
-    ImVec2 p2 = ImVec2(-3 * NODE_SLOT_RADIUS, 0) + offset + NodePos::GetInputSlotPos(nodes, positions, link->OutputIdx, link->OutputSlot);
-    draw_list->AddBezierCurve(p1, p1 + ImVec2(+50, 0), p2 + ImVec2(-50, 0), p2, ARROW_COLOR, ARROW_THICKNESS);
+    // Do the geometry culling upfront.
+    NodeLink const& link = links[link_idx];
+    ImVec2 p1 = offset + NodePos::GetOutputSlotPos(nodes, positions, link.InputIdx, link.InputSlot);
+    ImVec2 p2 = ImVec2(-3 * NODE_SLOT_RADIUS, 0) + offset + NodePos::GetInputSlotPos(nodes, positions, link.OutputIdx, link.OutputSlot);
+
+    if ((p1.x > win_pos.x + canvas_sz.x + 50) && (p2.x > win_pos.x + canvas_sz.x + 50)) {
+      continue;
+    }
+
+    if ((p1.y > win_pos.y + canvas_sz.y + 50) && (p2.y > win_pos.y + canvas_sz.y + 50)) {
+      continue;
+    }
+
+    if ((p1.y < win_pos.y) && (p2.y < win_pos.y)) {
+      continue;
+    }
+
+    if ((p1.x < win_pos.x) && (p2.x < win_pos.x)) {
+      continue;
+    }
+    draw_list->ChannelsSetCurrent(0); // Background
+    auto color = ARROW_BACKGROUND_COLOR;
+    auto thickness = ARROW_BACKGROUND_THICKNESS;
+
+    bool p1Inside = false;
+    bool p2Inside = false;
+    if ((p1.x > win_pos.x) && (p1.x < (win_pos.x + canvas_sz.x)) && (p1.y < (win_pos.y + canvas_sz.y)) && (p1.y > win_pos.y)) {
+      p1Inside = true;
+    }
+
+    if ((p2.x > win_pos.x) && (p2.x < (win_pos.x + canvas_sz.x)) && (p2.y < (win_pos.y + canvas_sz.y)) && (p2.y > win_pos.y)) {
+      p2Inside = true;
+    }
+
+    if (p1Inside && p2Inside) {
+      // Whatever the two edges completely within the view, gets brighter color and foreground.
+      draw_list->ChannelsSetCurrent(2);
+      color = ARROW_COLOR;
+      thickness = ARROW_THICKNESS;
+    } else if (p1Inside || p2Inside) {
+      draw_list->ChannelsSetCurrent(1);
+      // Whenever one of the two ends is within the view, increase the color but keep the background
+      color = ARROW_HALFGROUND_COLOR;
+      thickness = ARROW_HALFGROUND_THICKNESS;
+    }
+
+    // If something belongs to a selected node, it gets the selected color.
+    if (link.InputIdx == node_selected || link.OutputIdx == node_selected) {
+      auto foregroundLayer = (nodes.Size + 1) * 2 + 1;
+      draw_list->ChannelsSetCurrent(foregroundLayer);
+      color = ARROW_SELECTED_COLOR;
+      thickness = thickness + 2;
+    }
+
+    draw_list->AddBezierCurve(p1, p1 + ImVec2(+50, 0), p2 + ImVec2(-50, 0), p2, color, thickness);
   }
 
+  auto fgDrawList = ImGui::GetForegroundDrawList();
   // Display nodes
   for (int node_idx = 0; node_idx < nodes.Size; node_idx++) {
     auto backgroundLayer = (node_idx + 1) * 2;
@@ -497,9 +694,17 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
     ImGui::BeginGroup(); // Lock horizontal position
     ImGui::TextUnformatted(node->Name);
     switch (info.maxLogLevel) {
+      case LogLevel::Critical:
+        ImGui::SameLine();
+        ImGui::TextColored(ERROR_MESSAGE_COLOR, "%s", ICON_FA_EXCLAMATION_CIRCLE);
+        break;
       case LogLevel::Error:
         ImGui::SameLine();
         ImGui::TextColored(ERROR_MESSAGE_COLOR, "%s", ICON_FA_EXCLAMATION_CIRCLE);
+        break;
+      case LogLevel::Alarm:
+        ImGui::SameLine();
+        ImGui::TextColored(WARNING_MESSAGE_COLOR, "%s", ICON_FA_EXCLAMATION_TRIANGLE);
         break;
       case LogLevel::Warning:
         ImGui::SameLine();
@@ -508,7 +713,7 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
       default:
         break;
     }
-    gui::displayDataRelayer(metricsInfos[node->ID], infos[node->ID], ImVec2(140., 90.));
+    gui::displayDataRelayer(metricsInfos[node->ID], infos[node->ID], specs[node->ID], allStates[node->ID], ImVec2(140., 90.));
     ImGui::EndGroup();
 
     // Save the size of what we have emitted and whether any of the widgets are being used
@@ -562,17 +767,92 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
     draw_list->AddRectFilled(node_rect_min, node_rect_max, node_bg_color, 4.0f);
     draw_list->AddRectFilled(node_rect_min, node_rect_title, node_title_color, 4.0f);
     draw_list->AddRect(node_rect_min, node_rect_max, NODE_BORDER_COLOR, NODE_BORDER_THICKNESS);
+
     for (int slot_idx = 0; slot_idx < node->InputsCount; slot_idx++) {
+      draw_list->ChannelsSetCurrent(backgroundLayer); // Background
       ImVec2 p1(-3 * NODE_SLOT_RADIUS, NODE_SLOT_RADIUS), p2(-3 * NODE_SLOT_RADIUS, -NODE_SLOT_RADIUS), p3(0, 0);
-      auto pp1 = p1 + offset + NodePos::GetInputSlotPos(nodes, positions, node_idx, slot_idx);
-      auto pp2 = p2 + offset + NodePos::GetInputSlotPos(nodes, positions, node_idx, slot_idx);
-      auto pp3 = p3 + offset + NodePos::GetInputSlotPos(nodes, positions, node_idx, slot_idx);
-      draw_list->AddTriangleFilled(pp1, pp2, pp3, ARROW_COLOR);
-      draw_list->AddCircleFilled(offset + NodePos::GetInputSlotPos(nodes, positions, node_idx, slot_idx), NODE_SLOT_RADIUS, INPUT_SLOT_COLOR);
+      auto slotPos = NodePos::GetInputSlotPos(nodes, positions, node_idx, slot_idx);
+      auto pp1 = p1 + offset + slotPos;
+      auto pp2 = p2 + offset + slotPos;
+      auto pp3 = p3 + offset + slotPos;
+      auto color = ARROW_COLOR;
+      if (node_idx == node_selected) {
+        color = ARROW_SELECTED_COLOR;
+      }
+      draw_list->AddTriangleFilled(pp1, pp2, pp3, color);
+      draw_list->AddCircleFilled(offset + slotPos, NODE_SLOT_RADIUS, INPUT_SLOT_COLOR);
     }
+
+    draw_list->ChannelsSetCurrent(foregroundLayer);
+    MetricLabelsContext context{&nodes, node_idx, &positions, draw_list, offset};
+    /// Paint the input labels
+    MetricsPainter<int, uint64_t, MetricLabelsContext>::draw(
+      "input_labels",
+      offset,
+      ImVec2{node->Size.x, node->Size.y},
+      context,
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::metric1D(),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::simpleRecord<int>(),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::items2D(info.inputChannelMetricsViewIndex),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::latestMetric<uint64_t>(metricsInfos[node->ID], info.inputChannelMetricsViewIndex),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::simpleValue<uint64_t>(),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::colorPalette(std::vector<ImU32>{{ImColor(0, 100, 0, 255), ImColor(0, 0, 100, 255), ImColor(100, 0, 0, 255)}}, 0, 3),
+      [](int, int item, int value, ImU32 color, MetricLabelsContext const& context) {
+        auto draw_list = context.draw_list;
+        auto offset = context.offset;
+        auto slotPos = NodePos::GetInputSlotPos(nodes, positions, context.nodeIdx, item);
+        Node* node = &nodes[context.nodeIdx];
+        auto& label = node->oldestPossibleInput[item];
+        // Avoid recomputing if the value is the same.
+        if (label.value != value) {
+          label.value = value;
+          snprintf(label.buffer, sizeof(label.buffer), "%d", value);
+          label.textSize = ImGui::CalcTextSize(label.buffer).x;
+        }
+        draw_list->AddRectFilled(offset + slotPos - ImVec2{node->oldestPossibleInput[item].textSize + 5.f * NODE_SLOT_RADIUS, 2 * NODE_SLOT_RADIUS},
+                                 offset + slotPos + ImVec2{-4.5f * NODE_SLOT_RADIUS, 2 * NODE_SLOT_RADIUS}, NODE_LABEL_BACKGROUND_COLOR, 2., ImDrawFlags_RoundCornersAll);
+        draw_list->AddText(nullptr, 12,
+                           offset + slotPos - ImVec2{node->oldestPossibleInput[item].textSize + 4.5f * NODE_SLOT_RADIUS, 2 * NODE_SLOT_RADIUS},
+                           NODE_LABEL_TEXT_COLOR,
+                           node->oldestPossibleInput[item].buffer);
+      });
+
     for (int slot_idx = 0; slot_idx < node->OutputsCount; slot_idx++) {
       draw_list->AddCircleFilled(offset + NodePos::GetOutputSlotPos(nodes, positions, node_idx, slot_idx), NODE_SLOT_RADIUS, OUTPUT_SLOT_COLOR);
     }
+
+    MetricsPainter<int, uint64_t, MetricLabelsContext>::draw(
+      "output_labels",
+      offset,
+      ImVec2{node->Size.x, node->Size.y},
+      context,
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::metric1D(),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::simpleRecord<int>(),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::items2D(info.outputChannelMetricsViewIndex),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::latestMetric<uint64_t>(metricsInfos[node->ID], info.outputChannelMetricsViewIndex),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::simpleValue<uint64_t>(),
+      MetricsPainter<int, uint64_t, MetricLabelsContext>::colorPalette(std::vector<ImU32>{{ImColor(0, 100, 0, 255), ImColor(0, 0, 100, 255), ImColor(100, 0, 0, 255)}}, 0, 3),
+      [](int, int item, int value, ImU32 color, MetricLabelsContext const& context) {
+        auto draw_list = context.draw_list;
+        auto offset = context.offset;
+        auto slotPos = NodePos::GetOutputSlotPos(nodes, positions, context.nodeIdx, item);
+        Node* node = &nodes[context.nodeIdx];
+        auto& label = node->oldestPossibleOutput[item];
+        // Avoid recomputing if the value is the same.
+        if (label.value != value) {
+          label.value = value;
+          snprintf(label.buffer, sizeof(label.buffer), "%d", value);
+          label.textSize = ImGui::CalcTextSize(label.buffer).x;
+        }
+        auto rectTL = ImVec2{4.5f * NODE_SLOT_RADIUS, -2 * NODE_SLOT_RADIUS};
+        auto rectBR = ImVec2{node->oldestPossibleOutput[item].textSize + 5.f * NODE_SLOT_RADIUS, 2 * NODE_SLOT_RADIUS};
+        draw_list->AddRectFilled(offset + slotPos + rectTL,
+                                 offset + slotPos + rectBR, NODE_LABEL_BACKGROUND_COLOR, 2., ImDrawFlags_RoundCornersAll);
+        draw_list->AddText(nullptr, 12,
+                           offset + slotPos + rectTL,
+                           NODE_LABEL_TEXT_COLOR,
+                           node->oldestPossibleOutput[item].buffer);
+      });
 
     ImGui::PopID();
   }
@@ -595,7 +875,7 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
   }
 
   // Scrolling
-  //if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemActive() && ImGui::IsMouseDragging(2, 0.0f))
+  // if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemActive() && ImGui::IsMouseDragging(2, 0.0f))
   //    scrolling = scrolling - ImGui::GetIO().MouseDelta;
 
   ImGui::PopItemWidth();
@@ -613,6 +893,7 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
     if (node_selected != -1) {
       auto& node = nodes[node_selected];
       auto& spec = specs[node_selected];
+      auto& states = allStates[node_selected];
       auto& control = controls[node_selected];
       auto& info = infos[node_selected];
       auto& metrics = metricsInfos[node_selected];
@@ -620,7 +901,7 @@ void showTopologyNodeGraph(WorkspaceGUIState& state,
       auto& metadatum = metadata[group.metadataId];
 
       if (state.rightPaneVisible) {
-        gui::displayDeviceInspector(spec, info, metrics, metadatum, control);
+        gui::displayDeviceInspector(spec, info, states, metrics, metadatum, control);
       }
     } else {
       ImGui::TextWrapped("Select a node in the topology to display information about it");

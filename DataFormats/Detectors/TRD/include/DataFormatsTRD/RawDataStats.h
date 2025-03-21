@@ -16,122 +16,160 @@
 #ifndef O2_TRD_RAWDATASTATS
 #define O2_TRD_RAWDATASTATS
 
-#include <iostream>
+#include "Rtypes.h"
 #include <string>
 #include <cstdint>
 #include <array>
-#include <vector>
-#include <bitset>
-#include <gsl/span>
+#include <unordered_map>
 #include "DataFormatsTRD/Constants.h"
+#include "CommonDataFormat/TFIDInfo.h"
 
 namespace o2::trd
 {
-enum ParsingErrors { TRDParsingNoError,
-                     TRDParsingUnrecognisedVersion,
-                     TRDParsingBadDigt,
-                     TRDParsingBadTracklet,
-                     TRDParsingDigitEndMarkerWrongState,                // read a end marker but we were expecting something else due to
-                     TRDParsingDigitMCMHeaderSanityCheckFailure,        //essentially we did not see an MCM header see RawData.h for requirement
-                     TRDParsingDigitROBDecreasing,                      // sequential headers must have the same or increasing rob number
-                     TRDParsingDigitMCMNotIncreasing,                   // sequential headers must have increasing mcm number
-                     TRDParsingDigitADCMaskMismatch,                    // mask adc count does not match # of 1s in bitpattern
-                     TRDParsingDigitADCMaskAdvanceToEnd,                // in advancing to adcmask we have reached the end of the buffer
-                     TRDParsingDigitMCMHeaderBypassButStateMCMHeader,   // we are reading mcmadc data but the state is mcmheader
-                     TRDParsingDigitEndMarkerStateButReadingMCMADCData, // read the endmarker while expecting to read the mcmadcdata
-                     TRDParsingDigitADCChannel21,                       // ADCMask is zero but we are still on a digit.
-                     TRDParsingDigitADCChannelGT22,                     // error allocating digit, so digit channel has error value
-                     TRDParsingDigitGT10ADCs,                           // more than 10 adc data words seen
-                     TRDParsingDigitSanityCheck,                        // adc failed sanity check see RawData.cxx for faiulre reasons
-                     TRDParsingDigitExcessTimeBins,                     // ADC has more than 30 timebins (10 adc words)
-                     TRDParsingDigitParsingExitInWrongState,            // exiting parsing in the wrong state ... got to the end of the buffer in wrong state.
-                     TRDParsingDigitStackMismatch,                      // mismatch between rdh and hcheader stack calculation/value
-                     TRDParsingDigitLayerMismatch,                      // mismatch between rdh and hcheader stack calculation/value
-                     TRDParsingDigitSectorMismatch,                     // mismatch between rdh and hcheader stack calculation/value
-                     TRDParsingTrackletCRUPaddingWhileParsingTracklets, // reading a padding word while expecting tracklet data
-                     TRDParsingTrackletBit11NotSetInTrackletHCHeader,   // bit 11 not set in hc header for tracklets.
-                     TRDParsingTrackletHCHeaderSanityCheckFailure,      // HCHeader sanity check failure, see RawData.cxx for reasons.
-                     TRDParsingTrackletMCMHeaderSanityCheckFailure,     // MCMHeader sanity check failure, see RawData.cxx for reasons.
-                     TRDParsingTrackletMCMHeaderButParsingMCMData,      // state is still MCMHeader but we are parsing MCMData
-                     TRDParsingTrackletStateMCMHeaderButParsingMCMData,
-                     TRDParsingTrackletTrackletCountGTThatDeclaredInMCMHeader, //mcmheader tracklet count does not match that in we have parsed.
-                     TRDParsingTrackletInvalidTrackletCount,                   // invalid tracklet count in header vs data
-                     TRDParsingTrackletPadRowIncreaseError,                    // subsequent padrow can not be less than previous one.
-                     TRDParsingTrackletColIncreaseError,                       // subsequent col can not be less than previous one
-                     TRDParsingTrackletNoTrackletEndMarker,                    // got to the end of the buffer with out finding a tracklet end marker.
-                     TRDParsingTrackletExitingNoTrackletEndMarker,             // got to the end of the buffer exiting tracklet parsing with no tracklet end marker
-                     TRDParsingDigitHeaderCountGT3,                            // digital half chamber header had more than 3 additional words expected by header. most likely corruption above somewhere.
-                     TRDParsingDigitHeaderWrong1,                              // expected header word1 but wrong ending marker
-                     TRDParsingDigitHeaderWrong2,                              // expected header word2 but wrong ending marker
-                     TRDParsingDigitHeaderWrong3,                              // expected header word3 but wrong ending marker
-                     TRDParsingDigitHeaderWrong4,                              // expected header word but have no idea what we are looking at default of switch statement
-                     TRDParsingDigitDataStillOnLink,                           // got to the end of digit parsing and there is still data on link, normally not advancing far enough when dumping data.
-                     TRDParsingTrackletIgnoringDataTillEndMarker               // for some reason we are bouncing to the end word by word, this counts those words
+
+enum ParsingErrors {
+  NoError,
+  DigitEndMarkerWrongState,            // read a end marker but we were expecting something else
+  DigitMCMHeaderSanityCheckFailure,    // the checked bits in the DigitMCMHeader were not correctly set
+  DigitMCMNotIncreasing,               // sequential headers must have increasing mcm number
+  DigitMCMDuplicate,                   // we saw two DigitMCMHeaders for the same MCM in one trigger
+  DigitADCMaskInvalid,                 // mask adc count does not match # of 1s in bitpattern or the check bits are wrongly set
+  DigitSanityCheck,                    // adc failed sanity check based on current channel (odd/even) and check bits DigitMCMData.f
+  DigitParsingExitInWrongState,        // exiting parsing in the wrong state ... got to the end of the buffer in wrong state.
+  DigitParsingNoSecondEndmarker,       // we found a single digit end marker not followed by a second one
+  DigitHCHeaderMismatch,               // the half-chamber ID from the digit HC header is not consistent with the one expected from the link ID
+  TrackletHCHeaderFailure,             // either reserved bit not set or HCID is not what was expected from RDH
+  TrackletMCMHeaderSanityCheckFailure, // MCMHeader sanity check failure, LSB or MSB not set
+  TrackletDataWrongOrdering,           // the tracklet data is not arriving in increasing MCM order
+  TrackletDataDuplicateMCM,            // we see more than one TrackletMCMHeader for the same MCM
+  TrackletNoTrackletEndMarker,         // got to the end of the buffer with out finding a tracklet end marker.
+  TrackletNoSecondEndMarker,           // we expected to see a second tracklet end marker, but found something else instead
+  TrackletMCMDataFailure,              // invalid word for TrackletMCMData detected
+  TrackletDataMissing,                 // we expected tracklet data but got an endmarker instead
+  TrackletExitingNoTrackletEndMarker,  // got to the end of the buffer exiting tracklet parsing with no tracklet end marker
+  UnparsedTrackletDataRemaining,       // the tracklet parsing has finished correctly, but there is still data left on the link (CRU puts incorrect link size or corrupt data?)
+  UnparsedDigitDataRemaining,          // the digit parsing has finished correctly, but there is still data left on the link (CRU puts incorrect link size or corrupt data? RDH > 8kByte before?)
+  DigitHeaderCountGT3,                 // digital half chamber header had more than 3 additional words expected by header. most likely corruption above somewhere.
+  DigitHeaderWrongType,                // expected digit header, but could not determine type
+  HalfCRUSumLength,                    // if the HalfCRU headers summed lengths wont fit into the buffer, implies corruption, its a faster check than the next one.
+  BadRDHMemSize,                       // RDH memory size is supposedly zero
+  BadRDHFEEID,                         // RDH parsing failure for reasons in the word
+  BadRDHEndPoint,                      // RDH parsing failure for reasons in the word
+  BadRDHOrbit,                         // RDH parsing failure for reasons in the word
+  BadRDHCRUID,                         // RDH parsing failure for reasons in the word
+  BadRDHPacketCounter,                 // RDH packet counter not incrementing
+  HalfCRUCorrupt,                      // if the HalfCRU headers has values out of range, corruption is assumed.
+  DigitHCHeader1Problem,               // multiple instances of Digit HC Header 1
+  DigitHCHeader2Problem,               // multiple instances of Digit HC Header 2
+  DigitHCHeader3Problem,               // multiple instances of Digit HC Header 3
+  DigitHCHeaderSVNMismatch,            // svn version information has changed in the DigitHCHeader3.
+  TrackletsReturnedMinusOne,           // trackletparsing returned -1, data was dumped;
+  FEEIDIsFFFF,                         // RDH is in error, the FEEID is 0xffff
+  FEEIDBadSector,                      // RDH is in error, the FEEID.supermodule is not a valid value.
+  HalfCRUBadBC,                        // the BC in the half-CRU header is so low that the BC shift would make it negative
+  TRDLastParsingError                  // This is to keep QC happy until we can change it there as well.
 };
 
-extern std::vector<std::string> ParsingErrorsString;
+static const std::unordered_map<int, std::string> ParsingErrorsString = {
+  {NoError, "NoError"},
+  {DigitEndMarkerWrongState, "DigitEndMarkerWrongState"},
+  {DigitMCMHeaderSanityCheckFailure, "DigitMCMHeaderSanityCheckFailure"},
+  {DigitMCMNotIncreasing, "DigitMCMNotIncreasing"},
+  {DigitMCMDuplicate, "DigitMCMDuplicate"},
+  {DigitADCMaskInvalid, "DigitADCMaskInvalid"},
+  {DigitSanityCheck, "DigitSanityCheck"},
+  {DigitParsingExitInWrongState, "DigitParsingExitInWrongState"},
+  {DigitParsingNoSecondEndmarker, "DigitParsingNoSecondEndmarker"},
+  {DigitHCHeaderMismatch, "DigitHCHeaderMismatch"},
+  {TrackletHCHeaderFailure, "TrackletHCHeaderFailure"},
+  {TrackletMCMHeaderSanityCheckFailure, "TrackletMCMHeaderSanityCheckFailure"},
+  {TrackletDataWrongOrdering, "TrackletDataWrongOrdering"},
+  {TrackletDataDuplicateMCM, "TrackletDataDuplicateMCM"},
+  {TrackletNoTrackletEndMarker, "TrackletNoTrackletEndMarker"},
+  {TrackletNoSecondEndMarker, "TrackletNoSecondEndMarker"},
+  {TrackletMCMDataFailure, "TrackletMCMDataFailure"},
+  {TrackletDataMissing, "TrackletDataMissing"},
+  {TrackletExitingNoTrackletEndMarker, "TrackletExitingNoTrackletEndMarker"},
+  {UnparsedTrackletDataRemaining, "UnparsedTrackletDataRemaining"},
+  {UnparsedDigitDataRemaining, "UnparsedDigitDataRemaining"},
+  {DigitHeaderCountGT3, "DigitHeaderCountGT3"},
+  {DigitHeaderWrongType, "DigitHeaderWrongType"},
+  {HalfCRUSumLength, "HalfCRUSumLength"},
+  {BadRDHMemSize, "BadRDHMemSize"},
+  {BadRDHFEEID, "BadRDHFEEID"},
+  {BadRDHEndPoint, "BadRDHEndPoint"},
+  {BadRDHOrbit, "BadRDHOrbit"},
+  {BadRDHCRUID, "BadRDHCRUID"},
+  {BadRDHPacketCounter, "BadRDHPacketCounter"},
+  {HalfCRUCorrupt, "HalfCRUCorrupt"},
+  {DigitHCHeader1Problem, "DigitHCHeader1Problem"},
+  {DigitHCHeader2Problem, "DigitHCHeader2Problem"},
+  {DigitHCHeader3Problem, "DigitHCHeader3Problem"},
+  {DigitHCHeaderSVNMismatch, "DigitHCHeaderSVNMismatch"},
+  {TrackletsReturnedMinusOne, "TrackletsReturnedMinusOne"},
+  {FEEIDIsFFFF, "FEEIDIsFFFF"},
+  {FEEIDBadSector, "FEEIDBadSector"},
+  {HalfCRUBadBC, "HalfCRUBadBC"},
+  {TRDLastParsingError, "TRDLastParsingError"}};
 
 //enumerations for the options, saves on having a long parameter list.
 enum OptionBits {
-  TRDByteSwapBit,
   TRDVerboseBit,
-  TRDHeaderVerboseBit,
-  TRDDataVerboseBit,
-  TRDCompressedDataBit,
-  TRDFixDigitCorruptionBit,
-  TRDEnableTimeInfoBit,
-  TRDEnableStatsBit,
-  TRDIgnoreDigitHCHeaderBit,
-  TRDIgnoreTrackletHCHeaderBit,
-  TRDEnableRootOutputBit
+  TRDVerboseErrorsBit,
+  TRDIgnore2StageTrigger,
+  TRDGenerateStats,
+  TRDOnlyCalibrationTriggerBit,
+  TRDSortDigits,
+  TRDLinkStats
+}; // this is currently 16 options, the array is 16, if you add here you need to change the 16;
+
+struct DataCountersPerTrigger {
+  std::array<uint16_t, constants::MAXHALFCHAMBER> mLinkWords{};
+  std::array<uint8_t, constants::MAXHALFCHAMBER> mLinkErrorFlag{};
+  ClassDefNV(DataCountersPerTrigger, 1);
 };
 
-class TRDDataCountersPerEvent
-{ //thisis on a per event basis
- public:
-  //TODO this should go into a dpl message for catching by qc ?? I think.
-  uint64_t mTimeTaken;                        // time take to process an event (summed trackletparsing and digitparsing) parts not accounted for.
-  uint64_t mTimeTakenForDigits;               // time take to process tracklet data blocks [us].
-  uint64_t mTimeTakenForTracklets;            // time take to process digit data blocks [us].
-  uint64_t mDigitWordsRead;                   // digit words read in
-  uint64_t mDigitWordsSkipped;                // digit words skipped for various reasons.
-  uint64_t mTrackletWordsRead;                // tracklet words read in
-  uint64_t mTrackletWordsSkipped;             // tracklet words skipped for various reasons.
-  std::array<uint8_t, 1080> mLinkErrorFlag{}; //status of the error flags for this event, 8bit values from cru halfchamber header.
-};
-
+//Data to be stored on a timeframe basis to then be sent as a message to be ultimately picked up by qc.
+//Some countes include a average over the numbers stored on a per event basis, e.g. digits per event.
 class TRDDataCountersPerTimeFrame
-{ //thisis on a per event basis
+{
  public:
-  std::array<uint32_t, 1080> mLinkNoData;                                   // Link had no data or was not present.
-  std::array<uint32_t, 1080> mLinkWords{};                                  //units of 256bits, read from the cru half chamber header
-  std::array<uint32_t, 1080> mLinkWordsRead{};                              // units of 32 bits the data words read before dumping or finishing
-  std::array<uint32_t, 1080> mLinkWordsDumped{};                            // units of 32 bits the data dumped due to some or other error
-  std::array<int64_t, o2::trd::constants::MAXMCMCOUNT> mLinkMCMsWithData{}; // and its corresponding volume of data.
-  std::array<uint32_t, constants::MAXMCMCOUNT> mMCMDigitCount{};
-  std::array<uint32_t, constants::MAXMCMCOUNT> mMCMTrackletCount{};
-  std::array<uint32_t, 30> mParsingErrors{};              // errors in parsing, indexed by enum above of ParsingErrors
-  std::array<uint32_t, 1080 * 30> mParsingErrorsByLink{}; // errors in parsing, indexed by enum above of ParsingErrors
-  uint64_t mTimeTaken;                                    // time taken to process the entire timeframe [ms].
-  uint64_t mTimeTakenForDigits;                           // time take to process tracklet data blocks [us].
-  uint64_t mTimeTakenForTracklets;                        // time take to process digit data blocks [us].
-  uint64_t mDigitsFound;                                  // digit found in the time frame.
-  uint64_t mTrackletsFound;                               // tracklets found in the time frame.
-  uint64_t mDigitWordsRead;                               // digit words read in.
-  uint64_t mDigitWordsSkipped;                            // digit words skipped for various reasons.
-  uint64_t mTrackletWordsRead;                            // tracklet words read in.
-  uint64_t mTrackletWordsSkipped;                         // tracklet words skipped for various reasons.
-  uint64_t mDataWordsRead;
-  uint64_t mDataWordsRejected;
-  //TRDDataCountersPerTimeFrame* operator=(TRDDataCountersPerTimeFrame *old){this=old;return *this;}
-};
-
-//TODO not sure this class is needed
-class TRDDataCountersRunning
-{                                                //those counters that keep counting
-  std::array<uint32_t, 1080> mLinkFreq{};        //units of 256bits "cru word"
-  std::array<bool, 1080> mLinkEmpty{};           // Link only has padding words only, probably not serious.
-  std::array<uint64_t, 65535> mDataFormatRead{}; // 7bits.7bits major.minor version read from HCHeader.
+  std::array<uint8_t, constants::MAXHALFCHAMBER> mLinkErrorFlag{};                                     // status of the error flags for this timeframe, 8bit values from cru halfchamber header.
+  std::array<uint16_t, constants::MAXHALFCHAMBER> mLinkNoData{};                                       // Link had no data or was not present.
+  std::array<uint16_t, constants::MAXHALFCHAMBER> mLinkWords{};                                        // units of 256bits, read from the cru half chamber header
+  std::array<uint16_t, constants::MAXHALFCHAMBER> mLinkWordsRead{};                                    // units of 32 bits the data words read before dumping or finishing
+  std::array<uint16_t, constants::MAXHALFCHAMBER> mLinkWordsRejected{};                                // units of 32 bits the data dumped due to some or other error
+  std::array<uint16_t, constants::MAXHALFCHAMBER> mParsingOK{};                                        // count how often given link could be parsed without any errors
+  std::array<uint16_t, TRDLastParsingError> mParsingErrors{};                                          // errors in parsing, indexed by enum above of ParsingErrors
+  std::vector<uint32_t> mParsingErrorsByLink{};                                                        // each entry is for a single parsing error on a given link (HCID * number of Errors + error index)
+  float mTimeTaken;                                                                                    // time taken to process all half-CRU data blocks combined [us].
+  float mTimeTakenForDigits;                                                                           // time take to process tracklet data blocks [us].
+  float mTimeTakenForTracklets;                                                                        // time take to process digit data blocks [us].
+  uint32_t mDigitsFound;                                                                               // digits found in the time frame.
+  uint32_t mTrackletsFound;                                                                            // tracklets found in the time frame.
+  uint16_t mNTriggersCalib;                                                                            // number of triggers with digit readout
+  uint16_t mNTriggersTotal;                                                                            // total number of triggers
+  std::array<int, 256> mDataFormatRead{};                                                              // We just keep the major version number
+  o2::dataformats::TFIDInfo mTFIDInfo;                                                                 // keep track of TF ID
+  void clear()
+  {
+    mLinkNoData.fill(0);
+    mLinkWords.fill(0);
+    mLinkWordsRead.fill(0);
+    mLinkWordsRejected.fill(0);
+    mParsingOK.fill(0);
+    mParsingErrors.fill(0);
+    mParsingErrorsByLink.clear();
+    mTimeTaken = 0;
+    mTimeTakenForDigits = 0;
+    mTimeTakenForTracklets = 0;
+    mDigitsFound = 0;
+    mTrackletsFound = 0;
+    mNTriggersCalib = 0;
+    mNTriggersTotal = 0;
+    mDataFormatRead.fill(0);
+  };
+  ClassDefNV(TRDDataCountersPerTimeFrame, 3); // primarily for serialisation so we can send this as a message in o2
 };
 
 } // namespace o2::trd

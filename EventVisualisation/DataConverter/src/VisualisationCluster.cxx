@@ -24,45 +24,18 @@ namespace o2
 namespace event_visualisation
 {
 
-VisualisationCluster::VisualisationCluster(float XYZ[], float time)
+VisualisationCluster::VisualisationCluster(const float XYZ[], float time, o2::dataformats::GlobalTrackID gid)
 {
   setCoordinates(XYZ);
   this->mTime = time;
+  this->mBGID = gid;
 }
 
-void VisualisationCluster::setCoordinates(float xyz[3])
+void VisualisationCluster::setCoordinates(const float xyz[3])
 {
   for (int i = 0; i < 3; i++) {
     mCoordinates[i] = xyz[i];
   }
-}
-
-VisualisationCluster::VisualisationCluster(rapidjson::Value& tree)
-{
-  rapidjson::Value& jsonX = tree["X"];
-  rapidjson::Value& jsonY = tree["Y"];
-  rapidjson::Value& jsonZ = tree["Z"];
-
-  this->mCoordinates[0] = jsonX.GetDouble();
-  this->mCoordinates[1] = jsonY.GetDouble();
-  this->mCoordinates[2] = jsonZ.GetDouble();
-
-  this->mSource = o2::dataformats::GlobalTrackID::TPC; // temporary
-}
-
-rapidjson::Value VisualisationCluster::jsonTree(rapidjson::MemoryPoolAllocator<>& allocator)
-{
-  rapidjson::Value tree(rapidjson::kObjectType);
-  rapidjson::Value jsonX(rapidjson::kNumberType);
-  rapidjson::Value jsonY(rapidjson::kNumberType);
-  rapidjson::Value jsonZ(rapidjson::kNumberType);
-  jsonX.SetDouble(mCoordinates[0]);
-  jsonY.SetDouble(mCoordinates[1]);
-  jsonZ.SetDouble(mCoordinates[2]);
-  tree.AddMember("X", jsonX, allocator);
-  tree.AddMember("Y", jsonY, allocator);
-  tree.AddMember("Z", jsonZ, allocator);
-  return tree;
 }
 
 } // namespace event_visualisation

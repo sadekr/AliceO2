@@ -9,6 +9,9 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
+#ifndef MC_KINEMATICS_READER_H
+#define MC_KINEMATICS_READER_H
+
 #include "SimulationDataFormat/DigitizationContext.h"
 #include "SimulationDataFormat/MCTrack.h"
 #include "SimulationDataFormat/MCCompLabel.h"
@@ -52,9 +55,17 @@ class MCKinematicsReader
     }
   }
 
+  /// constructing directly from a digitization context
+  MCKinematicsReader(o2::steer::DigitizationContext const* context)
+  {
+    initFromDigitContext(context);
+  }
+
   /// inits the reader from a digitization context
   /// returns true if successful
   bool initFromDigitContext(std::string_view filename);
+
+  bool initFromDigitContext(o2::steer::DigitizationContext const* digicontext);
 
   /// inits the reader from a simple kinematics file
   bool initFromKinematics(std::string_view filename);
@@ -79,7 +90,7 @@ class MCKinematicsReader
   /// API to ask releasing tracks (freeing memory) for source + event
   void releaseTracksForSourceAndEvent(int source, int event);
 
-  /// variant returning all tracks for source and event at once
+  /// variant returning all tracks for an event id (source = 0) at once
   std::vector<MCTrack> const& getTracks(int event) const;
 
   /// get all primaries for a certain event
@@ -117,6 +128,7 @@ class MCKinematicsReader
   void initIndexedTrackRefs(std::vector<o2::TrackReference>& refs, o2::dataformats::MCTruthContainer<o2::TrackReference>& indexedrefs) const;
 
   DigitizationContext const* mDigitizationContext = nullptr;
+  bool mOwningDigiContext = false;
 
   // chains for each source
   std::vector<TChain*> mInputChains;
@@ -207,3 +219,5 @@ inline size_t MCKinematicsReader::getNEvents(int source) const
 
 } // namespace steer
 } // namespace o2
+
+#endif

@@ -22,7 +22,12 @@
 #include <chrono>
 #include <TRandom.h>
 #include <TF1.h>
-#include "FairLogger.h" // for LOG
+#include <fairlogger/Logger.h> // for LOG
+#include "CommonDataFormat/InteractionRecord.h"
+#include "CommonUtils/TreeStreamRedirector.h"
+#include "SimConfig/DigiParams.h"
+#include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "DetectorsRaw/HBFUtils.h"
 
 ClassImp(o2::emcal::Digitizer);
 
@@ -35,38 +40,52 @@ using namespace o2::emcal;
 void Digitizer::init()
 {
   mSimParam = &(o2::emcal::SimParam::Instance());
-  mLiveTime = mSimParam->getLiveTime();
-  mBusyTime = mSimParam->getBusyTime();
-  mRandomGenerator = new TRandom3(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  auto randomSeed = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  if (o2::conf::DigiParams::Instance().seed != 0) {
+    randomSeed = o2::conf::DigiParams::Instance().seed;
+  }
+  mRandomGenerator = new TRandom3(randomSeed);
 
   float tau = mSimParam->getTimeResponseTau();
   float N = mSimParam->getTimeResponsePower();
-  float delay = std::fmod(mSimParam->getSignalDelay() / constants::EMCAL_TIMESAMPLE, 1);
-  mDelay = ((int)(std::floor(mSimParam->getSignalDelay() / constants::EMCAL_TIMESAMPLE)));
 
   mSmearEnergy = mSimParam->doSmearEnergy();
   mSimulateTimeResponse = mSimParam->doSimulateTimeResponse();
-  mRemoveDigitsBelowThreshold = mSimParam->doRemoveDigitsBelowThreshold();
-  mSimulateNoiseDigits = mSimParam->doSimulateNoiseDigits();
 
-  mTimeBinOffset.clear();
-  mAmplitudeInTimeBins.clear();
+  mDigits.init();
+  mDigits.reserve();
+  /*
+  if ((mDelay - mTimeWindowStart) != 0)
+  {
+    mDigits.setBufferSize(mDigits.getBufferSize() + (mDelay - mTimeWindowStart));
+    mDigits.reserve();
+  }
+  */
 
-  TF1 RawResponse("RawResponse", rawResponseFunction, 0, 256, 5);
-  RawResponse.SetParameters(1., 0., tau, N, 0.);
+  if (mSimulateTimeResponse) {
+    // for each phase create a template distribution
+    TF1 RawResponse("RawResponse", rawResponseFunction, 0, 256, 5);
+    RawResponse.SetParameters(1., 0., tau, N, 0.);
 
-  for (int i = 0; i < 4; i++) {
-    int offset = ((int)(std::floor(tau - delay - 0.25 * i)));
-    mTimeBinOffset.push_back(offset);
-
-    std::vector<double> sf;
-    RawResponse.SetParameter(1, 0.25 * i + delay);
-
-    for (int j = 0; j < constants::EMCAL_MAXTIMEBINS; j++) {
-      sf.push_back(RawResponse.Eval(j - offset));
+    for (int phase = 0; phase < 4; phase++) {
+      // parameter 1: Handling phase + delay
+      // phase: 25 ns * phase index (-4)
+      // delay: Average signal delay
+      for (int itofbin = 0; itofbin < EMC_TOF_BINS; itofbin++) {
+        double tofbincenter = itofbin * EMC_TOF_BINWITH + 0.5 * EMC_TOF_BINWITH;
+        RawResponse.SetParameter(1, 0.25 * phase + (tofbincenter + mSimParam->getSignalDelay()) / constants::EMCAL_TIMESAMPLE);
+        for (int sample = 0; sample < constants::EMCAL_MAXTIMEBINS; sample++) {
+          mAmplitudeInTimeBins[phase][itofbin][sample] = RawResponse.Eval(sample);
+        }
+      }
     }
+  } else {
+  }
 
-    mAmplitudeInTimeBins.push_back(sf);
+  mIRFirstSampledTF = o2::raw::HBFUtils::Instance().getFirstSampledTFIR();
+
+  if (mEnableDebugStreaming) {
+    mDebugStream = std::make_unique<o2::utils::TreeStreamRedirector>("emcaldigitsDebug.root", "RECREATE");
   }
 }
 
@@ -79,6 +98,8 @@ double Digitizer::rawResponseFunction(double* x, double* par)
   double ped = par[4];
   double xx = (x[0] - par[1] + tau) / tau;
 
+  // par[0] amp, par[1] peak time
+
   if (xx <= 0) {
     signal = ped;
   } else {
@@ -89,20 +110,9 @@ double Digitizer::rawResponseFunction(double* x, double* par)
 }
 
 //_______________________________________________________________________
-void Digitizer::finish() {}
-
-//_______________________________________________________________________
-void Digitizer::initCycle()
-{
-  mEmpty = false;
-}
-
-//_______________________________________________________________________
 void Digitizer::clear()
 {
-  mTriggerTime = -1e20;
   mDigits.clear();
-  mEmpty = true;
 }
 
 //_______________________________________________________________________
@@ -111,21 +121,36 @@ void Digitizer::process(const std::vector<LabeledDigit>& labeledSDigits)
 
   for (auto labeleddigit : labeledSDigits) {
 
+    int tower = labeleddigit.getTower();
+
     sampleSDigit(labeleddigit.getDigit());
 
-    for (auto digit : mTempDigitVector) {
+    if (mTempDigitVector.size() == 0) {
+      continue;
+    }
+
+    std::vector<LabeledDigit> listofLabeledDigit;
+
+    for (auto& digit : mTempDigitVector) {
       Int_t id = digit.getTower();
 
-      MCLabel label(labeleddigit.getLabels()[0]);
-      if (digit.getAmplitude() == 0) {
-        label.setAmplitudeFraction(0);
+      auto labels = labeleddigit.getLabels();
+      LabeledDigit d(digit, labels[0]);
+      int iLabel(0);
+      for (auto& label : labels) {
+        if (digit.getAmplitude() < __DBL_EPSILON__) {
+          label.setAmplitudeFraction(0);
+        }
+        if (iLabel == 0) {
+          continue;
+        }
+        d.addLabel(label);
+        iLabel++;
       }
-      LabeledDigit d(digit, label);
-      mDigits[id].push_back(d);
+      listofLabeledDigit.push_back(d);
     }
+    mDigits.addDigits(tower, listofLabeledDigit);
   }
-
-  mEmpty = false;
 }
 
 //_______________________________________________________________________
@@ -139,20 +164,69 @@ void Digitizer::sampleSDigit(const Digit& sDigit)
     energy = smearEnergy(energy);
   }
 
-  // Convert the amplitude from energy GeV to ADC
-  energy = energy / constants::EMCAL_ADCENERGY;
+  if (energy < __DBL_EPSILON__) {
+    return;
+  }
 
-  if (mSimulateTimeResponse && (energy != 0)) {
-    for (int j = 0; j < mAmplitudeInTimeBins.at(mPhase).size(); j++) {
-      double val = energy * (mAmplitudeInTimeBins.at(mPhase).at(j));
+  // check if this hit because it comes from an event before readout starts and it does not effect this RO
+  LOG(debug) << "mIsBeforeFirstRO " << mIsBeforeFirstRO << "     sDigit.getTimeStamp() " << sDigit.getTimeStamp() << "    mSimParam->getSignalDelay() " << mSimParam->getSignalDelay() << "   mPhase " << mPhase << "   total: " << sDigit.getTimeStamp() + mSimParam->getSignalDelay() + mPhase * 25 << "   EMC_TOF_MAX " << EMC_TOF_MAX << "  mTimeBCns " << mTimeBCns;
+  if (mIsBeforeFirstRO && sDigit.getTimeStamp() + mTimeBCns < 0) {
+    LOG(debug) << "disregard this hit because it comes from an event before readout starts and it does not effect this RO";
+    return;
+  }
 
-      // @TODO check if the time is set correctly
-      Digit digit(tower, val, (mEventTimeOffset + j - mTimeBinOffset.at(mPhase) + mDelay) * constants::EMCAL_TIMESAMPLE);
+  Double_t energies[15];
+  if (mSimulateTimeResponse) {
+    if (sDigit.getTimeStamp() + mSimParam->getSignalDelay() + mPhase * 25 > EMC_TOF_MAX) {
+      // Digit time larger than sampling window, will not be sampled
+      // For time response simulation take also signal delay and phase into account
+      return;
+    }
+    int tofbin = static_cast<int>(sDigit.getTimeStamp() / EMC_TOF_BINWITH);
+    if (tofbin >= EMC_TOF_BINS) {
+      tofbin = EMC_TOF_BINS - 1;
+    }
+    for (int sample = 0; sample < mAmplitudeInTimeBins[mPhase][tofbin].size(); sample++) {
+
+      double val = energy * (mAmplitudeInTimeBins[mPhase][tofbin][sample]);
+      energies[sample] = val;
+      double digitTime = mEventTimeOffset * constants::EMCAL_TIMESAMPLE;
+      Digit digit(tower, val, digitTime);
       mTempDigitVector.push_back(digit);
     }
   } else {
-    Digit digit(tower, energy, mEventTime + mDelay * constants::EMCAL_TIMESAMPLE);
+    if (sDigit.getTimeStamp() > EMC_TOF_MAX) {
+      // Digit time larger than sampling window, will not be sampled
+      // In non-sampled mode only apply the max. time window
+      return;
+    }
+    Digit digit(tower, energy, smearTime(sDigit.getTimeStamp(), energy));
     mTempDigitVector.push_back(digit);
+  }
+
+  if (mEnableDebugStreaming) {
+    double timeStamp = sDigit.getTimeStamp();
+    (*mDebugStream).GetFile()->cd();
+    (*mDebugStream) << "DigitsTimeSamples"
+                    << "Tower=" << tower
+                    << "Time=" << timeStamp
+                    << "DigitEnergy=" << energy
+                    << "Sample0=" << energies[0]
+                    << "Sample1=" << energies[1]
+                    << "Sample2=" << energies[2]
+                    << "Sample3=" << energies[3]
+                    << "Sample4=" << energies[4]
+                    << "Sample5=" << energies[5]
+                    << "Sample6=" << energies[6]
+                    << "Sample7=" << energies[7]
+                    << "Sample8=" << energies[8]
+                    << "Sample9=" << energies[9]
+                    << "Sample10=" << energies[10]
+                    << "Sample11=" << energies[11]
+                    << "Sample12=" << energies[12]
+                    << "Sample13=" << energies[13]
+                    << "Sample14=" << energies[14]
+                    << "\n";
   }
 }
 
@@ -164,86 +238,35 @@ double Digitizer::smearEnergy(double energy)
   return energy;
 }
 
-//_______________________________________________________________________
-void Digitizer::setEventTime(double t)
+double Digitizer::smearTime(double time, double energy)
 {
-  // assign event time, it should be in a strictly increasing order
-  // convert to ns
-  t *= mCoeffToNanoSecond;
+  return mRandomGenerator->Gaus(time + mSimParam->getSignalDelay(), mSimParam->getTimeResolution(energy));
+}
 
-  if (t < mEventTime) {
-    LOG(FATAL) << "New event time (" << t << ") is < previous event time (" << mEventTime << ")";
-  }
+//_______________________________________________________________________
+void Digitizer::setEventTime(o2::InteractionTimeRecord record, bool trigger)
+{
 
-  if (t - mTriggerTime >= mLiveTime + mBusyTime) {
-    mTriggerTime = t;
-  }
+  mDigits.forwardMarker(record, trigger);
 
-  mEventTime = t - mTriggerTime;
+  mPhase = mSimParam->doSimulateL1Phase() ? mDigits.getPhase() : 0;
 
-  mPhase = ((int)((std::fmod(mEventTime, 100) + 12.5) / 25));
-  mEventTimeOffset = ((int)((mEventTime - std::fmod(mEventTime, 100) + 0.1) / 100));
+  mEventTimeOffset = 0;
+
   if (mPhase == 4) {
     mPhase = 0;
     mEventTimeOffset++;
   }
-}
 
-//_______________________________________________________________________
-void Digitizer::addNoiseDigits(LabeledDigit& d1)
-{
-  double amplitude = d1.getAmplitude();
-  double sigma = mSimParam->getPinNoise();
-  if (amplitude > constants::EMCAL_HGLGTRANSITION * constants::EMCAL_ADCENERGY) {
-    sigma = mSimParam->getPinNoiseLG();
+  // get time difference between current bc and start of RO in ns
+  auto nbc = record.differenceInBC(mIRFirstSampledTF);
+  mTimeBCns = record.getTimeOffsetWrtBC();
+  mTimeBCns += nbc * o2::constants::lhc::LHCBunchSpacingNS;
+
+  if (nbc < 0) {
+    // this event is before the first RO
+    mIsBeforeFirstRO = true;
+  } else {
+    mIsBeforeFirstRO = false;
   }
-
-  double noise = std::abs(mRandomGenerator->Gaus(0, sigma));
-  MCLabel label(true, 1.0);
-  LabeledDigit d(d1.getTower(), noise, d1.getTimeStamp(), label);
-  d1 += d;
-}
-
-//_______________________________________________________________________
-void Digitizer::fillOutputContainer(std::vector<Digit>& digits, o2::dataformats::MCTruthContainer<o2::emcal::MCLabel>& labelsout)
-{
-  std::list<LabeledDigit> l;
-
-  for (auto [tower, digitsList] : mDigits) {
-    digitsList.sort();
-
-    for (auto ld : digitsList) {
-
-      if (mSimulateNoiseDigits) {
-        addNoiseDigits(ld);
-      }
-
-      if (mRemoveDigitsBelowThreshold && (ld.getAmplitude() < mSimParam->getDigitThreshold() * (constants::EMCAL_ADCENERGY))) {
-        continue;
-      }
-      if (ld.getAmplitude() < 0) {
-        continue;
-      }
-      if (ld.getTimeStamp() >= mSimParam->getLiveTime()) {
-        continue;
-      }
-
-      l.push_back(ld);
-    }
-  }
-  l.sort();
-
-  for (auto d : l) {
-    Digit digit = d.getDigit();
-    std::vector<MCLabel> labels = d.getLabels();
-    digits.push_back(digit);
-
-    Int_t LabelIndex = labelsout.getIndexedSize();
-    for (auto label : labels) {
-      labelsout.addElementRandomAccess(LabelIndex, label);
-    }
-  }
-
-  mDigits.clear();
-  mEmpty = true;
 }

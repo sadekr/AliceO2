@@ -8,12 +8,17 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
+
+#ifndef ALICEO2_EMCAL_CALIBDB
+#define ALICEO2_EMCAL_CALIBDB
+
 #include <exception>
 #include <map>
 #include <string>
 #include "Rtypes.h"
 #include "RStringView.h"
 #include "CCDB/CcdbApi.h"
+#include "CCDB/BasicCCDBManager.h"
 
 namespace o2
 {
@@ -27,7 +32,10 @@ class TempCalibParamSM;
 class TimeCalibrationParams;
 class TimeCalibParamL1Phase;
 class GainCalibrationFactors;
-class TriggerDCS;
+class EMCALChannelScaleFactors;
+class FeeDCS;
+class ElmbData;
+class Pedestal;
 
 /// \class CalibDB
 /// \brief Interface to calibration data from CCDB for EMCAL
@@ -42,6 +50,7 @@ class TriggerDCS;
 /// - Time calibration
 /// - Gain calibration
 /// - Temperature calibration
+/// - Pedestals
 /// Users only need to specify the CCDB server, the timestamp and
 /// (optionally) additional meta data. Handling of the CCDB path
 /// and type conversions is done internally - users deal directly
@@ -57,6 +66,9 @@ class TriggerDCS;
 /// Users must handle the exceptions.
 class CalibDB
 {
+
+  using CcdbManager = o2::ccdb::BasicCCDBManager;
+
  public:
   /// \class ObjectNotFoundException
   /// \brief Handling errors due to objects not found in the CCDB
@@ -256,19 +268,54 @@ class CalibDB
   /// \throw TypeMismatchException if object is present but type is different (CCDB corrupted)
   GainCalibrationFactors* readGainCalibFactors(ULong_t timestamp, const std::map<std::string, std::string>& metadata);
 
-  /// \brief Store Trigger DCS data in the CCDB
-  /// \param dcs trigger DCS data to be stored
+  /// \brief Find scale factors used for bad channel calibration in the CCDB for given timestamp
+  /// \param timestamp Timestamp used in query (there is only one entry in the CCDB)
+  /// \param metadata Additional metadata to be used in the query
+  /// \throw ObjectNotFoundException if object is not found for the given timestamp
+  /// \throw TypeMismatchException if object is present but type is different (CCDB corrupted)
+  EMCALChannelScaleFactors* readChannelScaleFactors(ULong_t timestamp, const std::map<std::string, std::string>& metadata);
+
+  /// \brief Store FEE DCS data in the CCDB
+  /// \param dcs FEE DCS data to be stored
   /// \param metadata Additional metadata that can be used in the query
   /// \param timestart Start of the time range of the validity of the object
   /// \param timeend End of the time range of the validity of the object
-  void storeTriggerDCSData(TriggerDCS* dcs, const std::map<std::string, std::string>& metadata, ULong_t timestart, ULong_t timeend);
+  void storeFeeDCSData(FeeDCS* dcs, const std::map<std::string, std::string>& metadata, ULong_t timestart, ULong_t timeend);
 
-  /// \brief Find trigger DCS data in the CCDB for given timestamp
+  /// \brief Find FEE DCS data in the CCDB for given timestamp
   /// \param timestamp Timestamp used in query
   /// \param metadata Additional metadata to be used in the query
   /// \throw ObjectNotFoundException if object is not found for the given timestamp
   /// \throw TypeMismatchException if object is present but type is different (CCDB corrupted)
-  TriggerDCS* readTriggerDCSData(ULong_t timestamp, const std::map<std::string, std::string>& metadata);
+  FeeDCS* readFeeDCSData(ULong_t timestamp, const std::map<std::string, std::string>& metadata);
+
+  /// \brief Store Temperature Sensor data in the CCDB
+  /// \param dcs Temperature Sensor data to be stored
+  /// \param metadata Additional metadata that can be used in the query
+  /// \param timestart Start of the time range of the validity of the object
+  /// \param timeend End of the time range of the validity of the object
+  void storeTemperatureSensorData(ElmbData* dcs, const std::map<std::string, std::string>& metadata, ULong_t timestart, ULong_t timeend);
+
+  /// \brief Find Temperature Sensor data in the CCDB for given timestamp
+  /// \param timestamp Timestamp used in query
+  /// \param metadata Additional metadata to be used in the query
+  /// \throw ObjectNotFoundException if object is not found for the given timestamp
+  /// \throw TypeMismatchException if object is present but type is different (CCDB corrupted)
+  ElmbData* readTemperatureSensorData(ULong_t timestamp, const std::map<std::string, std::string>& metadata);
+
+  /// \brief Store pedestal data in the CCDB
+  /// \param pedestals Pedestal data to be stored
+  /// \param metadata Additional metadata that can be used in the query
+  /// \param timestart Start of the time range of the validity of the object
+  /// \param timeend End of the time range of the validity of the object
+  void storePedestalData(Pedestal* pedestals, const std::map<std::string, std::string>& metadata, ULong_t timestart, ULong_t timeend);
+
+  /// \brief Find pedestal data in the CCDB for given timestamp
+  /// \param timestamp Timestamp used in query
+  /// \param metadata Additional metadata to be used in the query
+  /// \throw ObjectNotFoundException if object is not found for the given timestamp
+  /// \throw TypeMismatchException if object is present but type is different (CCDB corrupted)
+  Pedestal* readPedestalData(ULong_t timestamp, const std::map<std::string, std::string>& metadata);
 
   /// \brief Set new CCDB server URL
   /// \param server Name of the CCDB server to be used in queries
@@ -282,16 +329,59 @@ class CalibDB
     mInit = false;
   }
 
+  /// \brief Get CDB path for the bad channel map
+  /// \return Path of the bad channel map in the CCDB
+  static const char* getCDBPathBadChannelMap() { return "EMC/Calib/BadChannelMap"; }
+
+  /// \brief Get CDB path for the time calibration
+  /// \return Path of the time calibration in the CCDB
+  static const char* getCDBPathTimeCalibrationParams() { return "EMC/Calib/TimeCalibParams"; }
+
+  /// \brief Get CDB path for the L1 Phase
+  /// \return Path of the L1 phase in the CCDB
+  static const char* getCDBPathL1Phase() { return "EMC/Calib/TimeCalibParamsL1Phase"; }
+
+  /// \brief Get CDB path for the temperature calibration
+  /// \return Path of the temperature calibration in the CCDB
+  static const char* getCDBPathTemperatureCalibrationParams() { return "EMC/Calib/TempCalibParams"; }
+
+  /// \brief Get CDB path for the SM-dependent temperature calibration
+  /// \return Path of the SM-dependent temperature calibration in the CCDB
+  static const char* getCDBPathTemperatureCalibrationParamsSM() { return "EMC/Calib/TempCalibParamsSM"; }
+
+  /// \brief Get CDB path for the gain calibration
+  /// \return Path of the gain calibration in the CCDB
+  static const char* getCDBPathGainCalibrationParams() { return "EMC/Calib/GainCalibFactors"; }
+
+  /// \brief Get CDB path for the FEE DCS settings
+  /// \return Path of the FEE DCS settings in the CCDB
+  static const char* getCDBPathFeeDCS() { return "EMC/Calib/FeeDCS"; }
+
+  /// \brief Get CDB path for the Temperature Sensor data
+  /// \return Path of the Temperature Sensor data in the CCDB
+  static const char* getCDBPathTemperatureSensor() { return "EMC/Calib/Temperature"; }
+
+  /// \brief Get CCDB path for the scale factors used in the bad channel calibration
+  /// \return Path of the scale factors used in the bad channel calibration in the CCDB
+  static const char* getCDBPathChannelScaleFactors() { return "EMC/Config/ChannelScaleFactors"; }
+
+  /// \brief Get CCDB path for the pedestal data
+  /// \return Path of the pedestal data
+  static const char* getCDBPathChannelPedestals() { return "EMC/Calib/Pedestal"; }
+
  private:
   /// \brief Initialize CCDB server (when new object is created or the server URL changes)
-  void init();
+  void
+    init();
 
   ccdb::CcdbApi mCCDBManager;                       ///< Handler for queries of the CCDB content
   std::string mCCDBServer = "emcccdb-test.cern.ch"; ///< Name of the CCDB server
   Bool_t mInit = false;                             ///< Init status (needed for lazy evaluation of the CcdbApi init)
 
-  ClassDefNV(CalibDB, 1);
+  ClassDefNV(CalibDB, 2);
 };
 } // namespace emcal
 
 } // namespace o2
+
+#endif

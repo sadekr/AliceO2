@@ -26,8 +26,8 @@ Line::Line(std::array<float, 3> firstPoint, std::array<float, 3> secondPoint)
     cosinesDirector[index] = secondPoint[index] - firstPoint[index];
   }
 
-  float inverseNorm{1.f / std::sqrt(cosinesDirector[0] * cosinesDirector[0] + cosinesDirector[1] * cosinesDirector[1] +
-                                    cosinesDirector[2] * cosinesDirector[2])};
+  float inverseNorm{1.f / o2::gpu::CAMath::Sqrt(cosinesDirector[0] * cosinesDirector[0] + cosinesDirector[1] * cosinesDirector[1] +
+                                                cosinesDirector[2] * cosinesDirector[2])};
   for (int index{0}; index < 3; ++index) {
     cosinesDirector[index] *= inverseNorm;
   }
@@ -73,9 +73,9 @@ std::array<float, 6> Line::getDCAComponents(const Line& line, const std::array<f
   components[0] = line.originPoint[0] - point[0] + line.cosinesDirector[0] * cdelta;
   components[3] = line.originPoint[1] - point[1] + line.cosinesDirector[1] * cdelta;
   components[5] = line.originPoint[2] - point[2] + line.cosinesDirector[2] * cdelta;
-  components[1] = std::sqrt(components[0] * components[0] + components[3] * components[3]);
-  components[2] = std::sqrt(components[0] * components[0] + components[5] * components[5]);
-  components[4] = std::sqrt(components[3] * components[3] + components[5] * components[5]);
+  components[1] = o2::gpu::CAMath::Sqrt(components[0] * components[0] + components[3] * components[3]);
+  components[2] = o2::gpu::CAMath::Sqrt(components[0] * components[0] + components[5] * components[5]);
+  components[4] = o2::gpu::CAMath::Sqrt(components[3] * components[3] + components[5] * components[5]);
 
   return components;
 }
@@ -84,8 +84,13 @@ ClusterLines::ClusterLines(const int firstLabel, const Line& firstLine, const in
                            const bool weight)
 
 {
+  updateROFPoll(firstLine);
+  updateROFPoll(secondLine);
+
   mLabels.push_back(firstLabel);
-  mLabels.push_back(secondLabel);
+  if (secondLabel > 0) {
+    mLabels.push_back(secondLabel); // don't add info in case of beamline used
+  }
 
   std::array<float, 3> covarianceFirst{1., 1., 1.};
   std::array<float, 3> covarianceSecond{1., 1., 1.};
@@ -179,13 +184,6 @@ ClusterLines::ClusterLines(const int firstLabel, const Line& firstLine, const in
   // AvgDistance2
   mAvgDistance2 = std::move(Line::getDistanceFromPoint(firstLine, mVertex) * Line::getDistanceFromPoint(firstLine, mVertex));
   mAvgDistance2 += (Line::getDistanceFromPoint(secondLine, mVertex) * Line::getDistanceFromPoint(secondLine, mVertex) - mAvgDistance2) / mLabels.size();
-
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-  mNVotes = 1;
-  mPoll = firstLine.evtId;
-  mMap.emplace(firstLine.evtId, 1);
-  vote(secondLine);
-#endif
 }
 
 ClusterLines::ClusterLines(const Line& firstLine, const Line& secondLine)
@@ -193,7 +191,8 @@ ClusterLines::ClusterLines(const Line& firstLine, const Line& secondLine)
 
   std::array<float, 3> covarianceFirst{1., 1., 1.};
   std::array<float, 3> covarianceSecond{1., 1., 1.};
-
+  updateROFPoll(firstLine);
+  updateROFPoll(secondLine);
   for (int i{0}; i < 6; ++i) {
     mWeightMatrix[i] = firstLine.weightMatrix[i] + secondLine.weightMatrix[i];
   }
@@ -274,20 +273,12 @@ ClusterLines::ClusterLines(const Line& firstLine, const Line& secondLine)
     determinantSecond;
 
   computeClusterCentroid();
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-  mNVotes = 1;
-  mPoll = firstLine.evtId;
-  mMap.emplace(firstLine.evtId, 1);
-  vote(secondLine);
-#endif
 }
 
 void ClusterLines::add(const int& lineLabel, const Line& line, const bool& weight)
 {
   mLabels.push_back(lineLabel);
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-  vote(line);
-#endif
+  updateROFPoll(line);
   std::array<float, 3> covariance{1., 1., 1.};
 
   for (int i{0}; i < 6; ++i) {
@@ -295,9 +286,9 @@ void ClusterLines::add(const int& lineLabel, const Line& line, const bool& weigh
   }
   // if(weight) line->GetSigma2P0(covariance);
 
-  float determinant{line.cosinesDirector[2] * line.cosinesDirector[2] * covariance[0] * covariance[1] +
-                    line.cosinesDirector[1] * line.cosinesDirector[1] * covariance[0] * covariance[2] +
-                    line.cosinesDirector[0] * line.cosinesDirector[0] * covariance[1] * covariance[2]};
+  double determinant{line.cosinesDirector[2] * line.cosinesDirector[2] * covariance[0] * covariance[1] +
+                     line.cosinesDirector[1] * line.cosinesDirector[1] * covariance[0] * covariance[2] +
+                     line.cosinesDirector[0] * line.cosinesDirector[0] * covariance[1] * covariance[2]};
 
   mAMatrix[0] += (line.cosinesDirector[2] * line.cosinesDirector[2] * covariance[1] +
                   line.cosinesDirector[1] * line.cosinesDirector[1] * covariance[2]) /
@@ -335,9 +326,9 @@ void ClusterLines::add(const int& lineLabel, const Line& line, const bool& weigh
 void ClusterLines::computeClusterCentroid()
 {
 
-  float determinant{mAMatrix[0] * (mAMatrix[3] * mAMatrix[5] - mAMatrix[4] * mAMatrix[4]) -
-                    mAMatrix[1] * (mAMatrix[1] * mAMatrix[5] - mAMatrix[4] * mAMatrix[2]) +
-                    mAMatrix[2] * (mAMatrix[1] * mAMatrix[4] - mAMatrix[2] * mAMatrix[3])};
+  double determinant{mAMatrix[0] * (mAMatrix[3] * mAMatrix[5] - mAMatrix[4] * mAMatrix[4]) -
+                     mAMatrix[1] * (mAMatrix[1] * mAMatrix[5] - mAMatrix[4] * mAMatrix[2]) +
+                     mAMatrix[2] * (mAMatrix[1] * mAMatrix[4] - mAMatrix[2] * mAMatrix[3])};
 
   if (determinant == 0) {
     return;
@@ -357,28 +348,48 @@ void ClusterLines::computeClusterCentroid()
                determinant;
 }
 
-#ifdef _ALLOW_DEBUG_TREES_ITS_
-void ClusterLines::vote(const Line& line)
+bool ClusterLines::operator==(const ClusterLines& rhs) const
 {
-  if (mNVotes == 0) {
-    mPoll = line.evtId;
-    ++mNVotes;
+  bool retval{true};
+  for (auto i{0}; i < 6; ++i) {
+    retval &= this->mRMS2[i] == rhs.mRMS2[i];
+  }
+  for (auto i{0}; i < 3; ++i) {
+    retval &= this->mVertex[i] == rhs.mVertex[i];
+  }
+  if (this->mLabels.size() != rhs.mLabels.size()) {
+    retval = false;
   } else {
-    if (line.evtId == mPoll) {
-      ++mNVotes;
-    } else {
-      ++mSwitches;
-      --mNVotes;
+    for (size_t i{0}; i < this->mLabels.size(); ++i) {
+      retval &= this->mLabels[i] == rhs.mLabels[i];
     }
   }
-  auto it = mMap.find(line.evtId);
-  if (it == mMap.end()) {
-    mMap.emplace(line.evtId, 1);
+  return retval && this->mAvgDistance2 == rhs.mAvgDistance2;
+}
+
+GPUhdi() void ClusterLines::updateROFPoll(const Line& line)
+{
+  // option 1: Boyer-Moore voting for rof label
+  // if (mROFWeight == 0) {
+  //   mROF = line.getMinROF();
+  //   mROFWeight = 1;
+  // } else {
+  //   if (mROF == line.getMinROF()) {
+  //     mROFWeight++;
+  //   } else {
+  //     mROFWeight--;
+  //   }
+  // }
+
+  // option 2
+  if (mROF == -1) {
+    mROF = line.getMinROF();
   } else {
-    it->second += 1;
+    if (line.getMinROF() < mROF) {
+      mROF = line.getMinROF();
+    }
   }
 }
-#endif
 
 } // namespace its
 } // namespace o2

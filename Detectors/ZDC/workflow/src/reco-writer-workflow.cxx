@@ -11,17 +11,20 @@
 
 #include "ZDCWorkflow/ZDCRecoWriterDPLSpec.h"
 #include "Framework/ConfigParamSpec.h"
+#include "Framework/CompletionPolicyHelpers.h"
 
 using namespace o2::framework;
 
 void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 {
-  workflowOptions.push_back(
-    ConfigParamSpec{
-      "disable-mc",
-      o2::framework::VariantType::Bool,
-      false,
-      {"disable MC propagation even if available"}});
+  workflowOptions.push_back(ConfigParamSpec{"disable-mc", o2::framework::VariantType::Bool, false, {"disable MC propagation even if available"}});
+  workflowOptions.push_back(ConfigParamSpec{"output", o2::framework::VariantType::String, "zdcreco.root", {"output file"}});
+}
+
+void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+{
+  // ordered policies for the writers
+  policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*(?:ZDC|zdc).*[W,w]riter.*"));
 }
 
 #include "Framework/runDataProcessing.h"
@@ -31,8 +34,9 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
 {
   auto useMC = !configcontext.options().get<bool>("disable-mc");
   if (useMC) {
-    LOG(WARNING) << "ZDC reconstruction does not support MC labels at the moment";
+    LOG(warning) << "ZDC reconstruction does not support MC labels at the moment";
   }
-  WorkflowSpec specs{o2::zdc::getZDCRecoWriterDPLSpec()};
+  auto output = configcontext.options().get<std::string>("output");
+  WorkflowSpec specs{o2::zdc::getZDCRecoWriterDPLSpec(output)};
   return std::move(specs);
 }

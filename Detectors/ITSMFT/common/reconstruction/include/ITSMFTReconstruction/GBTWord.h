@@ -91,7 +91,7 @@ struct GBTWord {
       uint64_t triggerType : 12; /// 0:11   12 lowest bits of trigger type received from CTP
       uint64_t internal : 1;     /// 12     Used in Continuous Mode for internally generated trigger
       uint64_t noData : 1;       /// 13     No data expected (too close to previous trigger or error)
-      uint64_t na0tr : 1;        /// 14     reserved
+      uint64_t continuation : 1; /// 14     following data is continuation of the trigger from the previous CRU page
       uint64_t na1tr : 1;        /// 15     reserved
       uint64_t bc : 12;          /// 16:27  HB or internal trigger BC count or trigger BC from CTP
       uint64_t na2tr : 4;        /// 28:31  reserved
@@ -165,7 +165,7 @@ struct GBTWord {
 
   uint8_t getHeader() const { return id; }
 
-  void printX(bool padded = true) const;
+  void printX(bool padded = true, std::string com = "") const;
   void printB(bool padded = true) const;
 
   ClassDefNV(GBTWord, 1);
@@ -243,7 +243,7 @@ struct GBTDataTrailer : public GBTWord {
     id = GBTFlagDataTrailer;
   }
 
-  uint8_t getPacketState() const { return data8[8]; }
+  uint8_t getPacketState() const { return data8[8] & (MaxStateCombinations - 1); }
 
   void setByte(uint8_t v, int which) = delete;
 

@@ -28,11 +28,12 @@ namespace fdd
 class EntropyDecoderSpec : public o2::framework::Task
 {
  public:
-  EntropyDecoderSpec();
+  EntropyDecoderSpec(int verbosity);
   ~EntropyDecoderSpec() override = default;
   void run(o2::framework::ProcessingContext& pc) final;
   void init(o2::framework::InitContext& ic) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   o2::fdd::CTFCoder mCTFCoder;
@@ -40,7 +41,7 @@ class EntropyDecoderSpec : public o2::framework::Task
 };
 
 /// create a processor spec
-framework::DataProcessorSpec getEntropyDecoderSpec();
+framework::DataProcessorSpec getEntropyDecoderSpec(int verbosity, unsigned int sspec);
 
 } // namespace fdd
 } // namespace o2

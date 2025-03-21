@@ -13,11 +13,15 @@ o2_add_library(TPCSpaceCharge
                TARGETVARNAME targetName
                SOURCES src/SpaceCharge.cxx
                        src/PoissonSolver.cxx
-                       src/SpaceChargeParameter.cxx
                        src/TriCubic.cxx
+                       src/DataContainer3D.cxx
                PUBLIC_LINK_LIBRARIES O2::TPCBase
+                                     O2::Field
                                      Vc::Vc
-                                     ROOT::Core)
+                                     ROOT::Core
+                                     ROOT::ROOTDataFrame
+                                     O2::DataFormatsParameters)
+
 
 o2_target_root_dictionary(TPCSpaceCharge
                           HEADERS include/TPCSpaceCharge/PoissonSolver.h
@@ -60,7 +64,15 @@ o2_add_test(PoissonSolver
             SOURCES test/testO2TPCPoissonSolver.cxx
             ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
             LABELS tpc
-            CONFIGURATIONS RelWithDebInfo Release MinRelSize)
+            CONFIGURATIONS RelWithDebInfo Release MinSizeRel)
+
+o2_add_test(TriCubic
+            COMPONENT_NAME spacecharge
+            PUBLIC_LINK_LIBRARIES O2::TPCSpaceCharge
+            SOURCES test/testO2TPCTricubic.cxx
+            ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
+            LABELS tpc
+            CONFIGURATIONS RelWithDebInfo Release MinSizeRel)
 
 if (OpenMP_CXX_FOUND)
     target_compile_definitions(${targetName} PRIVATE WITH_OPENMP)

@@ -13,57 +13,14 @@
 /// \brief Defintions for CTFCoderBase class (support of external dictionaries)
 /// \author ruben.shahoyan@cern.ch
 
-#include "DetectorsCommonDataFormats/CTFHeader.h"
 #include "DetectorsBase/CTFCoderBase.h"
-#include <filesystem>
+#include "Framework/ControlService.h"
+#include "Framework/ProcessingContext.h"
+#include "Framework/InputRecord.h"
+#include "Framework/TimingInfo.h"
 
 using namespace o2::ctf;
-
-template <typename T>
-bool readFromTree(TTree& tree, const std::string brname, T& dest, int ev = 0)
-{
-  auto* br = tree.GetBranch(brname.c_str());
-  if (br && br->GetEntries() > ev) {
-    auto* ptr = &dest;
-    br->SetAddress(&ptr);
-    br->GetEntry(ev);
-    br->ResetAddress();
-    return true;
-  }
-  return false;
-}
-
-std::unique_ptr<TFile> CTFCoderBase::loadDictionaryTreeFile(const std::string& dictPath, bool mayFail)
-{
-  TDirectory* curd = gDirectory;
-  std::unique_ptr<TFile> fileDict(!std::filesystem::exists(dictPath) ? nullptr : TFile::Open(dictPath.c_str()));
-  if (!fileDict || fileDict->IsZombie()) {
-    if (mayFail) {
-      LOG(INFO) << "CTF dictionary file " << dictPath << " for detector " << mDet.getName() << " is absent, will use dictionaries stored in CTF";
-      fileDict.reset();
-      return std::move(fileDict);
-    }
-    LOG(ERROR) << "Failed to open CTF dictionary file " << dictPath << " for detector " << mDet.getName();
-    throw std::runtime_error("Failed to open dictionary file");
-  }
-  auto tnm = std::string(o2::base::NameConf::CTFDICT);
-  std::unique_ptr<TTree> tree((TTree*)fileDict->Get(tnm.c_str()));
-  if (!tree) {
-    fileDict.reset();
-    LOG(ERROR) << "Did not find CTF dictionary tree " << tnm << " in " << dictPath;
-    throw std::runtime_error("Did not fine CTF dictionary tree in the file");
-  }
-  CTFHeader ctfHeader;
-  if (!readFromTree(*tree.get(), "CTFHeader", ctfHeader) || !ctfHeader.detectors[mDet]) {
-    tree.reset();
-    fileDict.reset();
-    LOG(ERROR) << "Did not find CTF dictionary header or Detector " << mDet.getName() << " in it";
-    if (!mayFail) {
-      throw std::runtime_error("did not find CTFHeader with needed detector");
-    }
-  }
-  return fileDict;
-}
+using namespace o2::framework;
 
 void CTFCoderBase::checkDictVersion(const CTFDictHeader& h) const
 {
@@ -71,5 +28,70 @@ void CTFCoderBase::checkDictVersion(const CTFDictHeader& h) const
     if (h.isValidDictTimeStamp() && h != mExtHeader) {
       throw std::runtime_error(fmt::format("Mismatch in {} CTF dictionary: need {}, provided {}", mDet.getName(), h.asString(), mExtHeader.asString()));
     }
+  }
+}
+
+// Assign version of the dictionary which will be stored in the data (including dictionary data during dictionary creation)
+// In case detector CTFCoder uses non-defaul dict. version, it should redefine this method in order to assign the version
+// it needs ONLY when the external dictionary is not provided
+void CTFCoderBase::assignDictVersion(CTFDictHeader& h) const
+{
+  if (mExtHeader.isValidDictTimeStamp()) {
+    h = mExtHeader;
+  }
+  // detector code may exten it by
+  //  else {
+  //    h.majorVersion = <A>;
+  //    h.minorVersion = <B>;
+  //  }
+}
+
+void CTFCoderBase::updateTimeDependentParams(ProcessingContext& pc, bool askTree)
+{
+  setFirstTFOrbit(pc.services().get<o2::framework::TimingInfo>().firstTForbit);
+  if (pc.services().get<o2::framework::TimingInfo>().globalRunNumberChanged) { // this params need to be queried only once
+    if (mOpType == OpType::Decoder) {
+      pc.inputs().get<o2::ctp::TriggerOffsetsParam*>(mTrigOffsBinding); // this is a configurable param
+    }
+    if (mLoadDictFromCCDB) {
+      if (askTree) {
+        pc.inputs().get<TTree*>(mDictBinding); // just to trigger the finaliseCCDB
+      } else {
+        pc.inputs().get<std::vector<char>*>(mDictBinding); // just to trigger the finaliseCCDB
+      }
+    }
+  }
+}
+
+bool CTFCoderBase::isTreeDictionary(const void* buff) const
+{
+  // heuristic check for the dictionary being a tree
+  const char* patt[] = {"ccdb_object", "ctf_dictionary"};
+  const char* ptr = reinterpret_cast<const char*>(buff);
+  bool found = false;
+  int i = 0, np = sizeof(patt) / sizeof(char*);
+  while (i < 50 && !found) {
+    for (int ip = 0; ip < np; ip++) {
+      const auto *p = patt[ip], *s = &ptr[i];
+      while (*p && *s == *p) {
+        p++;
+        s++;
+      }
+      if (!*p) {
+        found = true;
+        break;
+      }
+    }
+    i++;
+  }
+  return found;
+}
+
+void CTFCoderBase::reportIRFrames()
+{
+  static bool repDone = false;
+  if (!repDone) {
+    LOGP(info, "IRFrames will be selected with shift {}, forward {} margin and backward {} margin (in BCs)", mIRFrameSelShift, mIRFrameSelMarginBwd, mIRFrameSelMarginFwd);
+    repDone = true;
   }
 }

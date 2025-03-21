@@ -13,61 +13,56 @@
 /// \brief Implementation of the FV0 reconstruction task
 
 #include "FV0Reconstruction/BaseRecoTask.h"
-#include "FairLogger.h" // for LOG
 #include "DataFormatsFV0/RecPoints.h"
 #include "FV0Base/Geometry.h"
 #include "FV0Simulation/FV0DigParam.h"
 #include "FV0Simulation/DigitizationConstant.h"
-#include "FV0Simulation/FV0DigParam.h"
 #include <DataFormatsFV0/ChannelData.h>
-#include <DataFormatsFV0/BCData.h>
-#include <cmath>
-#include <bitset>
-#include <cassert>
-#include <iostream>
-#include <algorithm>
+#include <DataFormatsFV0/Digit.h>
 #include <CommonDataFormat/InteractionRecord.h>
 #include <Framework/Logger.h>
 
 using namespace o2::fv0;
 using RP = o2::fv0::RecPoints;
 
-RP BaseRecoTask::process(o2::fv0::BCData const& bcd,
+RP BaseRecoTask::process(o2::fv0::Digit const& bcd,
                          gsl::span<const o2::fv0::ChannelData> inChData,
                          gsl::span<o2::fv0::ChannelDataFloat> outChData)
 {
   LOG(debug) << "Running reconstruction on new event";
 
-  Float_t sideAtimeFirst = 1e10;
   Int_t ndigitsA = 0;
-  Float_t sideAtimeAvg = 0;
   Int_t ndigitsASelected = 0;
+  Float_t sideAtimeFirst = 1e10;
+  Float_t sideAtimeAvg = 0;
   Float_t sideAtimeAvgSelected = 0;
 
   auto timeStamp = o2::InteractionRecord::bc2ns(bcd.getIntRecord().bc, bcd.getIntRecord().orbit);
 
-  LOG(INFO) << " event time " << timeStamp << " orbit " << bcd.getIntRecord().orbit << " bc " << bcd.getIntRecord().bc;
+  LOG(debug) << " event time " << timeStamp << " orbit " << bcd.getIntRecord().orbit << " bc " << bcd.getIntRecord().bc;
 
   int nch = inChData.size();
   for (int ich = 0; ich < nch; ich++) {
     LOG(debug) << "  channel " << ich << " / " << nch;
-    int offsetChannel = getChannelOffset(inChData[ich].pmtNumber);
+    int offsetChannel = getOffset(int(inChData[ich].ChId));
+    outChData[ich] = o2::fv0::ChannelDataFloat{inChData[ich].ChId,
+                                               (inChData[ich].CFDTime - offsetChannel) * DigitizationConstant::TIME_PER_TDCCHANNEL,
+                                               (float)inChData[ich].QTCAmpl,
+                                               inChData[ich].ChainQTC};
 
-    outChData[ich] = o2::fv0::ChannelDataFloat{inChData[ich].pmtNumber,
-                                               (inChData[ich].time - offsetChannel) * DigitizationConstant::TIME_PER_TDCCHANNEL,
-                                               (double)inChData[ich].chargeAdc * o2::fv0::FV0DigParam::Instance().adcChannelsPerMilivolt,
-                                               0}; // Fill with ADC number once implemented
-
-    //  only signals with amplitude participate in collision time
-    if (outChData[ich].charge > 0) {
+    // Conditions for reconstructing collision time (3 variants: first, average-relaxed and average-tight)
+    if (outChData[ich].charge > FV0DigParam::Instance().chargeThrForMeanTime) {
       sideAtimeFirst = std::min(static_cast<Double_t>(sideAtimeFirst), outChData[ich].time);
-      sideAtimeAvg += outChData[ich].time;
-      ndigitsA++;
-    }
-    const float chargeThreshold = 10; // TODO: move to digitization parameters or constants and adjust to reasonable value
-    if (outChData[ich].charge > 0) {
-      sideAtimeAvgSelected += outChData[ich].time;
-      ndigitsASelected++;
+      if (inChData[ich].areAllFlagsGood()) {
+        if (std::abs(outChData[ich].time) < FV0DigParam::Instance().mTimeThresholdForReco) {
+          sideAtimeAvg += outChData[ich].time;
+          ndigitsA++;
+        }
+        if (outChData[ich].charge > FV0DigParam::Instance().mAmpThresholdForReco && std::abs(outChData[ich].time) < FV0DigParam::Instance().mTimeThresholdForReco) {
+          sideAtimeAvgSelected += outChData[ich].time;
+          ndigitsASelected++;
+        }
+      }
     }
   }
   const int nsToPs = 1e3;
@@ -82,13 +77,14 @@ RP BaseRecoTask::process(o2::fv0::BCData const& bcd,
 void BaseRecoTask::FinishTask()
 {
   // finalize digitization, if needed, flash remaining digits
-  //if (!mContinuous)   return;
+  // if (!mContinuous)   return;
 }
 //______________________________________________________
-int BaseRecoTask::getChannelOffset(int channel)
+int BaseRecoTask::getOffset(int channel)
 {
   if (!mCalibOffset) {
     return 0;
   }
-  return mCalibOffset->mTimeOffsets[channel];
+  int offsetChannel = mCalibOffset->mTimeOffsets[channel];
+  return offsetChannel;
 }

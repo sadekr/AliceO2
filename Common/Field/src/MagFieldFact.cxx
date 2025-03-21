@@ -11,7 +11,7 @@
 
 #include "Field/MagFieldFact.h"
 #include "FairField.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "FairRuntimeDb.h"
 #include "Field/MagFieldParam.h"
 #include "Field/MagneticField.h"
@@ -39,7 +39,7 @@ void MagFieldFact::SetParm()
 FairField* MagFieldFact::createFairField()
 {
   if (!mFieldPar) {
-    LOG(ERROR) << "MagFieldFact::createFairField: No field parameters available";
+    LOG(error) << "MagFieldFact::createFairField: No field parameters available";
     return nullptr;
   }
   // since we have just 1 field class, we don't need to consider fFieldPar->GetType()

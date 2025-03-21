@@ -8,19 +8,21 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "DataFormatsCPV/Digit.h"
 #include "DataFormatsCPV/Cluster.h"
 #include "DataFormatsCPV/CPVBlockHeader.h"
 #include "CPVWorkflow/ClusterizerSpec.h"
 #include "Framework/ControlService.h"
+#include "CPVBase/CPVSimParams.h"
+#include "Framework/CCDBParamSpec.h"
 
 using namespace o2::cpv::reco_workflow;
 
 void ClusterizerSpec::init(framework::InitContext& ctx)
 {
-  LOG(DEBUG) << "[CPVClusterizer - init] Initialize clusterizer ...";
+  LOG(debug) << "[CPVClusterizer - init] Initialize clusterizer ...";
 
   // Initialize clusterizer and link geometry
   mClusterizer.initialize();
@@ -29,48 +31,61 @@ void ClusterizerSpec::init(framework::InitContext& ctx)
 
 void ClusterizerSpec::run(framework::ProcessingContext& ctx)
 {
-  LOG(INFO) << "Starting ClusterizerSpec::run() ";
-  LOG(DEBUG) << "CPVClusterizer - run on digits called";
+  LOG(info) << "Starting ClusterizerSpec::run() ";
+  LOG(debug) << "CPVClusterizer - run on digits called";
+
+  // update config
+  static bool isConfigFetched = false;
+  if (!isConfigFetched) {
+    LOG(info) << "ClusterizerSpec::run() : fetching o2::cpv::CPVSimParams from CCDB";
+    ctx.inputs().get<o2::cpv::CPVSimParams*>("simparams");
+    LOG(info) << "ClusterizerSpec::run() : o2::cpv::CPVSimParams::Instance() now is following:";
+    o2::cpv::CPVSimParams::Instance().printKeyValues();
+    isConfigFetched = true;
+  }
 
   auto digits = ctx.inputs().get<std::vector<Digit>>("digits");
 
   if (!digits.size()) { // nothing to process
-    LOG(INFO) << "ClusterizerSpec::run() : no digits; moving on";
-    //ctx.services().get<o2::framework::ControlService>().readyToQuit(framework::QuitRequest::Me);
+    LOG(info) << "ClusterizerSpec::run() : no digits; moving on";
     mOutputClusters.clear();
-    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERS", 0, o2::framework::Lifetime::Timeframe}, mOutputClusters);
+    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERS", 0}, mOutputClusters);
     mOutputClusterTrigRecs.clear();
-    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRIGRECS", 0, o2::framework::Lifetime::Timeframe}, mOutputClusterTrigRecs);
+    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRIGRECS", 0}, mOutputClusterTrigRecs);
+    mCalibDigits.clear();
+    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CALIBDIGITS", 0}, mCalibDigits);
     if (mPropagateMC) {
       mOutputTruthCont.clear();
-      ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRUEMC", 0, o2::framework::Lifetime::Timeframe}, mOutputTruthCont);
+      ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRUEMC", 0}, mOutputTruthCont);
     }
     return;
   }
   auto digitsTR = ctx.inputs().get<std::vector<o2::cpv::TriggerRecord>>("digitTriggerRecords");
 
-  //const o2::dataformats::MCTruthContainer<MCCompLabel>* truthcont = nullptr;
-  // DO NOT TRY TO USE const pointer for MCTruthContainer, it is somehow spoiling whole array
+  // const o2::dataformats::MCTruthContainer<MCCompLabel>* truthcont = nullptr;
+  //  DO NOT TRY TO USE const pointer for MCTruthContainer, it is somehow spoiling whole array
   if (mPropagateMC) {
     auto truthcont = ctx.inputs().get<o2::dataformats::MCTruthContainer<o2::MCCompLabel>*>("digitsmctr");
-    mClusterizer.process(digits, digitsTR, truthcont.get(), &mOutputClusters, &mOutputClusterTrigRecs, &mOutputTruthCont); // Find clusters with MC Truth
+    mClusterizer.process(digits, digitsTR, truthcont.get(), &mOutputClusters, &mOutputClusterTrigRecs, &mOutputTruthCont, &mCalibDigits); // Find clusters with MC Truth
   } else {
-    mClusterizer.process(digits, digitsTR, nullptr, &mOutputClusters, &mOutputClusterTrigRecs, &mOutputTruthCont); // Find clusters without MC Truth
+    mClusterizer.process(digits, digitsTR, nullptr, &mOutputClusters, &mOutputClusterTrigRecs, &mOutputTruthCont, &mCalibDigits); // Find clusters without MC Truth
   }
 
-  LOG(DEBUG) << "CPVClusterizer::run() : Received " << digitsTR.size() << " TR, calling clusterizer ...";
+  LOG(debug) << "CPVClusterizer::run() : Received " << digitsTR.size() << " TR, calling clusterizer ...";
 
-  ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERS", 0, o2::framework::Lifetime::Timeframe}, mOutputClusters);
-  ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRIGRECS", 0, o2::framework::Lifetime::Timeframe}, mOutputClusterTrigRecs);
+  ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERS", 0}, mOutputClusters);
+  ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRIGRECS", 0}, mOutputClusterTrigRecs);
   if (mPropagateMC) {
-    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRUEMC", 0, o2::framework::Lifetime::Timeframe}, mOutputTruthCont);
+    ctx.outputs().snapshot(o2::framework::Output{"CPV", "CLUSTERTRUEMC", 0}, mOutputTruthCont);
   }
-  LOG(INFO) << "Finished, wrote  " << mOutputClusters.size() << " clusters, " << mOutputClusterTrigRecs.size() << "TR and " << mOutputTruthCont.getIndexedSize() << " Labels";
+  ctx.outputs().snapshot(o2::framework::Output{"CPV", "CALIBDIGITS", 0}, mCalibDigits);
+  LOG(info) << "Finished, wrote  " << mOutputClusters.size() << " clusters, " << mOutputClusterTrigRecs.size() << "TR and " << mOutputTruthCont.getIndexedSize() << " Labels";
 }
 o2::framework::DataProcessorSpec o2::cpv::reco_workflow::getClusterizerSpec(bool propagateMC)
 {
   std::vector<o2::framework::InputSpec> inputs;
   std::vector<o2::framework::OutputSpec> outputs;
+  inputs.emplace_back("simparams", "CPV", "CPV_SimPars", 0, o2::framework::Lifetime::Condition, o2::framework::ccdbParamSpec("CPV/Config/CPVSimParams"));
   inputs.emplace_back("digits", o2::header::gDataOriginCPV, "DIGITS", 0, o2::framework::Lifetime::Timeframe);
   inputs.emplace_back("digitTriggerRecords", o2::header::gDataOriginCPV, "DIGITTRIGREC", 0, o2::framework::Lifetime::Timeframe);
   if (propagateMC) {
@@ -81,6 +96,7 @@ o2::framework::DataProcessorSpec o2::cpv::reco_workflow::getClusterizerSpec(bool
   if (propagateMC) {
     outputs.emplace_back("CPV", "CLUSTERTRUEMC", 0, o2::framework::Lifetime::Timeframe);
   }
+  outputs.emplace_back("CPV", "CALIBDIGITS", 0, o2::framework::Lifetime::Timeframe);
 
   return o2::framework::DataProcessorSpec{"CPVClusterizerSpec",
                                           inputs,

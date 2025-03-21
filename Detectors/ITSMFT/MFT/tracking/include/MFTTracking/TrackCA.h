@@ -45,7 +45,7 @@ class TrackLTF : public TrackMFTExt
   const std::array<Int_t, constants::mft::LayersNumber>& getLayers() const { return mLayer; }
   const std::array<Int_t, constants::mft::LayersNumber>& getClustersId() const { return mClusterId; }
   const std::array<MCCompLabel, constants::mft::LayersNumber>& getMCCompLabels() const { return mMCCompLabels; }
-  void setPoint(const Cluster& cl, const Int_t layer, const Int_t clusterId, const MCCompLabel label, const Int_t extClsIndex);
+  void setPoint(const Cluster& cl, const Int_t layer, const Int_t clusterId, const MCCompLabel label, const Int_t extClsIndex, const Int_t clsSize);
 
   void sort();
 
@@ -73,13 +73,6 @@ class TrackLTFL : public TrackLTF // A track model for B=0
   TrackLTFL(const TrackLTFL& t) = default;
   ~TrackLTFL() = default;
 
-  // Kalman filter/fitting update for linear tracks
-  bool update(const std::array<float, 2>& p, const std::array<float, 2>& cov)
-  {
-    // TODO
-    return true;
-  }
-
  private:
   /// Covariance matrix of track parameters, ordered as follows:    <pre>
   ///  <X,X>          <Y,X>           <SlopeX,X>          <SlopeY,X>
@@ -91,17 +84,17 @@ class TrackLTFL : public TrackLTF // A track model for B=0
 };
 
 //_________________________________________________________________________________________________
-inline void TrackLTF::setPoint(const Cluster& cl, const Int_t layer, const Int_t clusterId, const MCCompLabel label, const Int_t extClsIndex)
+inline void TrackLTF::setPoint(const Cluster& cl, const Int_t layer, const Int_t clusterId, const MCCompLabel label, const Int_t extClsIndex, const Int_t clsSize)
 {
   auto nPoints = getNumberOfPoints();
   if (nPoints > 0) {
     if (mZ[nPoints - 1] == cl.getZ()) {
-      LOG(WARN) << "MFT TrackLTF: skipping setPoint (1 cluster per layer!)";
+      LOG(warn) << "MFT TrackLTF: skipping setPoint (1 cluster per layer!)";
       return;
     }
   }
   if (nPoints > constants::mft::LayersNumber) {
-    LOG(WARN) << "MFT TrackLTF Overflow";
+    LOG(warn) << "MFT TrackLTF Overflow";
     return;
   }
   mX[nPoints] = cl.getX();
@@ -113,6 +106,8 @@ inline void TrackLTF::setPoint(const Cluster& cl, const Int_t layer, const Int_t
   mClusterId[nPoints] = clusterId;
   mMCCompLabels[nPoints] = label;
   setExternalClusterIndex(nPoints, extClsIndex);
+  setExternalClusterSize(nPoints, clsSize);
+  setExternalClusterLayer(nPoints, layer);
   setNumberOfPoints(nPoints + 1);
 }
 

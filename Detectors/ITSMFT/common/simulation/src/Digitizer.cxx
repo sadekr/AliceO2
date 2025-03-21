@@ -14,6 +14,7 @@
 
 #include "DataFormatsITSMFT/Digit.h"
 #include "ITSMFTBase/SegmentationAlpide.h"
+#include "ITSMFTSimulation/DPLDigitizerParam.h"
 #include "ITSMFTSimulation/Digitizer.h"
 #include "MathUtils/Cartesian.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
@@ -23,7 +24,7 @@
 #include <climits>
 #include <vector>
 #include <numeric>
-#include "FairLogger.h" // for LOG
+#include <fairlogger/Logger.h> // for LOG
 
 using o2::itsmft::Digit;
 using o2::itsmft::Hit;
@@ -35,18 +36,89 @@ using namespace o2::itsmft;
 //_______________________________________________________________________
 void Digitizer::init()
 {
-  const Int_t numOfChips = mGeometry->getNumberOfChips();
-  mChips.resize(numOfChips);
-  for (int i = numOfChips; i--;) {
+  mNumberOfChips = mGeometry->getNumberOfChips();
+  mChips.resize(mNumberOfChips);
+  for (int i = mNumberOfChips; i--;) {
     mChips[i].setChipIndex(i);
+    if (mNoiseMap) {
+      mChips[i].setNoiseMap(mNoiseMap);
+    }
+    if (mDeadChanMap) {
+      mChips[i].disable(mDeadChanMap->isFullChipMasked(i));
+      mChips[i].setDeadChanMap(mDeadChanMap);
+    }
   }
-  if (!mParams.getAlpSimResponse()) {
-    mAlpSimResp = std::make_unique<o2::itsmft::AlpideSimResponse>();
-    mAlpSimResp->initData();
-    mParams.setAlpSimResponse(mAlpSimResp.get());
+  // initializing for both collection tables
+  /*for (int i = 0; i < 2; i++) {
+    mAlpSimResp[i].initData(i);
+  }*/
+
+  // importing the charge collection tables
+  // (initialized while building O2)
+  auto file = TFile::Open(mResponseFile.data());
+  if (!file) {
+    LOG(fatal) << "Cannot open response file " << mResponseFile;
+  }
+  /*std::string response = "response";
+  for (int i=0; i<2; i++) {
+    response.append(std::to_string(i));
+    mAlpSimResp[i] = *(o2::itsmft::AlpideSimResponse*)file->Get(response.data());
+  }*/
+  mAlpSimResp[0] = *(o2::itsmft::AlpideSimResponse*)file->Get("response0");
+  mAlpSimResp[1] = *(o2::itsmft::AlpideSimResponse*)file->Get("response1");
+
+  // importing the parameters from DPLDigitizerParam.h
+  auto& doptMFT = DPLDigitizerParam<o2::detectors::DetID::MFT>::Instance();
+  auto& doptITS = DPLDigitizerParam<o2::detectors::DetID::ITS>::Instance();
+
+  // initializing response according to detector and back-bias value
+  if (doptMFT.Vbb == 0.0) { // for MFT
+    mAlpSimRespMFT = mAlpSimResp;
+    LOG(info) << "Choosing Vbb=0V for MFT";
+  } else if (doptMFT.Vbb == 3.0) {
+    mAlpSimRespMFT = mAlpSimResp + 1;
+    LOG(info) << "Choosing Vbb=-3V for MFT";
+  } else {
+    LOG(fatal) << "Invalid MFT back-bias value";
+  }
+
+  if (doptITS.IBVbb == 0.0) { // for ITS Inner Barrel
+    mAlpSimRespIB = mAlpSimResp;
+    LOG(info) << "Choosing Vbb=0V for ITS IB";
+  } else if (doptITS.IBVbb == 3.0) {
+    mAlpSimRespIB = mAlpSimResp + 1;
+    LOG(info) << "Choosing Vbb=-3V for ITS IB";
+  } else {
+    LOG(fatal) << "Invalid ITS Inner Barrel back-bias value";
+  }
+  if (doptITS.OBVbb == 0.0) { // for ITS Outter Barrel
+    mAlpSimRespOB = mAlpSimResp;
+    LOG(info) << "Choosing Vbb=0V for ITS OB";
+  } else if (doptITS.OBVbb == 3.0) {
+    mAlpSimRespOB = mAlpSimResp + 1;
+    LOG(info) << "Choosing Vbb=-3V for ITS OB";
+  } else {
+    LOG(fatal) << "Invalid ITS Outter Barrel back-bias value";
   }
   mParams.print();
   mIRFirstSampledTF = o2::raw::HBFUtils::Instance().getFirstSampledTFIR();
+
+  //
+  LOG(info) << "First IR sampled in digitization is: " << mIRFirstSampledTF;
+  LOG(info) << "First IR ns " << mIRFirstSampledTF.bc2ns();
+}
+
+auto Digitizer::getChipResponse(int chipID)
+{
+  if (mNumberOfChips < 10000) { // in MFT
+    return mAlpSimRespMFT;
+  }
+
+  if (chipID < 432) { // in ITS Inner Barrel
+    return mAlpSimRespIB;
+  } else { // in ITS Outter Barrel
+    return mAlpSimRespOB;
+  }
 }
 
 //_______________________________________________________________________
@@ -54,7 +126,7 @@ void Digitizer::process(const std::vector<Hit>* hits, int evID, int srcID)
 {
   // digitize single event, the time must have been set beforehand
 
-  LOG(INFO) << "Digitizing " << mGeometry->getName() << " hits of entry " << evID << " from source "
+  LOG(info) << "Digitizing " << mGeometry->getName() << " hits of entry " << evID << " from source "
             << srcID << " at time " << mEventTime << " ROFrame= " << mNewROFrame << ")"
             << " cont.mode: " << isContinuous()
             << " Min/Max ROFrames " << mROFrameMin << "/" << mROFrameMax;
@@ -99,7 +171,19 @@ void Digitizer::setEventTime(const o2::InteractionTimeRecord& irt)
     if (mCollisionTimeWrtROF < 0 && nbc > 0) {
       nbc--;
     }
-    mNewROFrame = nbc / mParams.getROFrameLengthInBC();
+
+    // we might get interactions to digitize from before
+    // the first sampled IR
+    if (nbc < 0) {
+      mNewROFrame = 0;
+      // this event is before the first RO
+      mIsBeforeFirstRO = true;
+    } else {
+      mNewROFrame = nbc / mParams.getROFrameLengthInBC();
+      mIsBeforeFirstRO = false;
+    }
+    LOG(info) << " NewROFrame " << mNewROFrame << " nbc " << nbc;
+
     // in continuous mode depends on starts of periodic readout frame
     mCollisionTimeWrtROF += (nbc % mParams.getROFrameLengthInBC()) * o2::constants::lhc::LHCBunchSpacingNS;
   } else {
@@ -107,7 +191,7 @@ void Digitizer::setEventTime(const o2::InteractionTimeRecord& irt)
   }
 
   if (mNewROFrame < mROFrameMin) {
-    LOG(ERROR) << "New ROFrame " << mNewROFrame << " (" << irt << ") precedes currently cashed " << mROFrameMin;
+    LOG(error) << "New ROFrame " << mNewROFrame << " (" << irt << ") precedes currently cashed " << mROFrameMin;
     throw std::runtime_error("deduced ROFrame precedes already processed one");
   }
 
@@ -126,7 +210,7 @@ void Digitizer::fillOutputContainer(uint32_t frameLast)
   // make sure all buffers for extra digits are created up to the maxFrame
   getExtraDigBuffer(mROFrameMax);
 
-  LOG(INFO) << "Filling " << mGeometry->getName() << " digits output for RO frames " << mROFrameMin << ":"
+  LOG(info) << "Filling " << mGeometry->getName() << " digits output for RO frames " << mROFrameMin << ":"
             << frameLast;
 
   o2::itsmft::ROFRecord rcROF;
@@ -138,6 +222,9 @@ void Digitizer::fillOutputContainer(uint32_t frameLast)
 
     auto& extra = *(mExtraBuff.front().get());
     for (auto& chip : mChips) {
+      if (chip.isDisabled()) {
+        continue;
+      }
       chip.addNoise(mROFrameMin, mROFrameMin, &mParams);
       auto& buffer = chip.getPreDigits();
       if (buffer.empty()) {
@@ -185,12 +272,18 @@ void Digitizer::fillOutputContainer(uint32_t frameLast)
 void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID, int srcID)
 {
   // convert single hit to digits
+  int chipID = hit.GetDetectorID();
+  auto& chip = mChips[chipID];
+  if (chip.isDisabled()) {
+    LOG(debug) << "skip disabled chip " << chipID;
+    return;
+  }
   float timeInROF = hit.GetTime() * sec2ns;
   if (timeInROF > 20e3) {
     const int maxWarn = 10;
     static int warnNo = 0;
     if (warnNo < maxWarn) {
-      LOG(WARNING) << "Ignoring hit with time_in_event = " << timeInROF << " ns"
+      LOG(warning) << "Ignoring hit with time_in_event = " << timeInROF << " ns"
                    << ((++warnNo < maxWarn) ? "" : " (suppressing further warnings)");
     }
     return;
@@ -198,6 +291,11 @@ void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID
   if (isContinuous()) {
     timeInROF += mCollisionTimeWrtROF;
   }
+  if (mIsBeforeFirstRO && timeInROF < 0) {
+    // disregard this hit because it comes from an event before readout starts and it does not effect this RO
+    return;
+  }
+
   // calculate RO Frame for this hit
   if (timeInROF < 0) {
     timeInROF = 0.;
@@ -213,7 +311,7 @@ void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID
     maxFr = roFrameMax; // if signal extends beyond current maxFrame, increase the latter
   }
 
-  // here we start stepping in the depth of the sensor to generate charge diffision
+  // here we start stepping in the depth of the sensor to generate charge diffusion
   float nStepsInv = mParams.getNSimStepsInv();
   int nSteps = mParams.getNSimSteps();
   const auto& matrix = mGeometry->getMatrixL2G(hit.GetDetectorID());
@@ -280,7 +378,7 @@ void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID
   int rowPrev = -1, colPrev = -1, row, col;
   float cRowPix = 0.f, cColPix = 0.f; // local coordinated of the current pixel center
 
-  const o2::itsmft::AlpideSimResponse* resp = mParams.getAlpSimResponse();
+  const o2::itsmft::AlpideSimResponse* resp = getChipResponse(chipID);
 
   // take into account that the AlpideSimResponse depth defintion has different min/max boundaries
   // although the max should coincide with the surface of the epitaxial layer, which in the chip
@@ -288,7 +386,7 @@ void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID
 
   xyzLocS.SetY(xyzLocS.Y() + resp->getDepthMax() - Segmentation::SensorLayerThickness / 2.);
 
-  // collect charge in evey pixel which might be affected by the hit
+  // collect charge in every pixel which might be affected by the hit
   for (int iStep = nSteps; iStep--;) {
     // Get the pixel ID
     Segmentation::localToDetector(xyzLocS.X(), xyzLocS.Z(), row, col);
@@ -325,7 +423,6 @@ void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID
 
   // fire the pixels assuming Poisson(n_response_electrons)
   o2::MCCompLabel lbl(hit.GetTrackID(), evID, srcID, false);
-  auto& chip = mChips[hit.GetDetectorID()];
   auto roFrameAbs = mNewROFrame + roFrameRel;
   for (int irow = rowSpan; irow--;) {
     uint16_t rowIS = irow + rowS;
@@ -340,6 +437,12 @@ void Digitizer::processHit(const o2::itsmft::Hit& hit, uint32_t& maxFr, int evID
         continue;
       }
       uint16_t colIS = icol + colS;
+      if (mNoiseMap && mNoiseMap->isNoisy(chipID, rowIS, colIS)) {
+        continue;
+      }
+      if (mDeadChanMap && mDeadChanMap->isNoisy(chipID, rowIS, colIS)) {
+        continue;
+      }
       //
       registerDigits(chip, roFrameAbs, timeInROF, nFrames, rowIS, colIS, nEle, lbl);
     }

@@ -29,24 +29,45 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
 
   workflowOptions.push_back(
     ConfigParamSpec{
-      "dataspec", VariantType::String, "A:FLP/RAWDATA;B:FLP/DISTSUBTIMEFRAME/0", {"selection string for the data to be proxied"}});
+      "dataspec", VariantType::String, "tst:TST/A", {"selection string for the data to be proxied"}});
+
+  workflowOptions.push_back(
+    ConfigParamSpec{
+      "inject-missing-data", VariantType::Bool, false, {"inject missing data according to dataspec if not found in the input"}});
+
+  workflowOptions.push_back(
+    ConfigParamSpec{
+      "sporadic-outputs", VariantType::Bool, false, {"consider all the outputs as sporadic"}});
+
+  workflowOptions.push_back(
+    ConfigParamSpec{
+      "print-input-sizes", VariantType::Int, 0, {"print statistics about sizes per input spec every n TFs"}});
 
   workflowOptions.push_back(
     ConfigParamSpec{
       "throwOnUnmatched", VariantType::Bool, false, {"throw if unmatched input data is found"}});
+
+  workflowOptions.push_back(
+    ConfigParamSpec{
+      "timeframes-shm-limit", VariantType::String, "0", {"Minimum amount of SHM required in order to publish data"}});
 }
 
 #include "Framework/runDataProcessing.h"
 
 WorkflowSpec defineDataProcessing(ConfigContext const& config)
 {
-  std::string processorName = config.options().get<std::string>("proxy-name");
-  std::string outputconfig = config.options().get<std::string>("dataspec");
+  auto processorName = config.options().get<std::string>("proxy-name");
+  auto outputconfig = config.options().get<std::string>("dataspec");
+  bool injectMissingData = config.options().get<bool>("inject-missing-data");
+  bool sporadicOutputs = config.options().get<bool>("sporadic-outputs");
+  auto printSizes = config.options().get<unsigned int>("print-input-sizes");
   bool throwOnUnmatched = config.options().get<bool>("throwOnUnmatched");
+  uint64_t minSHM = std::stoul(config.options().get<std::string>("timeframes-shm-limit"));
   std::vector<InputSpec> matchers = select(outputconfig.c_str());
   Outputs readoutProxyOutput;
   for (auto const& matcher : matchers) {
     readoutProxyOutput.emplace_back(DataSpecUtils::asOutputSpec(matcher));
+    readoutProxyOutput.back().lifetime = sporadicOutputs ? Lifetime::Sporadic : Lifetime::Timeframe;
   }
 
   // we use the same specs as filters in the dpl adaptor
@@ -55,7 +76,8 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     processorName.c_str(),
     std::move(readoutProxyOutput),
     "type=pair,method=connect,address=ipc:///tmp/readout-pipe-0,rateLogging=1,transport=shmem",
-    dplModelAdaptor(filterSpecs, throwOnUnmatched));
+    dplModelAdaptor(filterSpecs, throwOnUnmatched), minSHM, false, injectMissingData, printSizes);
+  readoutProxy.labels.emplace_back(DataProcessorLabel{"input-proxy"});
 
   WorkflowSpec workflow;
   workflow.emplace_back(readoutProxy);

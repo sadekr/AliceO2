@@ -24,7 +24,6 @@ install(FILES CheckDigits_mft.C
               build_geometry.C
               checkTOFMatching.C
               compareTopologyDistributions.C
-              eventDisplay.C
               initSimGeomAndField.C
               loadExtDepLib.C
               load_all_libs.C
@@ -49,12 +48,16 @@ install(FILES CheckDigits_mft.C
               compareTOFClusters.C
               run_rawdecoding_its.C
               run_rawdecoding_mft.C
-              run_trac_ca_its.C
               run_trac_its.C
               CreateBCPattern.C
               UploadDummyAlignment.C
-       UploadMatBudLUT.C
-       CreateCTPOrbitResetObject.C
+              UploadMatBudLUT.C
+              CreateCTPOrbitResetObject.C
+              CreateGRPECSObject.C
+              CreateGRPMagFieldObject.C
+              CreateGRPLHCIFObject.C
+              getTimeStamp.C
+              CreateSampleIRFrames.C
         DESTINATION share/macro/)
 
 # FIXME: a lot of macros that are here should really be elsewhere. Those which
@@ -109,14 +112,21 @@ o2_add_test_root_macro(analyzeOriginHits.C
                                              O2::DetectorsCommonDataFormats)
 
 if(ENABLE_UPGRADES)
-  set(upgradeTargets O2::Alice3DetectorsPassive O2::ITS3Simulation O2::TRKSimulation O2::FT3Simulation)
+  set(upgradeTargets
+      O2::Alice3DetectorsPassive
+      O2::ITS3Simulation
+      O2::FT3Simulation
+      O2::FCTSimulation
+      O2::IOTOFSimulation
+      O2::RICHSimulation
+      O2::ECalSimulation
+      O2::MI3Simulation)
 endif()
 
 o2_add_test_root_macro(build_geometry.C
-                       PUBLIC_LINK_LIBRARIES O2::DetectorsPassive
+                       PUBLIC_LINK_LIBRARIES O2::SimConfig
+                                             O2::DetectorsPassive
                                              O2::Field
-                                             O2::TPCSimulation
-                                             O2::ITSSimulation
                                              O2::MFTSimulation
                                              O2::MCHSimulation
                                              O2::MIDSimulation
@@ -130,6 +140,7 @@ o2_add_test_root_macro(build_geometry.C
                                              O2::PHOSSimulation
                                              O2::CPVSimulation
                                              O2::ZDCSimulation
+                                             O2::FOCALSimulation
                                              ${upgradeTargets})
 
 o2_add_test_root_macro(checkTOFMatching.C
@@ -142,9 +153,6 @@ o2_add_test_root_macro(checkTOFMatching.C
 o2_add_test_root_macro(compareTopologyDistributions.C
                        PUBLIC_LINK_LIBRARIES O2::DataFormatsITSMFT
                        LABELS its)
-
-# FIXME: what's the point of this one ?
-o2_add_test_root_macro(eventDisplay.C PUBLIC_LINK_LIBRARIES FairRoot::Base)
 
 o2_add_test_root_macro(initSimGeomAndField.C
                        PUBLIC_LINK_LIBRARIES O2::DataFormatsParameters O2::Field O2::DetectorsBase)
@@ -175,8 +183,6 @@ o2_add_test_root_macro(o2sim.C
                        PUBLIC_LINK_LIBRARIES O2::Generators
                                              O2::DetectorsPassive
                                              O2::Field
-                                             O2::TPCSimulation
-                                             O2::ITSSimulation
                                              O2::MFTSimulation
                                              O2::MCHSimulation
                                              O2::MIDSimulation
@@ -218,7 +224,7 @@ o2_add_test_root_macro(runTPCRefit.C
                                              O2::ReconstructionDataFormats
                                              O2::SimulationDataFormat
                                              O2::TPCReconstruction
-                       LABELS tpc)
+                       LABELS tpc COMPILE_ONLY)
 
 # FIXME: move to subsystem dir
 o2_add_test_root_macro(run_CRUDataSkimming_its.C
@@ -326,12 +332,6 @@ o2_add_test_root_macro(CreateCTPOrbitResetObject.C
 # O2::DataFormatsITSMFT O2::DataFormatsParameters O2::DetectorsBase O2::Field
 # O2::ITSBase O2::ITStracking O2::MathUtils O2::SimulationDataFormat)
 
-
-# FIXME: move to subsystem dir
-o2_add_test_root_macro(run_trac_ca_its.C
-                       PUBLIC_LINK_LIBRARIES O2::GPUTracking
-                       LABELS its COMPILE_ONLY)
-
 # FIXME: move to subsystem dir
 o2_add_test_root_macro(run_trac_its.C
                        PUBLIC_LINK_LIBRARIES O2::DetectorsCommonDataFormats
@@ -346,12 +346,34 @@ o2_add_test_root_macro(run_trac_its.C
                                              O2::SimulationDataFormat
                         LABELS its)
 
+o2_add_test_root_macro(CreateGRPECSObject.C
+                       PUBLIC_LINK_LIBRARIES O2::DataFormatsParameters
+                                             O2::DetectorsCommonDataFormats
+                                             O2::CCDB)
+
+o2_add_test_root_macro(CreateGRPMagFieldObject.C
+                       PUBLIC_LINK_LIBRARIES O2::DataFormatsParameters
+                                             O2::CommonTypes
+                                             O2::CCDB)
+
+o2_add_test_root_macro(CreateGRPLHCIFObject.C
+                       PUBLIC_LINK_LIBRARIES O2::DataFormatsParameters
+                                             O2::CommonTypes
+                                             O2::CommonDataFormat
+                                             O2::CCDB)
+
 o2_add_test_root_macro(UploadMatBudLUT.C
                        PUBLIC_LINK_LIBRARIES O2::DetectorsCommonDataFormats
                                              O2::CCDB
                                              O2::DataFormatsParameters
                                              O2::DetectorsBase
-          O2::CommonUtils)
+                                             O2::CommonUtils)
+
+o2_add_test_root_macro(getTimeStamp.C
+                       PUBLIC_LINK_LIBRARIES O2::CommonConstants
+                                             O2::CCDB
+                                             O2::CommonUtils)
+
 #
 # NOTE: commented out until unit testing reenabled FIXME : re-enable or delete ?
 #

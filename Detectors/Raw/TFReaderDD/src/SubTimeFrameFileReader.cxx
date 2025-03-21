@@ -11,14 +11,16 @@
 
 // Adapthed with minimal changes from Gvozden Nescovic code to read sTFs files created by DataDistribution
 
-#include "TFReaderDD/SubTimeFrameFile.h"
 #include "TFReaderDD/SubTimeFrameFileReader.h"
 #include "DetectorsRaw/RDHUtils.h"
 #include "Framework/Logger.h"
 #include "Framework/OutputRoute.h"
 #include "Framework/DataSpecUtils.h"
 #include "Framework/DataProcessingHeader.h"
-#include <fairmq/FairMQDevice.h>
+#include <fairmq/Device.h>
+#include <fairmq/Message.h>
+#include <fairmq/Parts.h>
+#include <mutex>
 
 #if __linux__
 #include <sys/mman.h>
@@ -48,7 +50,7 @@ SubTimeFrameFileReader::SubTimeFrameFileReader(const std::string& pFileName, o2:
 {
   mFileMap.open(mFileName);
   if (!mFileMap.is_open()) {
-    LOG(ERROR) << "Failed to open TF file for reading (mmap).";
+    LOG(error) << "Failed to open TF file for reading (mmap).";
     return;
   }
   mFileSize = mFileMap.size();
@@ -110,7 +112,7 @@ std::size_t SubTimeFrameFileReader::getHeaderStackSize() // throws ios_base::fai
   set_position(lFilePosStart);
 
   if (lNumHeaders >= cMaxHeaders) {
-    LOGP(ERROR, "FileReader: Reached max number of headers allowed: {}.", cMaxHeaders);
+    LOGP(error, "FileReader: Reached max number of headers allowed: {}.", cMaxHeaders);
     return 0;
   }
 
@@ -157,9 +159,9 @@ Stack SubTimeFrameFileReader::getHeaderStack(std::size_t& pOrigsize)
     if (lBaseOfDH->headerVersion == 1 || lBaseOfDH->headerVersion == 2) {
       /* nothing to do for the upgrade */
     } else {
-      LOGP(ERROR, "FileReader: DataHeader v{} read from file is not upgraded to the current version {}",
+      LOGP(error, "FileReader: DataHeader v{} read from file is not upgraded to the current version {}",
            lBaseOfDH->headerVersion, DataHeader::sVersion);
-      LOGP(ERROR, "Try using a newer version of DataDistribution or file a BUG");
+      LOGP(error, "Try using a newer version of DataDistribution or file a BUG");
     }
 
     if (lBaseOfDH->size() == lStackSize) {
@@ -176,16 +178,19 @@ Stack SubTimeFrameFileReader::getHeaderStack(std::size_t& pOrigsize)
   return Stack(lStackMem);
 }
 
-std::uint64_t SubTimeFrameFileReader::sStfId = 0; // TODO: add id to files metadata
+std::uint32_t sRunNumber = 0;                     // TODO: add id to files metadata
+std::uint32_t sFirstTForbit = 0;                  // TODO: add id to files metadata
+std::uint64_t sCreationTime = 0;
+std::mutex stfMtx;
 
-std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* device, const std::vector<o2f::OutputRoute>& outputRoutes,
-                                                               const std::string& rawChannel, int verbosity)
+std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(fair::mq::Device* device, const std::vector<o2f::OutputRoute>& outputRoutes,
+                                                               const std::string& rawChannel, size_t slice, bool sup0xccdb, int verbosity)
 {
   std::unique_ptr<MessagesPerRoute> messagesPerRoute = std::make_unique<MessagesPerRoute>();
   auto& msgMap = *messagesPerRoute.get();
   assert(device);
   std::unordered_map<o2::header::DataHeader, std::pair<std::string, bool>> channelsMap;
-  auto findOutputChannel = [&outputRoutes, &rawChannel, &channelsMap](const o2::header::DataHeader* h) -> const std::string& {
+  auto findOutputChannel = [&outputRoutes, &rawChannel, &channelsMap](const o2::header::DataHeader* h, size_t tslice) -> const std::string& {
     if (!rawChannel.empty()) {
       return rawChannel;
     }
@@ -193,9 +198,9 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
     if (chFromMap.first.empty() && !chFromMap.second) { // search for channel which is enountered for the 1st time
       chFromMap.second = true;                          // flag that it was already checked
       for (auto& oroute : outputRoutes) {
-        LOG(DEBUG) << "comparing with matcher to route " << oroute.matcher << " TSlice:" << oroute.timeslice;
-        if (o2f::DataSpecUtils::match(oroute.matcher, h->dataOrigin, h->dataDescription, h->subSpecification) && ((h->tfCounter % oroute.maxTimeslices) == oroute.timeslice)) {
-          LOG(DEBUG) << "picking the route:" << o2f::DataSpecUtils::describe(oroute.matcher) << " channel " << oroute.channel;
+        LOG(debug) << "comparing with matcher to route " << oroute.matcher << " TSlice:" << oroute.timeslice;
+        if (o2f::DataSpecUtils::match(oroute.matcher, h->dataOrigin, h->dataDescription, h->subSpecification) && ((tslice % oroute.maxTimeslices) == oroute.timeslice)) {
+          LOG(debug) << "picking the route:" << o2f::DataSpecUtils::describe(oroute.matcher) << " channel " << oroute.channel;
           chFromMap.first = oroute.channel;
           break;
         }
@@ -204,11 +209,11 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
     return chFromMap.first;
   };
 
-  auto addPart = [&msgMap](FairMQMessagePtr hd, FairMQMessagePtr pl, const std::string& fairMQChannel) {
-    FairMQParts* parts = nullptr;
-    parts = msgMap[fairMQChannel].get(); // FairMQParts*
+  auto addPart = [&msgMap](fair::mq::MessagePtr hd, fair::mq::MessagePtr pl, const std::string& fairMQChannel) {
+    fair::mq::Parts* parts = nullptr;
+    parts = msgMap[fairMQChannel].get(); // fair::mq::Parts*
     if (!parts) {
-      msgMap[fairMQChannel] = std::make_unique<FairMQParts>();
+      msgMap[fairMQChannel] = std::make_unique<fair::mq::Parts>();
       parts = msgMap[fairMQChannel].get();
     }
     parts->AddPart(std::move(hd));
@@ -221,7 +226,11 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
   if (lTfStartPosition == size() || !mFileMap.is_open() || eof()) {
     return nullptr;
   }
-  auto tfID = sStfId++;
+  auto tfID = slice;
+  uint32_t runNumberFallBack = sRunNumber;
+  uint32_t firstTForbitFallBack = sFirstTForbit;
+  uint64_t creationFallBack = sCreationTime;
+  bool negativeOrbitNotified = false, noRunNumberNotified = false, creation0Notified = false;
   std::size_t lMetaHdrStackSize = 0;
   const DataHeader* lStfMetaDataHdr = nullptr;
   SubTimeFrameFileMeta lStfFileMeta;
@@ -229,7 +238,7 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
   auto printStack = [tfID](const o2::header::Stack& st) {
     auto dph = o2::header::get<o2f::DataProcessingHeader*>(st.data());
     auto dh = o2::header::get<o2::header::DataHeader*>(st.data());
-    LOGP(INFO, "TF#{} Header for {}/{}/{} @ timeslice {} run {} | {} of {} size {}, TForbit {} | DPH: {}/{}/{}", tfID,
+    LOGP(info, "TF#{} Header for {}/{}/{} @ tfCounter {} run {} | {} of {} size {}, TForbit {} | DPH: {}/{}/{}", tfID,
          dh->dataOrigin.str, dh->dataDescription.str, dh->subSpecification, dh->tfCounter, dh->runNumber,
          dh->splitPayloadIndex, dh->splitPayloadParts, dh->payloadSize, dh->firstTForbit,
          dph ? dph->startTime : 0, dph ? dph->duration : 0, dph ? dph->creation : 0);
@@ -238,19 +247,27 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
   // Read DataHeader + SubTimeFrameFileMeta
   auto lMetaHdrStack = getHeaderStack(lMetaHdrStackSize);
   if (lMetaHdrStackSize == 0) {
-    LOG(ERROR) << "Failed to read the TF file header. The file might be corrupted.";
+    LOG(error) << "Failed to read the TF file header. The file might be corrupted.";
     mFileMap.close();
     return nullptr;
   }
-
   lStfMetaDataHdr = o2::header::DataHeader::Get(lMetaHdrStack.first());
   if (!read_advance(&lStfFileMeta, sizeof(SubTimeFrameFileMeta))) {
     return nullptr;
   }
+  if (lStfFileMeta.mWriteTimeMs == 0 && creationFallBack != 0) {
+    if (!creation0Notified) {
+      creation0Notified = true;
+      LOGP(warn, "Creation time 0 for timeSlice:{}, redefine to {}", tfID, creationFallBack);
+    }
+    lStfFileMeta.mWriteTimeMs = creationFallBack;
+  } else {
+    sCreationTime = lStfFileMeta.mWriteTimeMs;
+  }
 
   // verify we're actually reading the correct data in
   if (!(SubTimeFrameFileMeta::getDataHeader().dataDescription == lStfMetaDataHdr->dataDescription)) {
-    LOGP(WARNING, "Reading bad data: SubTimeFrame META header");
+    LOGP(warning, "Reading bad data: SubTimeFrame META header");
     mFileMap.close();
     return nullptr;
   }
@@ -258,14 +275,14 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
   // prepare to read the TF data
   const auto lStfSizeInFile = lStfFileMeta.mStfSizeInFile;
   if (lStfSizeInFile == (sizeof(DataHeader) + sizeof(SubTimeFrameFileMeta))) {
-    LOGP(WARNING, "Reading an empty TF from file. Only meta information present");
+    LOGP(warning, "Reading an empty TF from file. Only meta information present");
     mFileMap.close();
     return nullptr;
   }
 
   // check there's enough data in the file
   if ((lTfStartPosition + lStfSizeInFile) > this->size()) {
-    LOGP(WARNING, "Not enough data in file for this TF. Required: {}, available: {}", lStfSizeInFile, (this->size() - lTfStartPosition));
+    LOGP(warning, "Not enough data in file for this TF. Required: {}, available: {}", lStfSizeInFile, (this->size() - lTfStartPosition));
     mFileMap.close();
     return nullptr;
   }
@@ -282,7 +299,7 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
   }
   lStfIndexHdr = o2::header::DataHeader::Get(lStfIndexHdrStack.first());
   if (!lStfIndexHdr) {
-    LOG(ERROR) << "Failed to read the TF index structure. The file might be corrupted.";
+    LOG(error) << "Failed to read the TF index structure. The file might be corrupted.";
     return nullptr;
   }
 
@@ -301,7 +318,6 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
 
   std::int64_t lLeftToRead = lStfDataSize;
   STFHeader stfHeader{tfID, -1u, -1u};
-
   // read <hdrStack + data> pairs
   while (lLeftToRead > 0) {
 
@@ -314,21 +330,39 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
     }
     const DataHeader* lDataHeader = o2::header::DataHeader::Get(lDataHeaderStack.first());
     if (!lDataHeader) {
-      LOG(ERROR) << "Failed to read the TF HBF DataHeader structure. The file might be corrupted.";
+      LOG(error) << "Failed to read the TF HBF DataHeader structure. The file might be corrupted.";
       mFileMap.close();
       return nullptr;
     }
-
-    o2::header::Stack headerStack{*lDataHeader, o2f::DataProcessingHeader{tfID, 1}};
+    DataHeader locDataHeader(*lDataHeader);
+    // sanity check
+    if (int(locDataHeader.firstTForbit) == -1) {
+      if (!negativeOrbitNotified) {
+        LOGP(warn, "Negative orbit for timeSlice:{} tfCounter:{} runNumber:{}, redefine to {}", tfID, locDataHeader.tfCounter, locDataHeader.runNumber, firstTForbitFallBack);
+        negativeOrbitNotified = true;
+      }
+      locDataHeader.firstTForbit = firstTForbitFallBack;
+    }
+    if (locDataHeader.runNumber == 0) {
+      if (!noRunNumberNotified) {
+        LOGP(warn, "runNumber is 0 for timeSlice:{} tfCounter:{}, redefine to {}", tfID, locDataHeader.tfCounter, runNumberFallBack);
+        noRunNumberNotified = true;
+      }
+      locDataHeader.runNumber = runNumberFallBack;
+    }
+    o2::header::Stack headerStack{locDataHeader, o2f::DataProcessingHeader{tfID, 1, lStfFileMeta.mWriteTimeMs}};
     if (stfHeader.runNumber == -1) {
-      stfHeader.id = lDataHeader->tfCounter;
-      stfHeader.runNumber = lDataHeader->runNumber;
-      stfHeader.firstOrbit = lDataHeader->firstTForbit;
+      stfHeader.id = locDataHeader.tfCounter;
+      stfHeader.runNumber = locDataHeader.runNumber;
+      stfHeader.firstOrbit = locDataHeader.firstTForbit;
+      std::lock_guard<std::mutex> lock(stfMtx);
+      sRunNumber = stfHeader.runNumber;
+      sFirstTForbit = stfHeader.firstOrbit;
     }
 
-    const std::uint64_t lDataSize = lDataHeader->payloadSize;
+    const std::uint64_t lDataSize = locDataHeader.payloadSize;
     // do we accept these data?
-    auto detOrigStatus = mDetOrigMap.find(lDataHeader->dataOrigin);
+    auto detOrigStatus = mDetOrigMap.find(locDataHeader.dataOrigin);
     if (detOrigStatus != mDetOrigMap.end() && !detOrigStatus->second) { // this is a detector data and we don't want to read it
       if (!ignore_nbytes(lDataSize)) {
         return nullptr;
@@ -339,7 +373,7 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
 #ifdef _RUN_TIMING_MEASUREMENT_
     findChanSW.Start(false);
 #endif
-    const auto& fmqChannel = findOutputChannel(lDataHeader);
+    const auto& fmqChannel = findOutputChannel(&locDataHeader, tfID);
 #ifdef _RUN_TIMING_MEASUREMENT_
     findChanSW.Stop();
 #endif
@@ -369,7 +403,7 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
       return nullptr;
     }
     if (verbosity > 0) {
-      if (verbosity > 1 || lDataHeader->splitPayloadIndex == 0) {
+      if (verbosity > 1 || locDataHeader.splitPayloadIndex == 0) {
         printStack(headerStack);
         if (o2::raw::RDHUtils::checkRDH(lDataMsg->GetData()) && verbosity > 2) {
           o2::raw::RDHUtils::printRDH(lDataMsg->GetData());
@@ -388,42 +422,51 @@ std::unique_ptr<MessagesPerRoute> SubTimeFrameFileReader::read(FairMQDevice* dev
   }
 
   if (lLeftToRead < 0) {
-    LOG(ERROR) << "FileRead: Read more data than it is indicated in the META header!";
+    LOG(error) << "FileRead: Read more data than it is indicated in the META header!";
     return nullptr;
   }
-
   // add TF acknowledge part
-  o2::header::DataHeader stfDistDataHeader(gDataDescSubTimeFrame, o2::header::gDataOriginFLP, 0, sizeof(STFHeader), 0, 1);
-  stfDistDataHeader.payloadSerializationMethod = o2::header::gSerializationMethodNone;
-  stfDistDataHeader.firstTForbit = stfHeader.firstOrbit;
-  stfDistDataHeader.runNumber = stfHeader.runNumber;
-  stfDistDataHeader.tfCounter = stfHeader.id;
-  stfHeader.id = tfID;
-  const auto fmqChannel = findOutputChannel(&stfDistDataHeader);
-  if (!fmqChannel.empty()) { // no output channel
-    auto fmqFactory = device->GetChannel(fmqChannel, 0).Transport();
-    o2::header::Stack headerStackSTF{stfDistDataHeader, o2f::DataProcessingHeader{tfID}};
-    if (verbosity > 0) {
-      printStack(headerStackSTF);
-    }
-    auto hdMessageSTF = fmqFactory->CreateMessage(headerStackSTF.size(), fair::mq::Alignment{64});
-    auto plMessageSTF = fmqFactory->CreateMessage(stfDistDataHeader.payloadSize, fair::mq::Alignment{64});
-    memcpy(hdMessageSTF->GetData(), headerStackSTF.data(), headerStackSTF.size());
-    memcpy(plMessageSTF->GetData(), &stfHeader, sizeof(STFHeader));
-#ifdef _RUN_TIMING_MEASUREMENT_
-    addPartSW.Start(false);
-#endif
-    addPart(std::move(hdMessageSTF), std::move(plMessageSTF), fmqChannel);
-#ifdef _RUN_TIMING_MEASUREMENT_
-    addPartSW.Stop();
-#endif
+  // in case of empty TF fall-back to previous runNumber and fistTForbit
+  if (stfHeader.runNumber == -1u) {
+    stfHeader.runNumber = runNumberFallBack;
+    stfHeader.firstOrbit = firstTForbitFallBack;
+    LOGP(info, "Empty TF#{}, fallback to previous runNumber:{} firstTForbit:{}", tfID, stfHeader.runNumber, stfHeader.firstOrbit);
   }
+
+  unsigned stfSS[2] = {0, 0xccdb};
+  for (int iss = 0; iss < (sup0xccdb ? 1 : 2); iss++) {
+    o2::header::DataHeader stfDistDataHeader(o2::header::gDataDescriptionDISTSTF, o2::header::gDataOriginFLP, stfSS[iss], sizeof(STFHeader), 0, 1);
+    stfDistDataHeader.payloadSerializationMethod = o2::header::gSerializationMethodNone;
+    stfDistDataHeader.firstTForbit = stfHeader.firstOrbit;
+    stfDistDataHeader.runNumber = stfHeader.runNumber;
+    stfDistDataHeader.tfCounter = stfHeader.id;
+    const auto fmqChannel = findOutputChannel(&stfDistDataHeader, tfID);
+    if (!fmqChannel.empty()) { // no output channel
+      auto fmqFactory = device->GetChannel(fmqChannel, 0).Transport();
+      o2::header::Stack headerStackSTF{stfDistDataHeader, o2f::DataProcessingHeader{tfID, 1, lStfFileMeta.mWriteTimeMs}};
+      if (verbosity > 0) {
+        printStack(headerStackSTF);
+      }
+      auto hdMessageSTF = fmqFactory->CreateMessage(headerStackSTF.size(), fair::mq::Alignment{64});
+      auto plMessageSTF = fmqFactory->CreateMessage(stfDistDataHeader.payloadSize, fair::mq::Alignment{64});
+      memcpy(hdMessageSTF->GetData(), headerStackSTF.data(), headerStackSTF.size());
+      memcpy(plMessageSTF->GetData(), &stfHeader, sizeof(STFHeader));
+#ifdef _RUN_TIMING_MEASUREMENT_
+      addPartSW.Start(false);
+#endif
+      addPart(std::move(hdMessageSTF), std::move(plMessageSTF), fmqChannel);
+#ifdef _RUN_TIMING_MEASUREMENT_
+      addPartSW.Stop();
+#endif
+    }
+  }
+
 #ifdef _RUN_TIMING_MEASUREMENT_
   readSW.Stop();
-  LOG(INFO) << "TF creation time: CPU: " << readSW.CpuTime() << " Wall: " << readSW.RealTime() << " s";
-  LOG(INFO) << "AddPart Timer CPU: " << addPartSW.CpuTime() << " Wall: " << addPartSW.RealTime() << " s";
-  LOG(INFO) << "CreMsg  Timer CPU: " << msgSW.CpuTime() << " Wall: " << msgSW.RealTime() << " s";
-  LOG(INFO) << "FndChan Timer CPU: " << findChanSW.CpuTime() << " Wall: " << findChanSW.RealTime() << " s";
+  LOG(info) << "TF creation time: CPU: " << readSW.CpuTime() << " Wall: " << readSW.RealTime() << " s";
+  LOG(info) << "AddPart Timer CPU: " << addPartSW.CpuTime() << " Wall: " << addPartSW.RealTime() << " s";
+  LOG(info) << "CreMsg  Timer CPU: " << msgSW.CpuTime() << " Wall: " << msgSW.RealTime() << " s";
+  LOG(info) << "FndChan Timer CPU: " << findChanSW.CpuTime() << " Wall: " << findChanSW.RealTime() << " s";
 #endif
   return messagesPerRoute;
 }

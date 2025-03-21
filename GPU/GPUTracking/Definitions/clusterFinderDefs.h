@@ -17,13 +17,6 @@
 
 #include "GPUDef.h"
 
-#ifndef __OPENCL__
-using uchar = unsigned char;
-#endif
-#ifdef __APPLE__
-using ulong = unsigned long;
-#endif
-
 /* #define CHARGEMAP_TIME_MAJOR_LAYOUT */
 #define CHARGEMAP_TILING_LAYOUT
 
@@ -40,50 +33,45 @@ using ulong = unsigned long;
 
 // Padding of 2 and 3 respectively would be enough. But this ensures that
 // rows are always aligned along cache lines. Likewise for TPC_PADS_PER_ROW.
-#define PADDING_PAD 8
-#define PADDING_TIME 4
+#define GPUCF_PADDING_PAD 8
+#define GPUCF_PADDING_TIME 4
 #define TPC_PADS_PER_ROW 144
 
 #define TPC_ROWS_PER_CRU 18
-#define TPC_PADS_PER_ROW_PADDED (TPC_PADS_PER_ROW + PADDING_PAD)
-#define TPC_NUM_OF_PADS (GPUCA_ROW_COUNT * TPC_PADS_PER_ROW_PADDED + PADDING_PAD)
+#define TPC_PADS_PER_ROW_PADDED (TPC_PADS_PER_ROW + GPUCF_PADDING_PAD)
+#define TPC_NUM_OF_PADS (GPUCA_ROW_COUNT * TPC_PADS_PER_ROW_PADDED + GPUCF_PADDING_PAD)
 #define TPC_PADS_IN_SECTOR 14560
-#define TPC_MAX_FRAGMENT_LEN 4000
-#define TPC_MAX_FRAGMENT_LEN_PADDED (TPC_MAX_FRAGMENT_LEN + 2 * PADDING_TIME)
-#define TPC_MAX_TIME_BIN_TRIGGERED 600
-
-#if 0
-#define DBG_PRINT(msg, ...) printf(msg "\n", __VA_ARGS__)
-#else
-#define DBG_PRINT(msg, ...) static_cast<void>(0)
-#endif
+#define TPC_FEC_IDS_IN_SECTOR 23296
+#define TPC_MAX_FRAGMENT_LEN_GPU 4000
+#define TPC_MAX_FRAGMENT_LEN_HOST 1000
+#define TPC_MAX_FRAGMENT_LEN_PADDED(size) ((size) + 2 * GPUCF_PADDING_TIME)
 
 #ifdef GPUCA_GPUCODE
-#define CPU_ONLY(x) static_cast<void>(0)
+#define CPU_ONLY(x)
 #define CPU_PTR(x) nullptr
 #else
 #define CPU_ONLY(x) x
 #define CPU_PTR(x) x
 #endif
 
-namespace GPUCA_NAMESPACE::gpu::tpccf
+namespace o2::gpu::tpccf
 {
 
 using SizeT = size_t;
-using TPCTime = int;
-using TPCFragmentTime = short;
-using Pad = unsigned char;
-using GlobalPad = short;
-using Row = unsigned char;
-using Cru = unsigned char;
+using TPCTime = int32_t;
+using TPCFragmentTime = int16_t;
+using Pad = uint8_t;
+using GlobalPad = int16_t;
+using Row = uint8_t;
+using Cru = uint8_t;
 
 using Charge = float;
 
-using Delta = short;
+using Delta = int16_t;
 using Delta2 = short2;
 
 using local_id = short2;
 
-} // namespace GPUCA_NAMESPACE::gpu::tpccf
+} // namespace o2::gpu::tpccf
 
 #endif

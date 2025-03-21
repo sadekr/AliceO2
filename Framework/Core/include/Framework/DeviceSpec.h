@@ -11,6 +11,7 @@
 #ifndef O2_FRAMEWORK_DEVICESPEC_H_
 #define O2_FRAMEWORK_DEVICESPEC_H_
 
+#include "CallbacksPolicy.h"
 #include "Framework/WorkflowSpec.h"
 #include "Framework/ComputingResource.h"
 #include "Framework/DataProcessorSpec.h"
@@ -26,6 +27,7 @@
 #include "Framework/CompletionPolicy.h"
 #include "Framework/DispatchPolicy.h"
 #include "Framework/ResourcePolicy.h"
+#include "Framework/SendingPolicy.h"
 #include "Framework/ServiceSpec.h"
 
 #include <vector>
@@ -38,12 +40,17 @@ namespace o2::framework
 
 /// Concrete description of the device which will actually run
 /// a DataProcessor.
+///
+/// You can get a reference to this by retrieving it from the
+/// ServiceRegistry. E.g.:
+///
+/// auto &deviceSpec = ctx.services().get<DeviceSpec const>();
 struct DeviceSpec {
   /// The name of the associated DataProcessorSpec
-  std::string name;
+  std::string name = "unknown";
   /// The id of the device, including time-pipelining and suffix
-  std::string id;
-  std::string channelPrefix;
+  std::string id = "unknown";
+  std::string channelPrefix = "";
   std::vector<InputChannelSpec> inputChannels;
   std::vector<OutputChannelSpec> outputChannels;
   std::vector<std::string> arguments;
@@ -64,12 +71,15 @@ struct DeviceSpec {
   /// The completion policy to use for this device.
   CompletionPolicy completionPolicy;
   DispatchPolicy dispatchPolicy;
+  CallbacksPolicy callbacksPolicy;
+  SendingPolicy sendingPolicy;
   /// Policy on when the available resources are enough to run
   /// a computation.
   ResourcePolicy resourcePolicy;
   ComputingResource resource;
   unsigned short resourceMonitoringInterval;
   std::vector<DataProcessorLabel> labels;
+  std::vector<DataProcessorMetadata> metadata;
 };
 
 } // namespace o2::framework

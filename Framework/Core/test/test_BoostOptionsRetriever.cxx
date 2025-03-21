@@ -8,27 +8,25 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#define BOOST_TEST_MODULE Test Framework BoostOptionsRetriever
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
 
 #include "Framework/ConfigParamsHelper.h"
 #include "Framework/ConfigParamSpec.h"
 #include <boost/program_options.hpp>
 #include <boost/program_options/parsers.hpp>
-#include <boost/test/unit_test.hpp>
-#include <iostream>
+#include <catch_amalgamated.hpp>
 #include <vector>
 
 using namespace o2::framework;
 
-BOOST_AUTO_TEST_CASE(TrivialBoostOptionsRetrieverTest)
+TEST_CASE("TrivialBoostOptionsRetrieverTest")
 {
   using namespace o2::framework;
   namespace bpo = boost::program_options;
 
   auto specs = std::vector<ConfigParamSpec>{
     {"someInt", VariantType::Int, 2, {"some int option"}},
+    {"someInt8", VariantType::Int8, static_cast<int8_t>(2), {"some int8 option"}},
+    {"someInt16", VariantType::Int16, static_cast<int16_t>(2), {"some int16 option"}},
     {"someUInt8", VariantType::UInt8, static_cast<uint8_t>(2u), {"some uint8 option"}},
     {"someUInt16", VariantType::UInt16, static_cast<uint16_t>(2u), {"some uint16 option"}},
     {"someUInt32", VariantType::UInt32, 2u, {"some uint32 option"}},
@@ -42,6 +40,8 @@ BOOST_AUTO_TEST_CASE(TrivialBoostOptionsRetrieverTest)
     "test",
     "--someBool",
     "--someInt", "1",
+    "--someInt8", "1",
+    "--someInt16", "1",
     "--someUInt8", "1",
     "--someUInt16", "1",
     "--someUInt32", "1",
@@ -57,14 +57,16 @@ BOOST_AUTO_TEST_CASE(TrivialBoostOptionsRetrieverTest)
 
   bpo::store(parse_command_line(sizeof(args) / sizeof(char*), args, opts), vm);
   bpo::notify(vm);
-  BOOST_CHECK(vm["someInt"].as<int>() == 1);
-  BOOST_CHECK(vm["someUInt8"].as<uint8_t>() == '1');
-  BOOST_CHECK(vm["someUInt16"].as<uint16_t>() == 1);
-  BOOST_CHECK(vm["someUInt32"].as<uint32_t>() == 1);
-  BOOST_CHECK(vm["someUInt64"].as<uint64_t>() == 1);
-  BOOST_CHECK(vm["someInt64"].as<int64_t>() == 50000000000000ll);
-  BOOST_CHECK(vm["someBool"].as<bool>() == true);
-  BOOST_CHECK(vm["someString"].as<std::string>() == "foobar");
-  BOOST_CHECK(vm["someFloat"].as<float>() == 0.5);
-  BOOST_CHECK(vm["someDouble"].as<double>() == 0.5);
+  REQUIRE(vm["someInt"].as<int>() == 1);
+  REQUIRE(vm["someInt8"].as<int8_t>() == '1');
+  REQUIRE(vm["someInt16"].as<int16_t>() == 1);
+  REQUIRE(vm["someUInt8"].as<uint8_t>() == '1');
+  REQUIRE(vm["someUInt16"].as<uint16_t>() == 1);
+  REQUIRE(vm["someUInt32"].as<uint32_t>() == 1);
+  REQUIRE(vm["someUInt64"].as<uint64_t>() == 1);
+  REQUIRE(vm["someInt64"].as<int64_t>() == 50000000000000ll);
+  REQUIRE(vm["someBool"].as<bool>() == true);
+  REQUIRE(vm["someString"].as<std::string>() == "foobar");
+  REQUIRE(vm["someFloat"].as<float>() == 0.5);
+  REQUIRE(vm["someDouble"].as<double>() == 0.5);
 }

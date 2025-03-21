@@ -12,7 +12,7 @@
 /// \file AlignParam.cxx
 /// \brief Implementation of the base alignment parameters class
 
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 #include <TGeoManager.h>
 #include <TGeoMatrix.h>
 #include <TGeoOverlap.h>
@@ -43,12 +43,26 @@ AlignParam::AlignParam(const char* symname, int algID,       // volume symbolic 
 }
 
 //___________________________________________________
+AlignParam::AlignParam(const char* symname, int algID, TGeoMatrix& m, bool global)
+  : mSymName(symname), mAlignableID(algID)
+{
+  setTranslation(m);
+  if (!setRotation(m)) {
+    const double* rot = m.GetRotationMatrix();
+    throw std::runtime_error(fmt::format("Failed to extract roll-pitch-yall angles from [[{},{},{}], [{},{},{}], [{},{},{}] for {}", rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8], symname));
+  }
+  if (!global && !setLocalParams(mX, mY, mZ, mPsi, mTheta, mPhi)) {
+    throw std::runtime_error(fmt::format("Alignment creation for {} failed: geomManager is absent", symname));
+  }
+}
+
+//___________________________________________________
 TGeoHMatrix AlignParam::createMatrix() const
 {
   /// create a copy of alignment global delta matrix
   TGeoHMatrix mat;
   setMatrixTranslation(mX, mY, mZ, mat);
-  setMatrixRotation(mPhi, mTheta, mPsi, mat);
+  setMatrixRotation(mPsi, mTheta, mPhi, mat);
   return mat;
 }
 
@@ -105,7 +119,7 @@ bool AlignParam::matrixToAngles(const double* rot, double& psi, double& theta, d
   /// extracted from the matrix
   //
   if (std::abs(rot[0]) < 1e-7 || std::abs(rot[8]) < 1e-7) {
-    LOG(ERROR) << "Failed to extract roll-pitch-yall angles!";
+    LOG(error) << "Failed to extract roll-pitch-yall angles!";
     return false;
   }
   psi = std::atan2(-rot[5], rot[8]);
@@ -162,7 +176,7 @@ bool AlignParam::setLocalParams(const TGeoMatrix& m)
   // returns false and the object parameters are not set.
   //
   if (!gGeoManager || !gGeoManager->IsClosed()) {
-    LOG(ERROR) << "Can't set the local alignment object parameters! gGeoManager doesn't exist or it is still open!";
+    LOG(error) << "Can't set the local alignment object parameters! gGeoManager doesn't exist or it is still open!";
     return false;
   }
 
@@ -174,17 +188,17 @@ bool AlignParam::setLocalParams(const TGeoMatrix& m)
     pn = pne->GetPhysicalNode();
     if (pn) {
       if (pn->IsAligned()) {
-        LOG(WARNING) << "Volume " << symname << " has been misaligned already!";
+        LOG(warning) << "Volume " << symname << " has been misaligned already!";
       }
       gprime = *pn->GetMatrix();
     } else {
       gprime = pne->GetGlobalOrig();
     }
   } else {
-    LOG(WARNING) << "The symbolic volume name " << symname
+    LOG(warning) << "The symbolic volume name " << symname
                  << " does not correspond to a physical entry. Using it as volume path!";
     if (!gGeoManager->cd(symname)) {
-      LOG(ERROR) << "Volume name or path " << symname << " is not valid!";
+      LOG(error) << "Volume name or path " << symname << " is not valid!";
       return false;
     }
     gprime = *gGeoManager->GetCurrentMatrix();
@@ -210,7 +224,7 @@ bool AlignParam::createLocalMatrix(TGeoHMatrix& m) const
   // returns false and the object parameters are not set.
   //
   if (!gGeoManager || !gGeoManager->IsClosed()) {
-    LOG(ERROR) << "Can't get the local alignment object parameters! gGeoManager doesn't exist or it is still open!";
+    LOG(error) << "Can't get the local alignment object parameters! gGeoManager doesn't exist or it is still open!";
     return false;
   }
 
@@ -224,13 +238,13 @@ bool AlignParam::createLocalMatrix(TGeoHMatrix& m) const
       node = pne->GetPhysicalNode();
     }
   } else {
-    LOG(WARNING) << "The symbolic volume name " << symname
+    LOG(warning) << "The symbolic volume name " << symname
                  << " does not correspond to a physical entry. Using it as volume path!";
     node = (TGeoPhysicalNode*)gGeoManager->MakePhysicalNode(symname);
   }
 
   if (!node) {
-    LOG(ERROR) << "Volume name or path " << symname << " is not valid!";
+    LOG(error) << "Volume name or path " << symname << " is not valid!";
     return false;
   }
   m = createMatrix();
@@ -251,12 +265,12 @@ bool AlignParam::applyToGeometry() const
   /// valid neither to get a TGeoPEntry nor as a volume path
   //
   if (!gGeoManager || !gGeoManager->IsClosed()) {
-    LOG(ERROR) << "Can't apply the alignment object! gGeoManager doesn't exist or it is still open!";
+    LOG(error) << "Can't apply the alignment object! gGeoManager doesn't exist or it is still open!";
     return false;
   }
 
   if (gGeoManager->IsLocked()) {
-    LOG(ERROR) << "Can't apply the alignment object! Geometry is locked!";
+    LOG(error) << "Can't apply the alignment object! Geometry is locked!";
     return false;
   }
 
@@ -268,22 +282,22 @@ bool AlignParam::applyToGeometry() const
     path = pne->GetTitle();
     node = gGeoManager->MakeAlignablePN(pne);
   } else {
-    LOG(DEBUG) << "The symbolic volume name " << symname
+    LOG(debug) << "The symbolic volume name " << symname
                << " does not correspond to a physical entry. Using it as a volume path!";
     path = symname;
     if (!gGeoManager->CheckPath(path)) {
-      LOG(ERROR) << "Volume path " << path << " is not valid";
+      LOG(error) << "Volume path " << path << " is not valid";
       return false;
     }
     if (gGeoManager->GetListOfPhysicalNodes()->FindObject(path)) {
-      LOG(ERROR) << "Volume path " << path << " has been misaligned already!";
+      LOG(error) << "Volume path " << path << " has been misaligned already!";
       return false;
     }
     node = (TGeoPhysicalNode*)gGeoManager->MakePhysicalNode(path);
   }
 
   if (!node) {
-    LOG(ERROR) << "Volume path " << path << " is not valid";
+    LOG(error) << "Volume path " << path << " is not valid";
     return false;
   }
 
@@ -297,7 +311,7 @@ bool AlignParam::applyToGeometry() const
   *ginv = g->Inverse();
   *ginv *= gprime;
 
-  LOG(DEBUG) << "Aligning volume " << symname;
+  LOG(debug) << "Aligning volume " << symname;
 
   node->Align(ginv);
 
@@ -312,7 +326,7 @@ int AlignParam::getLevel() const
   /// slashes in the corresponding volume path
   //
   if (!gGeoManager) {
-    LOG(ERROR) << "gGeoManager doesn't exist or it is still open: unable to return meaningful level value.";
+    LOG(error) << "gGeoManager doesn't exist or it is still open: unable to return meaningful level value.";
     return -1;
   }
   const char* symname = getSymName().c_str();
@@ -433,4 +447,34 @@ bool AlignParam::setLocalRotation(const TGeoMatrix& m)
   TGeoHMatrix rotm;
   rotm.SetRotation(m.GetRotationMatrix());
   return setLocalParams(rotm);
+}
+
+//_____________________________________________________________________________
+int AlignParam::rectify(double zero)
+{
+  int nonZero = 6;
+  if (std::abs(mX) < zero) {
+    mX = 0.;
+  }
+  if (std::abs(mY) < zero) {
+    mY = 0.;
+    nonZero--;
+  }
+  if (std::abs(mZ) < zero) {
+    mZ = 0.;
+    nonZero--;
+  }
+  if (std::abs(mPsi) < zero) {
+    mPsi = 0.;
+    nonZero--;
+  }
+  if (std::abs(mTheta) < zero) {
+    mTheta = 0.;
+    nonZero--;
+  }
+  if (std::abs(mPhi) < zero) {
+    mPhi = 0.;
+    nonZero--;
+  }
+  return nonZero;
 }

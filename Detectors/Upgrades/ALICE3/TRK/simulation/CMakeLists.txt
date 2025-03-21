@@ -10,17 +10,24 @@
 # or submit itself to any jurisdiction.
 
 o2_add_library(TRKSimulation
-               SOURCES src/V11Geometry.cxx src/V1Layer.cxx src/V3Layer.cxx
-                       src/Detector.cxx src/V3Services.cxx
-               PUBLIC_LINK_LIBRARIES O2::TRKBase O2::ITSMFTSimulation
-                                     ROOT::Physics)
+               SOURCES src/TRKLayer.cxx
+                       src/Detector.cxx
+                       src/Digitizer.cxx
+                       src/TRKServices.cxx
+                       src/DPLDigitizerParam.cxx
+                       src/TRKPetalCase.cxx
+                       src/TRKPetalLayer.cxx
+                       src/TRKPetalDisk.cxx
+               PUBLIC_LINK_LIBRARIES O2::TRKBase
+                                     O2::FT3Simulation
+                                     O2::ITSMFTSimulation
+                                     O2::SimulationDataFormat)
 
 o2_target_root_dictionary(TRKSimulation
-                          HEADERS include/TRKSimulation/Detector.h
-                                  include/TRKSimulation/V1Layer.h
-                                  include/TRKSimulation/V3Layer.h
-                                  include/TRKSimulation/V11Geometry.h
-                                  include/TRKSimulation/V3Services.h
-                                  )
-
-o2_data_file(COPY data  DESTINATION Detectors/TRK/simulation)
+                          HEADERS include/TRKSimulation/Digitizer.h
+                                  include/TRKSimulation/Detector.h
+                                  include/TRKSimulation/TRKLayer.h
+                                  include/TRKSimulation/TRKServices.h
+                                  include/TRKSimulation/TRKPetalCase.h
+                                  include/TRKSimulation/TRKPetalLayer.h
+                                  include/TRKSimulation/TRKPetalDisk.h)

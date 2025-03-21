@@ -26,6 +26,11 @@
 namespace o2::framework
 {
 
+/// This struct holds information about a given
+/// device as known by the driver. Due to the distributed
+/// nature of O2, you should not assume that the updates
+/// to this struct are a reflection of the current state
+/// of the device, merely the last known state.
 struct DeviceInfo {
   /// The pid of the device associated to this device
   pid_t pid;
@@ -40,6 +45,8 @@ struct DeviceInfo {
   size_t historySize;
   /// The maximum log level ever seen by this device
   LogParsingHelpers::LogLevel maxLogLevel;
+  /// The minimum log level for log messages sent/displayed by this device
+  LogParsingHelpers::LogLevel logLevel{LogParsingHelpers::LogLevel::Info};
 
   /// The minimum level after which the device will exit with 0
   LogParsingHelpers::LogLevel minFailureLevel;
@@ -60,20 +67,25 @@ struct DeviceInfo {
   bool readyToQuit = false;
   /// The current state of the device, as reported by it
   StreamingState streamingState = StreamingState::Streaming;
-  /// Index for a particular relayer.
-  Metric2DViewIndex dataRelayerViewIndex;
-  /// Index for the variables of a given relayer.
-  Metric2DViewIndex variablesViewIndex;
-  /// Index for the queries of each input route.
-  Metric2DViewIndex queriesViewIndex;
+  /// The current state of the device, as reported by it
+  /// Use fair::mq::GetState() to have the enum value.
+  /// @return a string from one of fair::mq::GetStateName
+  std::string deviceState;
+  /// Index for the metrics to be displayed associated to
+  /// each input channel of the device.
+  Metric2DViewIndex inputChannelMetricsViewIndex;
+  /// Index for the metrics to be displayed associated to
+  /// each input channel of the device.
+  Metric2DViewIndex outputChannelMetricsViewIndex;
+
   /// Current configuration for the device
   boost::property_tree::ptree currentConfig;
   /// Current provenance for the configuration keys
   boost::property_tree::ptree currentProvenance;
-  /// Port to use to connect to tracy profiler
-  short tracyPort;
   /// Timestamp of the last signal received
   size_t lastSignal;
+  /// An incremental number for the state of the device
+  int providedState = 0;
 };
 
 } // namespace o2::framework

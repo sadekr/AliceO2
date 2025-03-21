@@ -12,6 +12,8 @@
 /// @brief meta data of the file produced by O2
 
 #include "DetectorsCommonDataFormats/FileMetaData.h"
+#include "Framework/DataTakingContext.h"
+#include "CommonUtils/StringUtils.h"
 #include <Framework/Logger.h>
 #include <TMD5.h>
 #include <filesystem>
@@ -19,16 +21,24 @@
 
 using namespace o2::dataformats;
 
-bool FileMetaData::fillFileData(const std::string& fname)
+bool FileMetaData::fillFileData(const std::string& fname, bool fillmd5, const std::string& tmpEnding)
 {
+  // fill metadata for fname, accounting that the fname might be temporary one while the real one is fnameFinal
   try {
     lurl = std::filesystem::canonical(fname).string();
     size = std::filesystem::file_size(lurl);
-    std::unique_ptr<TMD5> md5ptr{TMD5::FileChecksum(fname.c_str())};
-    md5 = md5ptr->AsString();
+    if (fillmd5) {
+      std::unique_ptr<TMD5> md5ptr{TMD5::FileChecksum(fname.c_str())};
+      if (md5ptr) {
+        md5 = md5ptr->AsString();
+      }
+    }
     ctime = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now()).time_since_epoch().count();
+    if (tmpEnding.size()) {
+      o2::utils::Str::rtrim(lurl, tmpEnding);
+    }
   } catch (std::exception const& e) {
-    LOG(ERROR) << "Failed to fill metadata for file " << fname << ", reason: " << e.what();
+    LOG(error) << "Failed to fill metadata for file " << fname << ", reason: " << e.what();
     return false;
   }
   return true;
@@ -77,7 +87,28 @@ std::string FileMetaData::asString() const
   if (!priority.empty()) {
     ms += fmt::format("priority: {}\n", priority);
   }
+  if (persistent) {
+    ms += fmt::format("persistent: {}\n", persistent);
+  }
+  if (!detComposition.empty()) {
+    ms += fmt::format("det_composition: {}\n", detComposition);
+  }
+  if (!tfOrbits.empty()) {
+    ms += fmt::format("TFOrbits: {}", tfOrbits[0]);
+    for (size_t i = 1; i < tfOrbits.size(); i++) {
+      ms += fmt::format(",{}", tfOrbits[i]);
+    }
+    ms += "\n";
+  }
+
   return ms;
+}
+
+void FileMetaData::setDataTakingContext(const o2::framework::DataTakingContext& dtc)
+{
+  LHCPeriod = dtc.lhcPeriod;
+  detComposition = dtc.detectors;
+  run = dtc.runNumber;
 }
 
 std::ostream& o2::dataformats::operator<<(std::ostream& stream, const FileMetaData& h)

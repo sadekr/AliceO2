@@ -20,7 +20,7 @@
 #include "TGeoCompositeShape.h"
 #include "TGeoBoolNode.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "ITSMFTSimulation/AlpideChip.h"
 #include "ITSMFTBase/SegmentationAlpide.h"
@@ -55,7 +55,7 @@ Ladder::Ladder(LadderSegmentation* segmentation)
   : TNamed(segmentation->GetName(), segmentation->GetName()), mSegmentation(segmentation), mFlex(nullptr)
 {
 
-  LOG(DEBUG1) << "Ladder " << Form("creating : %s", GetName());
+  LOG(debug1) << "Ladder " << Form("creating : %s", GetName());
   mLadderVolume = new TGeoVolumeAssembly(GetName());
 }
 
@@ -78,8 +78,14 @@ TGeoVolume* Ladder::createVolume()
 
   auto& mftBaseParam = MFTBaseParam::Instance();
   if (mftBaseParam.buildFlex) {
+
+    // to perform the alignment
+    Double_t shiftFlex = 0.0;
+    if (mftBaseParam.buildAlignment) {
+      shiftFlex = 0.2;
+    }
     TGeoVolumeAssembly* flexVol = mFlex->makeFlex(mSegmentation->getNSensors(), flexLength);
-    mLadderVolume->AddNode(flexVol, 1, new TGeoTranslation(flexLength / 2 + Geometry::sSensorSideOffset / 2, shiftY, Geometry::sFlexThickness / 2 - 2 * (Geometry::sKaptonOnCarbonThickness + Geometry::sKaptonGlueThickness)));
+    mLadderVolume->AddNode(flexVol, 1, new TGeoTranslation(flexLength / 2 + Geometry::sSensorSideOffset / 2, shiftY, Geometry::sFlexThickness / 2 - 2 * (Geometry::sKaptonOnCarbonThickness + Geometry::sKaptonGlueThickness) - shiftFlex));
   }
   // Create the CMOS Sensors
   createSensors();
@@ -92,6 +98,7 @@ TGeoVolume* Ladder::createVolume()
 //_____________________________________________________________________________
 void Ladder::createSensors()
 {
+  auto& mftBaseParam = MFTBaseParam::Instance();
 
   Geometry* mftGeom = Geometry::instance();
 
@@ -137,8 +144,13 @@ void Ladder::createSensors()
     Double_t pos[3] = {SegmentationAlpide::SensorSizeCols / 2., SegmentationAlpide::SensorSizeRows / 2.,
                        Geometry::sChipThickness / 2. - Geometry::sGlueThickness - 2 * (Geometry::sKaptonOnCarbonThickness + Geometry::sKaptonGlueThickness)};
 
+    // To perform chips alignment --> shift of the chip glue layer
+    Double_t shiftGlue = 0.0;
+    if (mftBaseParam.buildAlignment) {
+      shiftGlue = 0.19;
+    }
     Double_t posglue[3] = {SegmentationAlpide::SensorSizeCols / 2., SegmentationAlpide::SensorSizeRows / 2.,
-                           Geometry::sGlueThickness / 2 - Geometry::sChipThickness - 2 * (Geometry::sKaptonOnCarbonThickness + Geometry::sKaptonGlueThickness)};
+                           Geometry::sGlueThickness / 2 - Geometry::sChipThickness + shiftGlue - 2 * (Geometry::sKaptonOnCarbonThickness + Geometry::sKaptonGlueThickness)}; // fm
 
     Double_t master[3];
     Double_t masterglue[3];
@@ -154,7 +166,7 @@ void Ladder::createSensors()
     masterglue[1] -= shape->GetDY();
     masterglue[2] -= shape->GetDZ();
 
-    LOG(DEBUG1) << "CreateSensors " << Form("adding chip %s_%d ", namePrefixS.Data(), ichip);
+    LOG(debug1) << "CreateSensors " << Form("adding chip %s_%d ", namePrefixS.Data(), ichip);
     // chipPos->Print();
 
     TGeoTranslation* trans = new TGeoTranslation(master[0], master[1], master[2]);

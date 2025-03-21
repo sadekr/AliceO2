@@ -46,7 +46,7 @@ void customize(std::vector<ConfigParamSpec>& options)
 #include <TH1F.h>
 #include <memory>
 #include <random>
-#include <fairmq/FairMQLogger.h>
+#include "Framework/Logger.h"
 #include "Mergers/MergerInfrastructureBuilder.h"
 
 using namespace std::chrono;
@@ -71,14 +71,14 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     for (size_t p = 0; p < objectsProducers; p++) {
       mergersInputs.push_back({ "mo",               "TST",
                                 "HISTO",            static_cast<o2::header::DataHeader::SubSpecificationType>(p + 1),
-                                Lifetime::Timeframe });
+                                Lifetime::Sporadic });
       DataProcessorSpec producer{
         "producer-histo" + std::to_string(p), Inputs{},
         Outputs{ { { "mo" },
                    "TST",
                    "HISTO",
                    static_cast<o2::header::DataHeader::SubSpecificationType>(p + 1),
-                   Lifetime::Timeframe } },
+                   Lifetime::Sporadic } },
         AlgorithmSpec{
           (AlgorithmSpec::ProcessCallback)[ p, periodus = int(1000000 / objectsRate), objectsBins, objectsProducers ](
             ProcessingContext& processingContext) mutable { static auto lastTime = steady_clock::now();
@@ -104,7 +104,8 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     mergersBuilder.setOutputSpec({{ "main" }, "TST", "HISTO", 0 });
     MergerConfig mergerConfig;
     mergerConfig.inputObjectTimespan = { mergersInputObjectTimespan };
-    mergerConfig.publicationDecision = { mergersPublicationDecision, mergersPublicationDecision == PublicationDecision::EachNSeconds ? mergersPublicationInterval : 1.0 };
+    std::vector<std::pair<size_t, size_t>> param = {{mergersPublicationInterval, 1}};
+    mergerConfig.publicationDecision = { mergersPublicationDecision, param };
     mergerConfig.mergedObjectTimespan = { MergedObjectTimespan::FullHistory };
     mergerConfig.topologySize = { TopologySize::NumberOfLayers, mergersLayers };
     mergersBuilder.setConfig(mergerConfig);
@@ -114,7 +115,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     DataProcessorSpec printer{
       "printer-bins",
       Inputs{
-        { "histo", "TST", "HISTO", 0 }
+        { "histo", "TST", "HISTO", 0, Lifetime::Sporadic }
       },
       Outputs{},
       AlgorithmSpec{
@@ -125,11 +126,11 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
             for (int i = 1; i <= histo->GetNbinsX(); i++) {
               bins += " " + std::to_string((int) histo->GetBinContent(i));
               if (i >= 100) {
-                LOG(INFO) << "Trimming the output to 100 entries, total is: " << histo->GetNbinsX();
+                LOG(info) << "Trimming the output to 100 entries, total is: " << histo->GetNbinsX();
                 break;
               }
             }
-            LOG(INFO) << bins;
+            LOG(info) << bins;
           };
         }
       }

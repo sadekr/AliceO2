@@ -29,9 +29,11 @@ struct CompressedClustersCounters {
   unsigned int nUnattachedClusters = 0;
   unsigned int nAttachedClustersReduced = 0;
   unsigned int nSliceRows = 36 * 152;
-  unsigned char nComppressionModes = 0;
+  unsigned char nComppressionModes = 0; // Don't fix this name due to ROOT dictionaries!
+  float solenoidBz = -1e6f;
+  int maxTimeBin = -1e6;
 
-  ClassDefNV(CompressedClustersCounters, 2);
+  ClassDefNV(CompressedClustersCounters, 3);
 };
 
 template <class TCHAR, class TSHORT, class TINT>
@@ -63,7 +65,7 @@ struct CompressedClustersPtrs_x {
   TSHORT nTrackClusters = 0;  //!
   TINT nSliceRowClusters = 0; //!
 
-  ClassDefNV(CompressedClustersPtrs_x, 2);
+  ClassDefNV(CompressedClustersPtrs_x, 3);
 };
 
 struct CompressedClustersPtrs : public CompressedClustersPtrs_x<unsigned char*, unsigned short*, unsigned int*> {
@@ -74,28 +76,30 @@ struct CompressedClustersOffsets : public CompressedClustersPtrs_x<size_t, size_
 
 struct CompressedClustersFlat;
 
-struct CompressedClusters : public CompressedClustersCounters, public CompressedClustersPtrs {
-  CompressedClusters() CON_DEFAULT;
-  ~CompressedClusters() CON_DEFAULT;
+struct CompressedClusters : public CompressedClustersCounters, public CompressedClustersPtrs { // TODO: Need a const version of this, currently the constructor allows to create a non-const version from const CompressedClustersFlat, which should not be allowed
+  CompressedClusters() = default;
+  ~CompressedClusters() = default;
   CompressedClusters(const CompressedClustersFlat& c);
 
-  ClassDefNV(CompressedClusters, 2);
+  void dump();
+
+  ClassDefNV(CompressedClusters, 3);
 };
 
 struct CompressedClustersROOT : public CompressedClusters {
-  CompressedClustersROOT() CON_DEFAULT;
+  CompressedClustersROOT() = default;
   CompressedClustersROOT(const CompressedClustersFlat& v) : CompressedClusters(v) {}
   CompressedClustersROOT(const CompressedClusters& v) : CompressedClusters(v) {}
   // flatbuffer used for streaming
   int flatdataSize = 0;
   char* flatdata = nullptr; //[flatdataSize]
 
-  ClassDefNV(CompressedClustersROOT, 2);
+  ClassDefNV(CompressedClustersROOT, 3);
 };
 
 struct CompressedClustersFlat : private CompressedClustersCounters, private CompressedClustersOffsets {
   friend struct CompressedClusters;               // We don't want anyone to access the members directly, should only be used to construct a CompressedClusters struct
-  CompressedClustersFlat() CON_DELETE;            // Must not be constructed
+  CompressedClustersFlat() = delete;              // Must not be constructed
   size_t totalDataSize = 0;                       // Total data size of header + content
   const CompressedClusters* ptrForward = nullptr; // Must be 0 if this object is really flat, or can be a ptr to a CompressedClusters struct (abusing the flat structure to forward a ptr to the e.g. root version)
 

@@ -8,15 +8,13 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#ifndef FRAMEWORK_LOGPARSINGHELPERS
-#define FRAMEWORK_LOGPARSINGHELPERS
+#ifndef O2_FRAMEWORK_LOGPARSINGHELPERS_H_
+#define O2_FRAMEWORK_LOGPARSINGHELPERS_H_
 
 #include <string>
 #include <string_view>
 
-namespace o2
-{
-namespace framework
+namespace o2::framework
 {
 
 /// A set of helpers to parse device logs.
@@ -25,8 +23,11 @@ struct LogParsingHelpers {
   enum struct LogLevel {
     Debug,
     Info,
+    Important,
     Warning,
+    Alarm,
     Error,
+    Critical,
     Fatal,
     Unknown,
     Size
@@ -42,6 +43,5 @@ struct LogParsingHelpers {
   static LogLevel parseTokenLevel(std::string_view const s);
 };
 
-} // namespace framework
-} // namespace o2
-#endif // FRAMEWORK_LOGPARSINGHELPERS
+} // namespace o2::framework
+#endif // O2_FRAMEWORK_LOGPARSINGHELPERS_H_

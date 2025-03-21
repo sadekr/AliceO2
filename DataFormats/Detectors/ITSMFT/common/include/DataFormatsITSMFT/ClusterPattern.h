@@ -65,6 +65,14 @@ class ClusterPattern
     pattIt += nBytes;
   }
 
+  template <class iterator>
+  static void skipPattern(iterator& pattIt)
+  {
+    unsigned char b0 = *pattIt++, b1 = *pattIt++;
+    int nbits = b0 * b1;
+    pattIt += nbits / 8 + (((nbits) % 8) != 0);
+  }
+
   /// Constructor from cluster patterns
   template <class iterator>
   ClusterPattern(iterator& pattIt)
@@ -88,6 +96,7 @@ class ClusterPattern
   int getNPixels() const;
   /// Prints the pattern
   friend std::ostream& operator<<(std::ostream& os, const ClusterPattern& top);
+  void print() const;
   /// Sets the pattern
   void setPattern(int nRow, int nCol, const unsigned char patt[MaxPatternBytes]);
   /// Sets the whole bitmask: the number of rows, the number of columns and the pattern

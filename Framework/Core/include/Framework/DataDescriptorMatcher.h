@@ -14,17 +14,21 @@
 #include "Framework/ConcreteDataMatcher.h"
 #include "Framework/DataProcessingHeader.h"
 #include "Framework/RuntimeError.h"
+#include "Framework/TimesliceSlot.h"
 #include "Headers/DataHeader.h"
-#include "Headers/Stack.h"
 
 #include <array>
 #include <cstdint>
 #include <iosfwd>
 #include <string>
-#if !defined(__CLING__) && !defined(__ROOTCLING__)
 #include <variant>
-#endif
 #include <vector>
+#include <ostream>
+
+namespace o2::header
+{
+struct Stack;
+}
 
 namespace o2::framework::data_matcher
 {
@@ -46,8 +50,9 @@ struct ContextRef {
 enum ContextPos {
   STARTTIME_POS = 0,     /// The DataProcessingHeader::startTime associated to the timeslice
   TFCOUNTER_POS = 14,    /// The DataHeader::tfCounter associated to the timeslice
-  FIRSTTFORBIT_POS = 15, /// The DataHeader::firstTFOrbit associated to the timeslice
-  RUNNUMBER_POS = 13     /// The DataHeader::runNumber associated to the timeslice
+  FIRSTTFORBIT_POS = 15, /// The DataHeader::firstTForbit associated to the timeslice
+  RUNNUMBER_POS = 13,    /// The DataHeader::runNumber associated to the timeslice
+  CREATIONTIME_POS = 12  /// The DataProcessingHeader::creation associated to the timeslice
 };
 
 /// An element of the matching context. Context itself is really a vector of
@@ -55,14 +60,11 @@ enum ContextPos {
 /// We do not have any float in the value, because AFAICT there is no need for
 /// it in the O2 DataHeader, however we could add it later on.
 struct ContextElement {
-
-#if !defined(__CLING__) && !defined(__ROOTCLING__)
   using Value = std::variant<uint32_t, uint64_t, std::string, None>;
-#else
-  using Value = None;
-#endif
-  std::string label;    /// The name of the variable contained in this element.
+  char label[24];       /// The name of the variable contained in this element.
   Value value = None{}; /// The actual contents of the element.
+  size_t commitVersion = -1;  /// The committed version of the element. Every time we commit something to it, we bump the version.
+  size_t publishVersion = -1; /// The version of the element which has been published to the GUI.
 };
 
 struct ContextUpdate {
@@ -78,7 +80,13 @@ class VariableContext
  public:
   inline VariableContext();
 
-  ContextElement::Value const& get(size_t pos) const;
+  [[nodiscard]] ContextElement::Value const& get(size_t pos) const;
+
+  /// Publish the context to the GUI / monitoring.
+  /// @a callback is a function which will be called for each element
+  /// @a context is userdata which will be passed to the callback.
+  /// @a name is the name of the metrics to be used.
+  void publish(void (*callback)(VariableContext const&, TimesliceSlot slot, void* context), void* context, TimesliceSlot slot);
 
   inline void put(ContextUpdate&& update);
 
@@ -253,6 +261,7 @@ class DataDescriptorMatcher
 {
  public:
   enum struct Op { Just,
+                   Not,
                    Or,
                    And,
                    Xor };
@@ -290,6 +299,8 @@ class DataDescriptorMatcher
 
   Node const& getLeft() const { return mLeft; };
   Node const& getRight() const { return mRight; };
+  Node& getLeft() { return mLeft; };
+  Node& getRight() { return mRight; };
   Op getOp() const { return mOp; };
 
  private:

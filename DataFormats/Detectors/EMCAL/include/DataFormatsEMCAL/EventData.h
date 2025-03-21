@@ -10,10 +10,13 @@
 // or submit itself to any jurisdiction.
 #ifndef ALICEO2_EMCAL_EVENTDATA_H_
 #define ALICEO2_EMCAL_EVENTDATA_H_
+#include <cstdint>
 #include <gsl/span>
+#include <vector>
 #include "CommonDataFormat/InteractionRecord.h"
 #include "DataFormatsEMCAL/Cell.h"
 #include "DataFormatsEMCAL/Cluster.h"
+#include "DataFormatsEMCAL/MCLabel.h"
 
 namespace o2
 {
@@ -33,10 +36,12 @@ namespace emcal
 /// objects are not filled when creating the event structure.
 template <class InputType>
 struct EventData {
-  InteractionRecord mInteractionRecord; ///< Interaction record for the trigger corresponding to this event
-  gsl::span<const Cluster> mClusters;   ///< EMCAL clusters
-  gsl::span<const InputType> mCells;    ///< EMCAL cells / digits
-  gsl::span<int> mCellIndices;          ///< Cell indices in cluster
+  InteractionRecord mInteractionRecord;                           ///< Interaction record for the trigger corresponding to this event
+  gsl::span<const Cluster> mClusters;                             ///< EMCAL clusters
+  gsl::span<const InputType> mCells;                              ///< EMCAL cells / digits
+  gsl::span<const int> mCellIndices;                              ///< Cell indices in cluster
+  std::vector<gsl::span<const o2::emcal::MCLabel>> mMCCellLabels; ///< span of MC labels for each cell
+  uint64_t mTriggerBits;                                          ///< Trigger bits for the event
 
   /// \brief Reset event structure with empty interaction record and ranges
   void reset()
@@ -44,7 +49,9 @@ struct EventData {
     mInteractionRecord.clear();
     mClusters = gsl::span<const Cluster>();
     mCells = gsl::span<const InputType>();
-    mCellIndices = gsl::span<int>();
+    mCellIndices = gsl::span<const int>();
+    mMCCellLabels = std::vector<gsl::span<const o2::emcal::MCLabel>>();
+    mTriggerBits = 0;
   }
 
   ClassDefNV(EventData, 1);

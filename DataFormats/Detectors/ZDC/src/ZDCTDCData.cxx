@@ -13,7 +13,15 @@
 
 using namespace o2::zdc;
 
+uint32_t ZDCTDCDataErr::mErrVal[NTDCChannels] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+uint32_t ZDCTDCDataErr::mErrId = 0;
+
 void o2::zdc::ZDCTDCData::print() const
 {
-  printf("%2d (%s) %d = %8.3f @ %d = %6.3f\n", id, channelName(id), amp, amplitude(), val, value());
+  int itdc = id & 0x0f;
+  int isig = IdDummy;
+  if (id != 0xff && itdc >= 0 && itdc < NTDCChannels) {
+    isig = TDCSignal[itdc];
+  }
+  printf("%2d (%s) %8.3f @ %d = %6.3f%s%s\n", isig, channelName(isig), amp, val, value(), isBeg() ? " B" : "", isEnd() ? " E" : "");
 }

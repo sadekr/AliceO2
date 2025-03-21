@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "Framework/RootSerializationSupport.h"
 #include "Algorithm/RangeTokenizer.h"
@@ -24,6 +24,7 @@
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "DataFormatsCPV/TriggerRecord.h"
 #include "CPVWorkflow/RecoWorkflow.h"
+#include "CPVWorkflow/DigitReaderSpec.h"
 #include "CPVWorkflow/ClusterizerSpec.h"
 #include "CPVWorkflow/ReaderSpec.h"
 #include "CPVWorkflow/WriterSpec.h"
@@ -59,6 +60,9 @@ o2::framework::WorkflowSpec getWorkflow(bool disableRootInp,
                                         bool disableRootOut,
                                         bool propagateMC,
                                         bool askSTFDist,
+                                        bool isPedestal,
+                                        bool useBadChannelMap,
+                                        bool useGainCalibration,
                                         std::string const& cfgInput,
                                         std::string const& cfgOutput)
 {
@@ -83,17 +87,17 @@ o2::framework::WorkflowSpec getWorkflow(bool disableRootInp,
 
   // //Raw to ....
   if (inputType == InputType::Raw) {
-    //no explicit raw reader
+    // no explicit raw reader
 
     if (isEnabled(OutputType::Digits)) {
-      specs.emplace_back(o2::cpv::reco_workflow::getRawToDigitConverterSpec(askSTFDist));
+      specs.emplace_back(o2::cpv::reco_workflow::getRawToDigitConverterSpec(askSTFDist, isPedestal, useBadChannelMap, useGainCalibration));
       if (!disableRootOut) {
         specs.emplace_back(o2::cpv::getDigitWriterSpec(false));
       }
     }
     if (isEnabled(OutputType::Clusters)) {
       // add clusterizer
-      specs.emplace_back(o2::cpv::reco_workflow::getRawToDigitConverterSpec(askSTFDist));
+      specs.emplace_back(o2::cpv::reco_workflow::getRawToDigitConverterSpec(askSTFDist, isPedestal, useBadChannelMap, useGainCalibration));
       specs.emplace_back(o2::cpv::reco_workflow::getClusterizerSpec(false));
       if (!disableRootOut) {
         specs.emplace_back(o2::cpv::getClusterWriterSpec(false));
@@ -104,7 +108,8 @@ o2::framework::WorkflowSpec getWorkflow(bool disableRootInp,
   // Digits to ....
   if (inputType == InputType::Digits) {
     if (!disableRootInp) {
-      specs.emplace_back(o2::cpv::getDigitsReaderSpec(propagateMC));
+      specs.emplace_back(o2::cpv::getCPVDigitReaderSpec(propagateMC));
+      // specs.emplace_back(o2::cpv::getDigitsReaderSpec(propagateMC));
     }
 
     if (isEnabled(OutputType::Clusters)) {
@@ -116,7 +121,7 @@ o2::framework::WorkflowSpec getWorkflow(bool disableRootInp,
     }
   }
 
-  return std::move(specs);
+  return specs;
 }
 
 } // namespace reco_workflow

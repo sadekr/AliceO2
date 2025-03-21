@@ -22,6 +22,7 @@
 #include "DetectorsDCS/DataPointIdentifier.h"
 #include "DetectorsDCS/DataPointValue.h"
 #include "DetectorsDCS/DeliveryType.h"
+#include "Framework/O2LongInt.h"
 #include "CCDB/CcdbObjectInfo.h"
 #include "CommonUtils/MemFileHelper.h"
 #include "CCDB/CcdbApi.h"
@@ -39,25 +40,33 @@ using DPVAL = o2::dcs::DataPointValue;
 using DPCOM = o2::dcs::DataPointCompositeObject;
 
 struct MFTDCSinfo {
-  std::pair<uint64_t, double> firstValue; // first value seen by the MFT DCS processor
-  std::pair<uint64_t, double> lastValue;  // last value seen by the MFT DCS processor
-  std::pair<uint64_t, double> midValue;   // mid value seen by the MFT DCS processor
-  std::pair<uint64_t, double> maxChange;  // maximum variation seen by the MFT DCS processor
+
+  std::pair<O2LongUInt, double> firstValue;  // first value seen by the MFT DCS processor
+  std::pair<O2LongUInt, double> lastValue;   // last value seen by the MFT DCS processor
+  std::pair<O2LongUInt, double> meanValue;   // mean value seen by the MFT DCS processor
+  std::pair<O2LongUInt, double> stddevValue; // standard deviation value seen by the MFT DCS processor
+  std::pair<O2LongUInt, double> midValue;    // mid value seen by the MFT DCS processor
+  std::pair<O2LongUInt, double> maxChange;   // maximum variation seen by the MFT DCS processor
+  std::pair<O2LongUInt, double> summary;     // number of entries by the MFT DCS processor
+
   MFTDCSinfo()
   {
     firstValue = std::make_pair(0, -999999999);
     lastValue = std::make_pair(0, -999999999);
+    meanValue = std::make_pair(0, -999999999);
+    stddevValue = std::make_pair(0, -999999999);
     midValue = std::make_pair(0, -999999999);
     maxChange = std::make_pair(0, -999999999);
+    summary = std::make_pair(0, -999999999);
   }
   void makeEmpty()
   {
-    firstValue.first = lastValue.first = midValue.first = maxChange.first = 0;
-    firstValue.second = lastValue.second = midValue.second = maxChange.second = -999999999;
+    firstValue.first = lastValue.first = midValue.first = meanValue.first = stddevValue.first = maxChange.first = summary.first = 0.;
+    firstValue.second = lastValue.second = midValue.second = meanValue.second = stddevValue.second = maxChange.second = summary.second = -999999999;
   }
   void print() const;
 
-  ClassDefNV(MFTDCSinfo, 1);
+  ClassDefNV(MFTDCSinfo, 2);
 };
 
 class MFTDCSProcessor
@@ -76,6 +85,7 @@ class MFTDCSProcessor
   int process(const gsl::span<const DPCOM> dps);
   int processDP(const DPCOM& dpcom);
 
+  bool sendDPsCCDB();
   void updateDPsCCDB();
 
   const CcdbObjectInfo& getccdbDPsInfo() const { return mccdbDPsInfo; }
@@ -88,6 +98,26 @@ class MFTDCSProcessor
   void setTF(TFType tf) { mTF = tf; }
   void useVerboseMode() { mVerbose = true; }
 
+  void setThreBackBiasCurrent(float thre)
+  {
+    mThresholdBackBiasCurrent = thre;
+  }
+  void setThreDigitCurrent(float thre)
+  {
+    mThresholdDigitalCurrent = thre;
+  }
+  void setThreAnalogCurrent(float thre)
+  {
+    mThresholdAnalogCurrent = thre;
+  }
+  void setThreBackBiasVoltage(float thre)
+  {
+    mThresholdBackBiasVoltage = thre;
+  }
+  void setThreRULV(float thre)
+  {
+    mThresholdRULV = thre;
+  }
   void clearDPsinfo()
   {
     mDpsdoublesmap.clear();
@@ -108,7 +138,15 @@ class MFTDCSProcessor
 
   bool mVerbose = false;
 
-  ClassDefNV(MFTDCSProcessor, 0);
+  bool mSendToCCDB = false;
+
+  double mThresholdAnalogCurrent;
+  double mThresholdBackBiasCurrent;
+  double mThresholdDigitalCurrent;
+  double mThresholdBackBiasVoltage;
+  double mThresholdRULV;
+
+  ClassDefNV(MFTDCSProcessor, 1);
 };
 
 template <typename T>
@@ -122,7 +160,7 @@ void MFTDCSProcessor::prepareCCDBobjectInfo(T& obj, CcdbObjectInfo& info, const 
   info.setObjectType(clName);
   info.setFileName(flName);
   info.setStartValidityTimestamp(tf);
-  info.setEndValidityTimestamp(99999999999999);
+  info.setEndValidityTimestamp(tf + o2::ccdb::CcdbObjectInfo::MONTH);
   info.setMetaData(md);
 }
 

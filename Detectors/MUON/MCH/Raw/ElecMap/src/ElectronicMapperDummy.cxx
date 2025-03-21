@@ -35,7 +35,7 @@ std::map<uint32_t, uint32_t> buildDsElecId2DsDetIdMap()
   uint8_t groupId{0};
   uint8_t index{0};
 
-  for (auto deId : o2::mch::raw::deIdsForAllMCH) {
+  for (auto deId : o2::mch::constants::deIdsForAllMCH) {
     // assign a tuple (solarId,groupId,index) to the pair (deId,dsId)
     for (auto dsId : dslist(deId)) {
       // index 0..4
@@ -75,7 +75,7 @@ std::map<uint32_t, uint16_t> buildFeeLinkId2SolarIdMap()
 
   std::set<uint16_t> solarIds;
 
-  for (auto deId : o2::mch::raw::deIdsForAllMCH) {
+  for (auto deId : o2::mch::constants::deIdsForAllMCH) {
     // assign a tuple (fee,link) to each solarId
     for (auto dsId : dslist(deId)) {
       if (n % 40 == 0) {
@@ -151,6 +151,36 @@ template <>
 std::set<DsElecId> getAllDs<ElectronicMapperDummy>()
 {
   return impl::getAllDs<ElectronicMapperDummy>();
+}
+
+template <>
+std::set<uint16_t> getSolarUIDsPerFeeId<ElectronicMapperDummy>(uint16_t feeid)
+{
+  return impl::getSolarUIDsPerFeeId<ElectronicMapperDummy>(feeid);
+}
+
+template <>
+std::set<DsDetId> getDualSampas<ElectronicMapperDummy>(uint16_t solarId)
+{
+  return impl::getDualSampas<ElectronicMapperDummy>(solarId);
+}
+
+template <>
+std::set<DsDetId> getDualSampasPerFeeId<ElectronicMapperDummy>(uint16_t feeId)
+{
+  return impl::getDualSampasPerFeeId<ElectronicMapperDummy>(feeId);
+}
+
+template <>
+std::optional<uint16_t> solarIndex2Id<ElectronicMapperDummy>(uint16_t solarIndex)
+{
+  return impl::solarIndex2Id<ElectronicMapperDummy>(solarIndex);
+}
+
+template <>
+std::optional<uint16_t> solarId2Index<ElectronicMapperDummy>(uint16_t solarId)
+{
+  return impl::solarId2Index<ElectronicMapperDummy>(solarId);
 }
 
 } // namespace o2::mch::raw

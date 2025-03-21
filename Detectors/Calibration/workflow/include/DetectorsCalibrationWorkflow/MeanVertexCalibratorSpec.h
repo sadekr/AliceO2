@@ -29,21 +29,26 @@ namespace calibration
 class MeanVertexCalibDevice : public Task
 {
  public:
+  MeanVertexCalibDevice(std::shared_ptr<o2::base::GRPGeomRequest> req, uint32_t dcsMVsubspec) : mCCDBRequest(req), mDCSSubSpec(dcsMVsubspec) {}
   void init(o2::framework::InitContext& ic) final;
   void run(o2::framework::ProcessingContext& pc) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   void sendOutput(DataAllocator& output);
-
+  int mFillNumber = 0;
+  int mRunNumber = 0;
+  uint32_t mDCSSubSpec = 0;
   std::unique_ptr<o2::calibration::MeanVertexCalibrator> mCalibrator;
+  std::shared_ptr<o2::base::GRPGeomRequest> mCCDBRequest;
 };
 
 } // namespace calibration
 
 namespace framework
 {
-DataProcessorSpec getMeanVertexCalibDeviceSpec();
+DataProcessorSpec getMeanVertexCalibDeviceSpec(uint32_t dcsMVsubspec);
 
 } // namespace framework
 } // namespace o2

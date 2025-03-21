@@ -41,7 +41,7 @@ class DCSConfigConsumer : public o2::framework::Task
   {
     auto fileBuff = pc.inputs().get<gsl::span<char>>("confFile");
     auto fileName = pc.inputs().get<std::string>("confFileName");
-    LOG(INFO) << "got input file " << fileName << " of size " << fileBuff.size();
+    LOG(info) << "got input file " << fileName << " of size " << fileBuff.size();
   }
 };
 } // namespace dcs
@@ -53,8 +53,8 @@ DataProcessorSpec getDCSConsumerSpec(DetID det)
   procName += det.getName();
   return DataProcessorSpec{
     procName,
-    Inputs{{"confFile", ConcreteDataTypeMatcher{det.getDataOrigin(), "DCS_CONFIG_FILE"}, Lifetime::Timeframe},
-           {"confFileName", ConcreteDataTypeMatcher{det.getDataOrigin(), "DCS_CONFIG_NAME"}, Lifetime::Timeframe}},
+    Inputs{{"confFile", ConcreteDataTypeMatcher{det.getDataOrigin(), "DCS_CONFIG_FILE"}, Lifetime::Sporadic},
+           {"confFileName", ConcreteDataTypeMatcher{det.getDataOrigin(), "DCS_CONFIG_NAME"}, Lifetime::Sporadic}},
     Outputs{},
     AlgorithmSpec{adaptFromTask<o2::dcs::DCSConfigConsumer>()},
     Options{}};

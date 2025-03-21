@@ -14,8 +14,8 @@
 ///
 /// \author Philippe Pillot, Subatech
 
-#ifndef ALICEO2_MCH_TRACKFINDER_H_
-#define ALICEO2_MCH_TRACKFINDER_H_
+#ifndef O2_MCH_TRACKFINDER_H_
+#define O2_MCH_TRACKFINDER_H_
 
 #include <chrono>
 #include <unordered_map>
@@ -25,7 +25,10 @@
 #include <vector>
 #include <utility>
 
-#include "MCHTracking/Cluster.h"
+#include <gsl/span>
+
+#include "DataFormatsMCH/Cluster.h"
+#include "MCHBase/ErrorMap.h"
 #include "MCHTracking/Track.h"
 #include "MCHTracking/TrackFitter.h"
 
@@ -46,9 +49,13 @@ class TrackFinder
   TrackFinder(TrackFinder&&) = delete;
   TrackFinder& operator=(TrackFinder&&) = delete;
 
-  void init(float l3Current, float dipoleCurrent);
+  void init();
+  void initField(float l3Current, float dipoleCurrent);
 
-  const std::list<Track>& findTracks(const std::unordered_map<int, std::list<Cluster>>& clusters);
+  const std::list<Track>& findTracks(gsl::span<const Cluster> clusters);
+
+  /// return the counting of encountered errors
+  ErrorMap& getErrorMap() { return mErrorMap; }
 
   /// set the debug level defining the verbosity
   void debug(int debugLevel) { mDebugLevel = debugLevel; }
@@ -57,6 +64,8 @@ class TrackFinder
   void printTimers() const;
 
  private:
+  const std::list<Track>& findTracks(const std::unordered_map<int, std::list<const Cluster*>>& clusters);
+
   void findTrackCandidates();
   void findTrackCandidatesInSt5();
   void findTrackCandidatesInSt4();
@@ -83,6 +92,7 @@ class TrackFinder
   void finalize();
 
   void createTrack(const Cluster& cl1, const Cluster& cl2);
+  std::list<Track>::iterator addTrack(const std::list<Track>::iterator& pos, const Track& track);
 
   bool isAcceptable(const TrackParam& param) const;
 
@@ -91,10 +101,10 @@ class TrackFinder
   void setCurrentParam(Track& track, const TrackParam& param, int chamber, bool smoothed = false);
   bool propagateCurrentParam(Track& track, int chamber);
 
-  bool areUsed(const Cluster& cl1, const Cluster& cl2, const std::list<Track>::iterator& itFirstTrack, const std::list<Track>::iterator& itLastTrack);
-  void excludeClustersFromIdenticalTracks(const std::list<Track>::iterator& itTrack,
-                                          std::unordered_map<int, std::unordered_set<uint32_t>>& excludedClusters,
-                                          const std::list<Track>::iterator& itEndTrack);
+  bool areUsed(const Cluster& cl1, const Cluster& cl2, const std::vector<std::array<uint32_t, 4>>& usedClusters);
+  void excludeClustersFromIdenticalTracks(const std::array<uint32_t, 4>& currentClusters,
+                                          const std::vector<std::array<uint32_t, 8>>& usedClusters,
+                                          std::unordered_map<int, std::unordered_set<uint32_t>>& excludedClusters);
   void moveClusters(std::unordered_map<int, std::unordered_set<uint32_t>>& source, std::unordered_map<int, std::unordered_set<uint32_t>>& destination);
 
   bool isCompatible(const TrackParam& param, const Cluster& cluster, TrackParam& paramAtCluster);
@@ -128,9 +138,14 @@ class TrackFinder
 
   TrackFitter mTrackFitter{}; /// track fitter
 
-  std::array<std::vector<std::pair<const int, const std::list<Cluster>*>>, 32> mClusters{}; ///< array of pointers to the lists of clusters per DE
+  /// array of pointers to the lists of clusters per DE
+  std::array<std::vector<std::pair<const int, const std::list<const Cluster*>*>>, 32> mClusters{};
 
   std::list<Track> mTracks{}; ///< list of reconstructed tracks
+
+  std::chrono::time_point<std::chrono::steady_clock> mStartTime{}; ///< time when the tracking start
+
+  ErrorMap mErrorMap{}; ///< counting of encountered errors
 
   double mChamberResolutionX2 = 0.;      ///< chamber resolution square (cm^2) in x direction
   double mChamberResolutionY2 = 0.;      ///< chamber resolution square (cm^2) in y direction
@@ -157,4 +172,4 @@ class TrackFinder
 } // namespace mch
 } // namespace o2
 
-#endif // ALICEO2_MCH_TRACKFINDER_H_
+#endif // O2_MCH_TRACKFINDER_H_

@@ -105,7 +105,11 @@ class CalArray
   std::vector<T>& getData() { return mData; }
 
   /// calculate the sum of all elements
-  const T getSum() const { return std::accumulate(mData.begin(), mData.end(), T(0)); }
+  template <typename U = T>
+  const U getSum() const
+  {
+    return std::accumulate(mData.begin(), mData.end(), U{});
+  }
 
   /// Multiply all val to all channels
   const CalArray<T>& multiply(const T& val) { return *this *= val; }
@@ -121,6 +125,9 @@ class CalArray
 
   /// Divide this by other channel by channel
   const CalArray& operator/=(const CalArray& other);
+
+  /// check for equality
+  bool operator==(const CalArray& other) const;
 
   /// Add value to all channels
   const CalArray& operator+=(const T& val);
@@ -141,10 +148,20 @@ class CalArray
     return *this;
   }
 
+  template <typename U = T>
+  U getMean() const
+  {
+    const auto& vals = mData;
+    const U nVal = static_cast<U>(vals.size());
+    const U sum = std::accumulate(vals.begin(), vals.end(), 0.f);
+
+    return (nVal > 0) ? sum / nVal : U{0};
+  }
+
  private:
   std::string mName;
   // better to use std::array?
-  //std::vector<T, Vc::Allocator<T>> mData;
+  // std::vector<T, Vc::Allocator<T>> mData;
   // how to use Vc::Allocator in this case? Specialisation for float, double, etc?
   std::vector<T> mData; ///< calibration data
   PadSubset mPadSubset; ///< Subset type
@@ -191,7 +208,7 @@ template <class T>
 inline void CalArray<T>::setValue(const size_t row, const size_t pad, const T& value)
 {
   /// \todo might need check for row, pad or position limits
-  static const auto& mapper = Mapper::instance();
+  const auto& mapper = Mapper::instance();
   size_t position = mapper.getPadNumber(mPadSubset, mPadSubsetNumber, row, pad);
   setValue(position, value);
 }
@@ -201,7 +218,7 @@ template <class T>
 inline const T CalArray<T>::getValue(const size_t row, const size_t pad) const
 {
   /// \todo might need check for row, pad or position limits
-  static const auto& mapper = Mapper::instance();
+  const auto& mapper = Mapper::instance();
   size_t position = mapper.getPadNumber(mPadSubset, mPadSubsetNumber, row, pad);
   return getValue(position);
 }
@@ -211,11 +228,15 @@ template <class T>
 inline const CalArray<T>& CalArray<T>::operator+=(const CalArray<T>& other)
 {
   if (!((mPadSubset == other.mPadSubset) && (mPadSubsetNumber == other.mPadSubsetNumber))) {
-    LOG(ERROR) << "You are trying to operate on incompatible objects: Pad subset type and number must be the same on both objects";
+    LOG(error) << "You are trying to operate on incompatible objects: Pad subset type and number must be the same on both objects";
     return *this;
   }
   for (size_t i = 0; i < mData.size(); ++i) {
-    mData[i] += other.getValue(i);
+    if constexpr (std::is_same_v<T, bool>) {
+      mData[i] = mData[i] | other.getValue(i);
+    } else {
+      mData[i] += other.getValue(i);
+    }
   }
   return *this;
 }
@@ -225,7 +246,7 @@ template <class T>
 inline const CalArray<T>& CalArray<T>::operator-=(const CalArray<T>& other)
 {
   if (!((mPadSubset == other.mPadSubset) && (mPadSubsetNumber == other.mPadSubsetNumber))) {
-    LOG(ERROR) << "You are trying to operate on incompatible objects: Pad subset type and number must be the same on both objects";
+    LOG(error) << "You are trying to operate on incompatible objects: Pad subset type and number must be the same on both objects";
     return *this;
   }
   for (size_t i = 0; i < mData.size(); ++i) {
@@ -239,11 +260,15 @@ template <class T>
 inline const CalArray<T>& CalArray<T>::operator*=(const CalArray<T>& other)
 {
   if (!((mPadSubset == other.mPadSubset) && (mPadSubsetNumber == other.mPadSubsetNumber))) {
-    LOG(ERROR) << "pad subset type of the objects it not compatible";
+    LOG(error) << "pad subset type of the objects it not compatible";
     return *this;
   }
   for (size_t i = 0; i < mData.size(); ++i) {
-    mData[i] *= other.getValue(i);
+    if constexpr (std::is_same_v<T, bool>) {
+      mData[i] = mData[i] & other.getValue(i);
+    } else {
+      mData[i] *= other.getValue(i);
+    }
   }
   return *this;
 }
@@ -253,7 +278,7 @@ template <class T>
 inline const CalArray<T>& CalArray<T>::operator/=(const CalArray<T>& other)
 {
   if (!((mPadSubset == other.mPadSubset) && (mPadSubsetNumber == other.mPadSubsetNumber))) {
-    LOG(ERROR) << "pad subset type of the objects it not compatible";
+    LOG(error) << "pad subset type of the objects it not compatible";
     return *this;
   }
   for (size_t i = 0; i < mData.size(); ++i) {
@@ -261,10 +286,22 @@ inline const CalArray<T>& CalArray<T>::operator/=(const CalArray<T>& other)
       mData[i] /= other.getValue(i);
     } else {
       mData[i] = 0;
-      LOG(DEBUG) << "Division by 0 detected! Value was set to 0.";
+      LOG(debug) << "Division by 0 detected! Value was set to 0.";
     }
   }
   return *this;
+}
+
+//______________________________________________________________________________
+template <class T>
+inline bool CalArray<T>::operator==(const CalArray<T>& other) const
+{
+  if (!((mPadSubset == other.mPadSubset) && (mPadSubsetNumber == other.mPadSubsetNumber))) {
+    LOG(error) << "pad subset type of the objects it not compatible";
+    return false;
+  }
+  bool isSame = (mData == other.mData);
+  return isSame;
 }
 
 //______________________________________________________________________________

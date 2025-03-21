@@ -12,7 +12,7 @@
 #include "CPVBase/Geometry.h"
 #include "DataFormatsCPV/BadChannelMap.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include <TH2.h>
 
@@ -22,13 +22,13 @@ using namespace o2::cpv;
 
 BadChannelMap::BadChannelMap(short test)
 {
-  //reset all channels to be good
+  // reset all channels to be good
   mBadCells.reset();
 
   if (test == 2) {
-    //Mark few channels as bad for test peurposes
+    // Mark few channels as bad for test peurposes
     for (short i = 0; i < 60; i++) {
-      //module 2
+      // module 2
       unsigned short channelID = 3584 + i * 57;
       mBadCells.set(channelID);
       channelID = 3640 + i * 55;
@@ -36,7 +36,7 @@ BadChannelMap::BadChannelMap(short test)
     }
 
     for (short i = 0; i < 16; i++) {
-      //module 3
+      // module 3
       unsigned short channelID = 8972 + i * 57;
       mBadCells.set(channelID);
       channelID = 8092 + i * 57;
@@ -52,13 +52,13 @@ BadChannelMap::BadChannelMap(short test)
 void BadChannelMap::getHistogramRepresentation(short module, TH2* h) const
 {
   if (!h) {
-    LOG(ERROR) << "provide histogram to be filled";
+    LOG(error) << "provide histogram to be filled";
   }
 
   const short MAXX = 128,
               MAXZ = 60;
   if (h->GetNbinsX() != MAXX || h->GetNbinsY() != MAXZ) {
-    LOG(ERROR) << "Wrong dimentions of input histogram:" << h->GetNbinsX() << "," << h->GetNbinsY() << " instead of " << MAXX << "," << MAXZ;
+    LOG(error) << "Wrong dimentions of input histogram:" << h->GetNbinsX() << "," << h->GetNbinsY() << " instead of " << MAXX << "," << MAXZ;
     return;
   }
 
@@ -83,7 +83,7 @@ void BadChannelMap::PrintStream(std::ostream& stream) const
 {
   // first sort bad channel IDs
   stream << "Number of bad cells:  " << mBadCells.count() << "\n";
-  for (int cellID = 0; cellID < mBadCells.size(); cellID++) {
+  for (unsigned int cellID = 0; cellID < mBadCells.size(); cellID++) {
     if (mBadCells.test(cellID)) {
       stream << cellID << "\n";
     }

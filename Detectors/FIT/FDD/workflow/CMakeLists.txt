@@ -41,11 +41,41 @@ o2_add_executable(digit-reader-workflow
                   COMPONENT_NAME fdd
                   PUBLIC_LINK_LIBRARIES O2::FDDWorkflow)
 
+o2_add_executable(digits-writer-workflow
+                  SOURCES src/digits-writer-workflow.cxx
+                  COMPONENT_NAME fdd
+                  PUBLIC_LINK_LIBRARIES O2::FDDWorkflow)
+
 o2_add_executable(flp-dpl-workflow
                   COMPONENT_NAME fdd
                   SOURCES src/fdd-flp-workflow.cxx
                   PUBLIC_LINK_LIBRARIES O2::FDDWorkflow O2::FDDRaw O2::FITWorkflow
                   TARGETVARNAME fddflpexe)
+
+o2_add_executable(recpoints-reader-workflow
+                  SOURCES src/recpoints-reader-workflow.cxx
+                  COMPONENT_NAME fdd
+                  PUBLIC_LINK_LIBRARIES O2::FDDWorkflow)
+
+o2_add_executable(recpoints-writer-workflow
+                  SOURCES src/recpoints-writer-workflow.cxx
+                  COMPONENT_NAME fdd
+                  PUBLIC_LINK_LIBRARIES O2::FDDWorkflow)
+
+o2_add_executable(integrate-cluster-workflow
+                  SOURCES src/cluster-integrator.cxx
+                  COMPONENT_NAME fdd
+                  PUBLIC_LINK_LIBRARIES O2::FDDWorkflow O2::FITWorkflow)
+
+o2_add_executable(integrate-cluster-reader-workflow
+                  SOURCES src/cluster-integrator-reader.cxx
+                  COMPONENT_NAME fdd
+                  PUBLIC_LINK_LIBRARIES O2::FDDWorkflow O2::FITWorkflow)
+
+o2_add_executable(merge-integrate-cluster-workflow
+                  SOURCES src/cluster-merge-integrator.cxx
+                  COMPONENT_NAME fdd
+                  PUBLIC_LINK_LIBRARIES O2::FDDWorkflow O2::FITWorkflow)
 
 if(NOT APPLE)
 

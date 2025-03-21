@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import sys
+import os
 import numpy as np
+import re
 import ALICEO2dataModelTools as O2DMT
 
 # -----------------------------------------------------------------------------
@@ -8,47 +10,59 @@ import ALICEO2dataModelTools as O2DMT
 #
 # .............................................................................
 # types of column declarations
-# 0: COLUMN
-# 1: INDEX_COLUMN_FULL
-# 2: INDEX_COLUMN
-# 3: SELF_INDEX_COLUMN_FULL
-# 4: SELF_INDEX_COLUMN
-# 5: EXPRESSION_COLUMN
-# 6: DYNAMIC_COLUMN
+#  0: COLUMN
+#  1: INDEX_COLUMN_FULL
+#  2: INDEX_COLUMN
+#  3: SELF_INDEX_COLUMN_FULL
+#  4: SELF_INDEX_COLUMN
+#  5: EXPRESSION_COLUMN
+#  6: DYNAMIC_COLUMN
+#  7: SLICE_INDEX_COLUMN
+#  8: SLICE_INDEX_COLUMN_FULL
+#  9: SELF_SLICE_INDEX_COLUMN
+# 10: SELF_ARRAY_INDEX_COLUMN
 
 def columnTypes(abbr=0):
   if abbr == 0:
-    types = ["", "INDEX_", "INDEX_", "INDEX_", "INDEX_", "EXPRESSION_", "DYNAMIC_"]
+    types = ["", "INDEX_", "INDEX_", "INDEX_", "INDEX_", "EXPRESSION_", "DYNAMIC_", "SLICE_INDEX_", "SLICE_INDEX_", "SLICE_INDEX_", "ARRAY_INDEX_"]
     types[3] = "SELF_"+types[3]
     types[4] = "SELF_"+types[4]
+    types[9] = "SELF_"+types[9]
+    types[10] = "SELF_"+types[10]
     types = [s+"COLUMN" for s in types]
     types = ["DECLARE_SOA_"+s for s in types]
     types[1] = types[1]+"_FULL"
     types[3] = types[3]+"_FULL"
+    types[8] = types[8]+"_FULL"
   else:
-    types = ["", "I", "I", "SI", "SI", "E", "D", "GI"]
+    # always add "GI" as last element
+    types = ["", "I", "I", "SI", "SI", "E", "D", "SLI", "SLI", "SSLI", "SAI", "GI"]
 
   return types
 
 # .............................................................................
 # types of table declarations
 # 0: TABLE
-# 1: TABLE_FULL
-# 2: EXTENDED_TABLE
-# 3: INDEX_TABLE
-# 4: INDEX_TABLE_EXCLUSIVE
-# 5: EXTENDED_TABLE_USER
+# 1: TABLE_VERSIONED
+# 2: TABLE_FULL
+# 3: TABLE_FULL_VERSIONED
+# 4: EXTENDED_TABLE
+# 5: INDEX_TABLE
+# 6: INDEX_TABLE_EXCLUSIVE
+# 7: EXTENDED_TABLE_USER
 
 def tableTypes(abbr=0):
   if abbr == 0:
-    types = ["", "", "EXTENDED_", "INDEX_", "INDEX_", "EXTENDED_"]
+    types = ["", "", "", "", "EXTENDED_", "INDEX_", "INDEX_", "EXTENDED_"]
     types = [s+"TABLE" for s in types]
     types = ["DECLARE_SOA_"+s for s in types]
-    types[1] = types[1]+"_FULL"
-    types[4] = types[4]+"_EXCLUSIVE"
-    types[5] = types[5]+"_USER"
+    types[1] = types[1]+"_VERSIONED"
+    types[2] = types[2]+"_FULL"
+    types[3] = types[3]+"_FULL_VERSIONED"
+    types[6] = types[6]+"_EXCLUSIVE"
+    types[7] = types[7]+"_USER"
   else:
-    types = ["", "", "E", "I", "I", "E"]
+    types = ["", "", "", "", "E", "I", "I", "E"]
 
   return types
 
@@ -105,8 +119,9 @@ class using:
       for nsp in dm.namespaces:
         for use in nsp.usings:
           if self.master == use.name:
-            self.kind += 2
-            self.joiners = use.joiners
+            if len(use.joiners) > 0:
+              self.kind += 2
+              self.joiners = use.joiners
 
   def print(self):
     print("    using: "+self.name)
@@ -157,23 +172,31 @@ class column:
     return -1
 
   def print(self):
-    print("        ns: "+self.nslevel)
-    print("    column: "+self.cname)
-    print("      kind: ", self.kind)
-    print("    access: "+self.gname)
-    print("      type: "+self.type)
-    print("   comment: "+self.comment)
+    print("         ns: "+self.nslevel)
+    print("     column: "+self.cname)
+    print("       kind: ", self.kind)
+    print("     access: "+self.gname)
+    print("       type: "+self.type)
+    print("header file: "+self.hfile)
+    print("    comment: "+self.comment)
 
   def printHTML(self):
     cn2u = fullDataModelName(self.nslevel, self.cname)
-    cn2u = cn2u.replace(":collision",":&zwnj;collision")
-    print("      <tr>")
-    print("        <td>"+cn2u+"</td>")
-    print("        <td>"+columnTypes(1)[self.kind]+"</td>")
-    print("        <td>"+self.gname+"</td>")
-    print("        <td>"+self.type+"</td>")
-    print("        <td>"+self.comment+"</td>")
-    print("      </tr>")
+
+    # some columns don't need to be printed
+    cols2Skip = [ "o2::soa::Marker" ]
+    if not any(cn2u.startswith(word) for word in cols2Skip):
+      cn2u = cn2u.replace(":collision",":&zwnj;collision")
+      # replace < by &lt; and > by &gt;
+      ty2u = self.type.replace("<","&lt;").replace(">","&gt;")
+      print("      <tr>")
+      print("        <td>"+cn2u+"</td>")
+      print("        <td>"+columnTypes(1)[self.kind]+"</td>")
+      print("        <td>"+self.gname+"</td>")
+      print("        <td>"+ty2u+"</td>")
+      print("        <td>"+self.comment+"</td>")
+      print("      </tr>")
+
 
 # .............................................................................
 # holds a table
@@ -210,6 +233,7 @@ class table:
 
   def print(self):
     print("    table: "+self.tname)
+    print("   header file: ", self.hfile)
     print("          kind: ", self.kind)
     print("     producers: ", len(self.CErelations))
     for cer in self.CErelations:
@@ -315,8 +339,45 @@ class datamodel:
       self.CErelations.append(CErelation)
       self.defines = list()
       self.namespaces = list()
+      self.categories = list()
+
+      # set some variables
+      self.O2path = ""
+      self.O2Physicspath = ""
+      self.O2href = ""
+      self.O2Physicshref = ""
+      self.delimAO2D = ""
+      self.delimHelpers = ""
+      self.delimPWGs = ""
+      self.delimJoins = ""
+      # update with values from initCard
       if initCard != None:
+        psep = os.path.sep
         self.initCard = initCard
+        tmp = initCard.find("O2general/mainDir/O2local")
+        if tmp != None:
+          self.O2path = tmp.text.strip().rstrip(psep)+psep
+        tmp = initCard.find("O2general/mainDir/O2Physicslocal")
+        if tmp != None:
+          self.O2Physicspath = tmp.text.strip().rstrip(psep)+psep
+        tmp = initCard.find("O2general/mainDir/O2GitHub")
+        if tmp != None:
+          self.O2href = tmp.text.strip().rstrip(psep)+psep
+        tmp = initCard.find("O2general/mainDir/O2PhysicsGitHub")
+        if tmp != None:
+          self.O2Physicshref = tmp.text.strip().rstrip(psep)+psep
+        tmp = initCard.find("O2general/delimAO2D")
+        if tmp != None:
+          self.delimAO2D = tmp.text.strip()
+        tmp = initCard.find("O2general/delimHelpers")
+        if tmp != None:
+          self.delimHelpers = tmp.text.strip()
+        tmp = initCard.find("O2general/delimPWGs")
+        if tmp != None:
+          self.delimPWGs = tmp.text.strip()
+        tmp = initCard.find("O2general/delimJoins")
+        if tmp != None:
+          self.delimJoins = tmp.text.strip()
 
       # read the file
       lines_in_file = file.readlines()
@@ -325,6 +386,16 @@ class datamodel:
       # parse datamodel
       self.parseContent(hfile, content, "", self)
       # self.synchronize()
+
+  # extract the categories definition
+  def setTableCategories(self, DMxml):
+
+    # table categories
+    cats = DMxml.find('categories')
+    for cat in cats:
+      catName = cat.attrib['name']
+      catTables = "".join(cat.text.split()).split(",")
+      self.categories.append(tableCategory(catName,catTables))
 
   # A namespace is contained between "namespace 'name' {" and "}"
   # Be aware that namespaces can be nested!
@@ -498,136 +569,162 @@ class datamodel:
     for ns in self.namespaces:
       ns.print()
 
-  def printProducerTables(self, href2u, path2u, tabs, uses, CER, tabs2u):
+  def printSingleTable(self, tabs, uses, tab2u):
+     # print the table header
+    tab2u.printHeaderHTML()
+
+    # print table comment
+    print("    <div>")
+    print("      ", tab2u.comment)
+    print("    </div>")
+
+    # print header file
+    if "O2Physics" in tab2u.hfile:
+      href2u = self.O2Physicshref
+      path2u = self.O2Physicspath
+    else:
+      href2u = self.O2href
+      path2u = self.O2path
+
+    hf2u = O2DMT.block(tab2u.hfile.split(path2u)[
+                 1:], False).strip().lstrip("/")
+    print("    <div>")
+    print("      Header file: <a href=\""+href2u +
+          "/"+hf2u+"\" target=\"_blank\">"+hf2u+"</a>")
+    print("    </div>")
+
+    # print extends
+    if tab2u.kind == 4 or tab2u.kind == 7:
+      print("    <div>Extends:")
+      print("      <ul>")
+      print("        ", tab2u.toExtendWith)
+      print("      </ul>")
+      print("    </div>")
+
+    # find all usings with tab2u
+    useTable = list()
+    for use in uses:
+      if tab2u.tname in use.joiners:
+        useTable.append(use)
+      elif tab2u.tname == use.master:
+        useTable.append(use)
+
+    # print these usings
+    if len(useTable) > 0:
+      print("    <div>Is used in:")
+      print("      <ul>")
+      for use in useTable:
+        use.printHTML()
+      print("      </ul>")
+      print("    </div>")
+
+    # print the table header
+    tab2u.printSubHeaderHTML()
+
+    # EXTENDED_TABLE and EXTENDED_TABLE_USER are extended
+    if tab2u.kind == 4 or tab2u.kind == 7:
+      # this table has to be extended, find the extending table and
+      # print all of its columns
+      einds = [i for i, x in enumerate(tabs) if x.tname == tab2u.toExtendWith]
+      for ind in einds:
+        for col in tabs[ind].columns:
+          col.printHTML()
+
+    # print the remaining columns
+    for col in tab2u.columns:
+      col.printHTML()
+
+    # print the table footer
+    tab2u.printFooterHTML()
+
+
+  def printTables(self, DMtype, tabs, uses, CER, tabs2u):
     print("")
-    print("#### ", CER[2])
 
     # add source code information if available
-    if CER[1] != "":
+    if "O2Physics" in CER[0]:
+      href2u = self.O2Physicshref
+      path2u = self.O2Physicspath
+    else:
+      href2u = self.O2href
+      path2u = self.O2path
+
+    if DMtype != 0:
+      if DMtype == 1:
+        print("## ", CER[2])
+      elif DMtype == 2:
+        print("### ", CER[2])
+
       if href2u != "":
         print("Code file: <a href=\""+href2u+"/"+CER[0].split(path2u)[1] +
               "/"+CER[1]+"\" target=\"_blank\">"+CER[1]+"</a>")
       else:
         print("Code file: "+CER[0]+"/"+CER[1])
 
-    print("<div>")
-    print("")
+    tabInCat = list()
+    others = list()
+    if DMtype == 0:
+      # pattern for table versions
+      vPattern = self.initCard.find('O2general/TableVersionPattern')
+      if vPattern == None:
+        vPattern = "_\d\d\d$"
+      else:
+        vPattern = vPattern.text.strip()
 
-    # print all tables of given producer
-    for tab in tabs2u:
-      # print the table header
-      tab.printHeaderHTML()
+      # Analyze the tables and categories
+      tabInCat = [False]*len(tabs2u)
+      for cat in self.categories:
+        for i in range(0,len(tabs2u)):
+          if baseTableName(tabs2u[i].tname, vPattern) in cat.members:
+            tabInCat[i] = True
+      others = [i for i, x in enumerate(tabInCat) if x == False]
 
-      # print table comment
-      print("    <div>")
-      print("      ", tab.comment)
-      print("    </div>")
+      # print available categories
+      txt2print = "For better overview the tables are grouped into the following categories: \|"
+      for cat in self.categories:
+        txt2print = txt2print+' ['+cat.name+'](#cat_'+cat.name+') \|'
+      if len(others) > 0:
+        txt2print = txt2print+' [Others](#cat_Others) \|'
+      print(txt2print)
+      print()
 
-      # print header file
-      hf2u = O2DMT.block(tab.hfile.split(path2u)[
-                   1:], False).strip().lstrip("/")
-      print("    <div>")
-      print("      Header file: <a href=\""+href2u +
-            "/"+hf2u+"\" target=\"_blank\">"+hf2u+"</a>")
-      print("    </div>")
+    # loop over all table categories
+    if DMtype == 0:
+      for cat in self.categories:
+        txt2print = '<a name="cat_'+cat.name+'"></a>'
+        print(txt2print)
+        txt2print = '## '+cat.name
+        print(txt2print)
+        print("<div>")
 
-      # print extends
-      if tab.kind == 2 or tab.kind == 5:
-        print("    <div>Extends:")
-        print("      <ul>")
-        print("        ", tab.toExtendWith)
-        print("      </ul>")
-        print("    </div>")
+        # print tables of of given category
+        for tname in cat.members:
+          for tab in tabs2u:
+            if baseTableName(tab.tname, vPattern) == tname:
+              print()
+              self.printSingleTable(tabs, uses, tab)
+              continue
+        print("</div>")
 
-      # find all usings with tab
-      useTable = list()
-      for use in uses:
-        if tab.tname in use.joiners:
-          useTable.append(use)
-        elif tab.tname == use.master:
-          useTable.append(use)
+      # print non-categorized tables
+      if len(others) > 0:
+        print('<a name="cat_Others"></a>')
+        print('## Others')
+        print("<div>")
+        for i in others:
+          print()
+          self.printSingleTable(tabs, uses, tabs2u[i])
+        print("</div>")
 
-      # print these usings
-      if len(useTable) > 0:
-        print("    <div>Is used in:")
-        print("      <ul>")
-        for use in useTable:
-          use.printHTML()
-        print("      </ul>")
-        print("    </div>")
-
-      # print the table header
-      tab.printSubHeaderHTML()
-
-      # EXTENDED_TABLE and EXTENDED_TABLE_USER are extended
-      if tab.kind == 2 or tab.kind == 5:
-        # this table has to be extended, find the extending table and
-        # print all of its columns
-        einds = [i for i, x in enumerate(tabs) if x.tname == tab.toExtendWith]
-        for ind in einds:
-          for col in tabs[ind].columns:
-            col.printHTML()
-
-      # print the remaining columns
-      for col in tab.columns:
-        col.printHTML()
-
-      # print the table footer
-      tab.printFooterHTML()
-
-    print("</div>")
+    else:
+      # print all tables of given producer
+      print("<div>")
+      print("")
+      for tab in tabs2u:
+        self.printSingleTable(tabs, uses, tab)
+      print("</div>")
 
   def printHTML(self):
-    # get some variables
-    tmp = self.initCard.find("O2general/mainDir/O2local")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    O2path = tmp
-    tmp = self.initCard.find("O2general/mainDir/O2Physicslocal")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    O2Physicspath = tmp
-    tmp = self.initCard.find("O2general/mainDir/O2GitHub")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    O2href = tmp
-    tmp = self.initCard.find("O2general/mainDir/O2PhysicsGitHub")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    O2Physicshref = tmp
-    tmp = self.initCard.find("O2general/delimAO2D")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    delimAO2D = tmp
-    tmp = self.initCard.find("O2general/delimHelpers")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    delimHelpers = tmp
-    tmp = self.initCard.find("O2general/delimPWGs")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    delimPWGs = tmp
-    tmp = self.initCard.find("O2general/delimJoins")
-    if tmp == None:
-      tmp = ""
-    else:
-      tmp = tmp.text.strip()
-    delimJoins = tmp
-
     # gather all tables and columns
     tabs = list()
     uses = list()
@@ -644,29 +741,33 @@ class datamodel:
     # 4. joins
 
     # 1. main producer
-    print(delimAO2D)
+    print(self.delimAO2D)
     inds = [i for i, x in enumerate(self.CErelations) if x[3] == 'Main']
     CER2u = [self.CErelations[i] for i in inds]
+    # only one Main CER should be available
+    if len(CER2u) != 1:
+      sys.exit('<datamodel.printHTML> Exacly 1 DataModel of type Main is expected. We found '+len(CER2u)+'! EXIT -->')
+
     for CER in CER2u:
       inds = [i for i, x in enumerate(tabs) if CER in x.CErelations]
       tabs2u = [tabs[i] for i in inds]
-      self.printProducerTables(O2href, O2path, tabs, uses, CER, tabs2u)
-    print(delimAO2D)
+      self.printTables(0, tabs, uses, CER, tabs2u)
+    print(self.delimAO2D)
 
     # 2. helper tasks
     print("")
-    print(delimHelpers)
+    print(self.delimHelpers)
     inds = [i for i, x in enumerate(self.CErelations) if x[3] == 'Helper']
     CER2u = [self.CErelations[i] for i in inds]
     for CER in CER2u:
       inds = [i for i, x in enumerate(tabs) if CER in x.CErelations]
       tabs2u = [tabs[i] for i in inds]
-      self.printProducerTables(O2Physicshref, O2Physicspath, tabs, uses, CER, tabs2u)
-    print(delimHelpers)
+      self.printTables(1, tabs, uses, CER, tabs2u)
+    print(self.delimHelpers)
 
     # 3. PWG tasks
     print("")
-    print(delimPWGs)
+    print(self.delimPWGs)
     inds = [i for i, x in enumerate(self.CErelations) if x[3] == 'PWG']
     CERsPWG = [self.CErelations[i] for i in inds]
 
@@ -682,17 +783,16 @@ class datamodel:
       for CER in CER2u:
         inds = [i for i, x in enumerate(tabs) if CER in x.CErelations]
         tabs2u = [tabs[i] for i in inds]
-        self.printProducerTables(O2Physicshref, O2Physicspath, tabs, uses, CER, tabs2u)
+        self.printTables(2, tabs, uses, CER, tabs2u)
 
-    print(delimPWGs)
+    print(self.delimPWGs)
     print("")
 
     # now print the usings
     if len(uses) > 0:
-      print(delimJoins)
+      print(self.delimJoins)
       print("")
       print("<a name=\"usings\"></a>")
-      print("#### List of defined joins and iterators")
       print("<div>")
       for use in uses:
         print("")
@@ -704,12 +804,24 @@ class datamodel:
         print("    </ul>")
         print("  </div>")
       print("</div>")
-      print(delimJoins)
+      print(self.delimJoins)
 
 # -----------------------------------------------------------------------------
 # functions
 #
 # .............................................................................
+# remove the version id from the table name
+
+def baseTableName(vtname, vPattern):
+
+  vres = re.compile(vPattern).search(vtname)
+  if vres:
+    return vtname[0:vres.start()]
+  else:
+    return vtname
+
+# .............................................................................
+
 def fullDataModelName(nslevel, name):
   toks0 = nslevel.split("::")
   toks1 = name.split("::")
@@ -738,9 +850,8 @@ def fullDataModelName(nslevel, name):
 def tableColumnNames(nslevel, cont, kind=0):
 
   # specification according to kind of table
-  noff = 3
-  if kind == 1:
-    noff = 4
+  noffs = [3, 4, 4, 5, 3, 3, 3, 3]
+  noff = noffs[kind]
 
   # split cont with ","
   buf = O2DMT.block(cont[:len(cont)-2], False)
@@ -810,9 +921,16 @@ def extractTables(nslevel, content):
   for icol in inds:
     iend = [i for i, x in enumerate(
         O2DMT.list_in([")", ";"], words[icol:])) if x == True]
+    iend1 = [i for i, x in enumerate(
+        O2DMT.list_in([")"], words[icol:])) if x == True]
     if len(iend) == 0:
-      print(nslevel)
-      sys.exit('Ending ); not found in table declaration! EXIT -->')
+      if len(iend1) == 0:
+        #print("nslevel: ", nslevel)
+        #print("iend: ", iend1)
+        #print("lines: ", lines)
+        sys.exit('Ending ); not found in table declaration! EXIT -->')
+      else:
+        iend = iend1
     cont = words[icol:iend[0]+icol+2]
 
     kind = [i for i, x in enumerate(types) if x == words[icol].txt][0]
@@ -826,7 +944,7 @@ def extractTables(nslevel, content):
     tab.colNames = fullColNames
 
     # EXTENDED_TABLE?
-    if kind == 2 or kind == 5:
+    if kind == 4 or kind == 7:
       tab.toExtendWith = fullDataModelName(nslevel, words[icol+4].txt)
 
     # add a comment if available
@@ -874,6 +992,12 @@ def extractColumns(nslevel, content):
     if kind in [1, 2, 3, 4]:
       cname = cname+"Id"
       gname = gname+"Id"
+    if kind in [7,8,9]:
+      cname = cname+"IdSlice"
+      gname = gname+"Ids"
+    if kind in [10]:
+      cname = cname+"Ids"
+      gname = gname+"Ids"
 
     # determine the type of the colums
     # can be type, array<type,n>, or type[n]
@@ -901,6 +1025,8 @@ def extractColumns(nslevel, content):
         type = O2DMT.block(cont[iarr[0]+2:iarr[0]+2+iend[0]], False)
       else:
         type = "?"
+    elif words[icol].txt in types[7:10]:
+      type = "int32_t"
 
     # kind, namespace, name, type, cont
     col = column(kind, nslevel, "", cname, gname, type, O2DMT.block(cont))
@@ -952,15 +1078,15 @@ def extractUsings(nslevel, content):
     if len(iend) == 0:
       print(nslevel)
       sys.exit('Ending ; not found in using declaration! EXIT -->')
-    cont = words[icol:icol+iend[0]+1]
 
-    name = fullDataModelName(nslevel, words[icol+1].txt)
+    # make sure that using is not part of a text, like ".... PID using TPC ..." or similar
     definition = O2DMT.block(words[icol+3:icol+iend[0]], False)
-
-    # namespace, name, cont
-    use = using(nslevel, name, definition, O2DMT.block(cont))
-
-    usings.append(use)
+    if ('"' not in definition and "'" not in definition):
+      # namespace, name, cont
+      name = fullDataModelName(nslevel, words[icol+1].txt)
+      cont = words[icol:icol+iend[0]+1]
+      use = using(nslevel, name, definition, O2DMT.block(cont))
+      usings.append(use)
 
   return usings
 
@@ -995,6 +1121,9 @@ class CERelations:
     with open(fileName, 'r') as file:
       # read the file
       lines_in_file = file.readlines()
+      # skip commented lines (starting with #)
+      lines_in_file = [i for i in lines_in_file if not i.startswith("#")]
+      # extract content
       content = O2DMT.pickContent(lines_in_file)
 
       # parse CMakeLists file
@@ -1015,8 +1144,7 @@ class CERelations:
   def getExecutable(self, codeFile):
     # find the executable corresponding to codeFile
     CErelation = ["", "", ""]
-    ice = [ind for ind, x in enumerate(
-        self.relations) if x[0]+x[1] == codeFile]
+    ice = [ind for ind, x in enumerate(self.relations) if x[0]+x[1] == codeFile]
     if len(ice) > 0:
       CErelation = self.relations[ice[0]]
     return CErelation
@@ -1038,5 +1166,17 @@ class CERelations:
       print("  ename:", self.exePreamble+relation[2])
       print("   type:", relation[3])
       print("   name:", relation[4])
+
+# -----------------------------------------------------------------------------
+class tableCategory:
+  def __init__(self, catName, catMembers):
+    self.name = catName
+    self.members = catMembers
+
+  def blongsTo(self, tableName):
+    if tableName in catMembers:
+      return true
+    else:
+      return false
 
 # -----------------------------------------------------------------------------

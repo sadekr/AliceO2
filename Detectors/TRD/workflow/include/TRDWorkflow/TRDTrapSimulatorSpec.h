@@ -18,23 +18,23 @@
 
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/Task.h"
+#include "TRDBase/Calibrations.h"
 #include "TRDSimulation/TrapSimulator.h"
-#include "TRDSimulation/TrapConfig.h"
 #include "DataFormatsTRD/Tracklet64.h"
 #include "DataFormatsTRD/Constants.h"
-
-class Calibrations;
 
 namespace o2
 {
 namespace trd
 {
 
+class TrapConfig;
+
 class TRDDPLTrapSimulatorTask : public o2::framework::Task
 {
 
  public:
-  TRDDPLTrapSimulatorTask(bool useMC) : mUseMC(useMC) {}
+  TRDDPLTrapSimulatorTask(bool useMC, int digitDownscaling = 1) : mUseMC(useMC), mDigitDownscaling(digitDownscaling) {}
 
   void init(o2::framework::InitContext& ic) override;
   void run(o2::framework::ProcessingContext& pc) override;
@@ -42,21 +42,25 @@ class TRDDPLTrapSimulatorTask : public o2::framework::Task
 
  private:
   TrapConfig* mTrapConfig{nullptr};
-  unsigned long mRunNumber{297595}; //run number to anchor simulation to.
+  int mRunNumber{297595}; // run number to anchor simulation to.
+  int mDigitDownscaling{1}; // only digits of every mDigitDownscaling-th trigger will be kept
+  int mChargeScalingFactor{-1}; // can be overwritten to set custom charge scaling factor for tracklets
+  bool mUseFloatingPointForQ{false};
   bool mEnableOnlineGainCorrection{false};
   bool mUseMC{false}; // whether or not to use MC labels
   bool mEnableTrapConfigDump{false};
+  bool mInitCcdbObjectsDone{false}; // flag whether one time download of CCDB objects has been done
   int mNumThreads{-1};              // number of threads used for parallel processing
   std::string mTrapConfigName;      // the name of the config to be used.
   std::string mOnlineGainTableName;
   std::unique_ptr<Calibrations> mCalib; // store the calibrations connection to CCDB. Used primarily for the gaintables in line above.
 
-  void initTrapConfig();
+  void initTrapConfig(long timeStamp);
   void setOnlineGainTables();
   void processTRAPchips(int& nTracklets, std::vector<Tracklet64>& trackletsAccum, std::array<TrapSimulator, constants::NMCMHCMAX>& trapSimulators, std::vector<short>& digitCounts, std::vector<int>& digitIndices);
 };
 
-o2::framework::DataProcessorSpec getTRDTrapSimulatorSpec(bool useMC);
+o2::framework::DataProcessorSpec getTRDTrapSimulatorSpec(bool useMC, int digitDownscaling);
 
 } // end namespace trd
 } // end namespace o2

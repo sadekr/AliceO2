@@ -37,10 +37,16 @@ target_link_libraries(allsim
                                 O2::TRDSimulation
                                 O2::FV0Simulation
                                 O2::ZDCSimulation
+                                O2::FOCALSimulation
                                 $<$<BOOL:${ENABLE_UPGRADES}>:O2::Alice3DetectorsPassive>
                                 $<$<BOOL:${ENABLE_UPGRADES}>:O2::ITS3Simulation>
                                 $<$<BOOL:${ENABLE_UPGRADES}>:O2::TRKSimulation>
                                 $<$<BOOL:${ENABLE_UPGRADES}>:O2::FT3Simulation>
+                                $<$<BOOL:${ENABLE_UPGRADES}>:O2::FCTSimulation>
+                                $<$<BOOL:${ENABLE_UPGRADES}>:O2::IOTOFSimulation>
+                                $<$<BOOL:${ENABLE_UPGRADES}>:O2::RICHSimulation>
+                                $<$<BOOL:${ENABLE_UPGRADES}>:O2::ECalSimulation>
+                                $<$<BOOL:${ENABLE_UPGRADES}>:O2::MI3Simulation>
                                 O2::Generators)
 
 add_library(internal::allsim ALIAS allsim)
@@ -54,6 +60,10 @@ o2_add_executable(serial
                   COMPONENT_NAME sim
                   SOURCES o2sim.cxx
                   PUBLIC_LINK_LIBRARIES internal::allsim)
+o2_add_executable(evalmat
+                  COMPONENT_NAME sim
+                  SOURCES o2sim_evalmat.cxx
+                  PUBLIC_LINK_LIBRARIES internal::allsim)
 
 o2_add_executable(sim
                   SOURCES o2sim_parallel.cxx
@@ -66,6 +76,22 @@ o2_add_executable(primary-server-device-runner
                   SOURCES O2PrimaryServerDeviceRunner.cxx
                   PUBLIC_LINK_LIBRARIES internal::allsim
                   TARGETVARNAME simexe)
+if(ENABLE_UPGRADES)
+o2_add_executable(serial-run5
+                  COMPONENT_NAME sim
+                  SOURCES o2sim.cxx
+                  PUBLIC_LINK_LIBRARIES internal::allsim)
+
+o2_add_executable(sim-run5
+                  SOURCES o2sim_parallel.cxx
+                  PUBLIC_LINK_LIBRARIES internal::allsim O2::Version
+                  TARGETVARNAME simdriverrun5)
+
+o2_add_executable(evalmat-run5
+                  COMPONENT_NAME sim
+                  SOURCES o2sim_evalmat.cxx
+                  PUBLIC_LINK_LIBRARIES internal::allsim)
+endif()
 if(NOT APPLE)
   set_property(TARGET ${simexe} PROPERTY LINK_WHAT_YOU_USE ON)
 endif()
@@ -75,7 +101,55 @@ o2_add_executable(hit-merger-runner
                   SOURCES O2HitMergerRunner.cxx
                   PUBLIC_LINK_LIBRARIES internal::allsim)
 
+o2_add_executable(g4-determine-unknown-pdg-properties
+                  COMPONENT_NAME sim
+                  SOURCES g4DetermineUnknownPdgProperties.cxx
+                  PUBLIC_LINK_LIBRARIES O2::O2TrivialMC MC::Geant4 MC::Geant4VMC O2::SimConfig)
+
+o2_add_executable(mctracks-proxy
+                  COMPONENT_NAME sim
+                  SOURCES o2sim_mctracks_proxy.cxx
+                  PUBLIC_LINK_LIBRARIES O2::Framework O2::SimulationDataFormat)
+
+o2_add_executable(kine-publisher
+                  COMPONENT_NAME sim
+                  SOURCES o2sim_kine_publisher.cxx
+                  PUBLIC_LINK_LIBRARIES O2::Framework O2::SimulationDataFormat O2::Steer)
+
+o2_add_executable(dpl-eventgen
+                  COMPONENT_NAME sim
+                  SOURCES dpl_eventgen.cxx
+                  PUBLIC_LINK_LIBRARIES O2::Generators O2::Framework O2::SimulationDataFormat)
+
+o2_add_executable(hepmc-publisher
+                  COMPONENT_NAME sim
+                  SOURCES o2sim_hepmc_publisher.cxx
+                  PUBLIC_LINK_LIBRARIES O2::Framework O2::SimulationDataFormat O2::Steer MC::HepMC3)
+
+o2_add_executable(mctracks-to-aod
+                  COMPONENT_NAME sim
+                  SOURCES o2sim_mctracks_to_aod.cxx ../Detectors/AOD/src/AODMcProducerHelpers.cxx
+                  PUBLIC_LINK_LIBRARIES O2::Framework O2::SimulationDataFormat)
+target_include_directories(O2exe-sim-mctracks-to-aod
+                           PRIVATE
+                          ../Detectors/AOD/include)
+
+o2_add_executable(mc-to-hepmc
+                  COMPONENT_NAME aod
+                  SOURCES o2aod_mc_to_hepmc.cxx
+                  PUBLIC_LINK_LIBRARIES
+                  O2::Framework
+                  O2::SimulationDataFormat
+                  O2::Generators)
+
+o2_add_dpl_workflow(mctracks-to-aod-simple-task
+                    SOURCES SimExamples/McTracksToAOD/mctracks_to_aod_simple_task.cxx
+                    PUBLIC_LINK_LIBRARIES O2::Framework
+                    COMPONENT_NAME Analysis)
+
 o2_data_file(COPY o2simtopology_template.json DESTINATION config)
+
+o2_data_file(COPY o2simdefaultdetectorlist.json DESTINATION config)
 
 # * # add a complex simulation as a unit test (if simulation was enabled)
 #   perform
@@ -93,7 +167,15 @@ message(STATUS "SIMENV = ${SIMENV}")
 
 o2_name_target(sim NAME o2simExecutable IS_EXE)
 o2_name_target(sim-serial NAME o2simSerialExecutable IS_EXE)
+if(ENABLE_UPGRADES)
+o2_name_target(sim-serial-run5 NAME o2simSerialRun5Executable IS_EXE)
+o2_name_target(sim-run5 NAME o2simRun5Executable IS_EXE)
+o2_name_target(sim-evalmat-run5 NAME o2simEvalmatRun5Executable IS_EXE)
 
+target_compile_definitions(${o2simSerialRun5Executable} PUBLIC SIM_RUN5)
+target_compile_definitions(${o2simRun5Executable} PUBLIC SIM_RUN5)
+target_compile_definitions(${o2simEvalmatRun5Executable} PUBLIC SIM_RUN5)
+endif()
 if (BUILD_TESTING)
 o2_add_test_command(NAME o2sim_G4
                     WORKING_DIRECTORY ${SIMTESTDIR}
@@ -111,6 +193,10 @@ o2_add_test_command(NAME o2sim_G4
                                       2
                                       --skipModules
                                       MFT ZDC
+                                      --seed
+                                      15946057944514955802
+                                      --configKeyValues
+                                      "align-geom.mDetectors=none"
                     ENVIRONMENT "${SIMENV}"
                     LABELS "g4;sim;long")
 
@@ -121,7 +207,7 @@ set_tests_properties(o2sim_G4
 set_property(TEST o2sim_G4 APPEND PROPERTY ENVIRONMENT ${G4ENV})
 
 # # note that the MT is currently only supported in the non FairMQ version
-# # switched off 
+# # switched off
 # o2_add_test_command(NAME o2sim_G4_mt
 #                   WORKING_DIRECTORY ${SIMTESTDIR}
 #                   TIMEOUT 400
@@ -143,6 +229,7 @@ set_property(TEST o2sim_G4 APPEND PROPERTY ENVIRONMENT ${G4ENV})
 
 
 o2_add_test(CheckStackG4
+  COMPONENT_NAME sim
   SOURCES checkStack.cxx
   NAME o2sim_checksimkinematics_G4
   WORKING_DIRECTORY ${SIMTESTDIR}
@@ -154,6 +241,8 @@ o2_add_test(CheckStackG4
 set_tests_properties(o2sim_checksimkinematics_G4
                      PROPERTIES FIXTURES_REQUIRED G4)
 
+# GEANT3 simulation fails on Macs, so disable it.
+if(NOT APPLE)
 o2_add_test_command(NAME o2sim_G3
                     WORKING_DIRECTORY ${SIMTESTDIR}
                     COMMAND $<TARGET_FILE:${o2simExecutable}>
@@ -165,10 +254,14 @@ o2_add_test_command(NAME o2sim_G3
                                       TGeant3
                                       -o
                                       o2simG3
-                                      -g 
+                                      -g
                                       pythia8pp
                                       --chunkSize
                                       10
+                                      --seed
+                                      15946057944514955802
+                                      --configKeyValues
+                                      "align-geom.mDetectors=none"
                     LABELS g3 sim long
                     ENVIRONMENT "${SIMENV}"
 )
@@ -184,6 +277,7 @@ set_tests_properties(o2sim_G3
                                 G3)
 
 o2_add_test(CheckStackG3
+  COMPONENT_NAME sim
   SOURCES checkStack.cxx
   NAME o2sim_checksimkinematics_G3
   WORKING_DIRECTORY ${SIMTESTDIR}
@@ -208,7 +302,7 @@ o2_add_test_command(NAME o2sim_hepmc
                                       -g
                                    hepmc
                        --configKeyValues
-"HepMC.fileName=${CMAKE_SOURCE_DIR}/Generators/share/data/pythia.hepmc;HepMC.version=2"
+"GeneratorFileOrCmd.fileNames=${CMAKE_SOURCE_DIR}/Generators/share/data/pythia.hepmc;HepMC.version=2;align-geom.mDetectors=none"
                                       -o
                               o2simhepmc
                     LABELS long sim hepmc3
@@ -217,6 +311,7 @@ o2_add_test_command(NAME o2sim_hepmc
 set_tests_properties(o2sim_hepmc
                      PROPERTIES PASS_REGULAR_EXPRESSION
                                 "SIMULATION RETURNED SUCCESFULLY")
+set_property(TEST o2sim_hepmc APPEND PROPERTY ENVIRONMENT ${G4ENV})
 
 # somewhat analyse the logfiles as another means to detect problems
 o2_add_test_command(NAME o2sim_G3_checklogs
@@ -227,6 +322,7 @@ o2_add_test_command(NAME o2sim_G3_checklogs
 
 set_tests_properties(o2sim_G3_checklogs
                      PROPERTIES FIXTURES_REQUIRED G3)
+endif()
 
 # somewhat analyse the logfiles as another means to detect problems
 o2_add_test_command(NAME o2sim_G4_checklogs
@@ -236,8 +332,12 @@ o2_add_test_command(NAME o2sim_G4_checklogs
                     LABELS long sim
 )
 
-set_tests_properties(o2sim_G3_checklogs
+set_tests_properties(o2sim_G4_checklogs
                      PROPERTIES FIXTURES_REQUIRED G4)
 endif()
 
 install(FILES o2-sim-client.py PERMISSIONS GROUP_READ GROUP_EXECUTE OWNER_EXECUTE OWNER_WRITE OWNER_READ WORLD_EXECUTE WORLD_READ DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY SimExamples/
+        DESTINATION examples
+        PATTERN *
+        PERMISSIONS GROUP_READ GROUP_EXECUTE OWNER_EXECUTE OWNER_WRITE OWNER_READ WORLD_EXECUTE WORLD_READ)

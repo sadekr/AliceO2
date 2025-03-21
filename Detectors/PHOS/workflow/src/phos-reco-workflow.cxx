@@ -20,10 +20,25 @@
 #include "Algorithm/RangeTokenizer.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
+#include "Framework/CompletionPolicyHelpers.h"
 
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
+
+using namespace o2::framework;
+
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
+
+void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+{
+  // ordered policies for the writers
+  policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*(?:PHO?S|pho?s).*[W,w]riter.*"));
+}
 
 // add workflow options, note that customization needs to be declared before
 // including Framework/runDataProcessing
@@ -37,10 +52,10 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
     {"disable-root-output", o2::framework::VariantType::Bool, false, {"disable root-files output writer"}},
     {"fullclu-output", o2::framework::VariantType::Bool, false, {"compact of full (with contr. digits) clusters output"}},
     {"flpId", o2::framework::VariantType::Int, 0, {"FLP identification: 0,1,..."}},
+    {"defbadmap", o2::framework::VariantType::Bool, false, {"Use default bad map and calib instead of CCDB"}},
+    {"disable-l1phase-corr", o2::framework::VariantType::Bool, false, {"do not apply L1 phase correction (e.g. to MC)"}},
     {"configKeyValues", o2::framework::VariantType::String, "", {"Semicolon separated key=value strings ..."}}};
-
   o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
   std::swap(workflowOptions, options);
 }
 
@@ -63,16 +78,17 @@ o2::framework::WorkflowSpec defineDataProcessing(o2::framework::ConfigContext co
   //
   // Update the (declared) parameters if changed from the command line
   o2::conf::ConfigurableParam::updateFromString(cfgc.options().get<std::string>("configKeyValues"));
-
   auto wf = o2::phos::reco_workflow::getWorkflow(cfgc.options().get<bool>("disable-root-input"),
                                                  cfgc.options().get<bool>("disable-root-output"),
                                                  !cfgc.options().get<bool>("disable-mc"),
                                                  cfgc.options().get<std::string>("input-type"),
                                                  cfgc.options().get<std::string>("output-type"),
                                                  cfgc.options().get<bool>("fullclu-output"),
-                                                 cfgc.options().get<int>("flpId"));
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+                                                 cfgc.options().get<int>("flpId"),
+                                                 cfgc.options().get<bool>("defbadmap"),
+                                                 cfgc.options().get<bool>("disable-l1phase-corr"));
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(cfgc, wf);
 
-  return std::move(wf);
+  return wf;
 }

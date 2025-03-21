@@ -13,12 +13,12 @@ Every detector writing CTF data is expected to send an output with entropy-compr
 
 Example of usage:
 ```bash
-o2-its-reco-workflow --entropy-encoding | o2-ctf-writer-workflow --onlyDet ITS
+o2-its-reco-workflow | o2-itsmft-entropy-encoder-workflow | o2-ctf-writer-workflow --onlyDet ITS
 ```
 
 For the storage optimization reason one can request multiple CTFs stored in the same output file (as entries of the `ctf` tree):
 ```bash
-o2-ctf-writer --min-file-size <min> --max-file-size <max> ...
+o2-ctf-writer-workflow --min-file-size <min> --max-file-size <max> ...
 ```
 will accumulate CTFs in entries of the same tree/file until its size fits exceeds `min` and does not exceed `max` (`max` check is disabled if `max<=min`) or EOS received.
 The `--max-file-size` limit will be ignored if the very first CTF already exceeds it.
@@ -40,7 +40,32 @@ By default only CTFs will written. If the upstream entropy compression is perfor
 `--output-type both` (will store both dictionaries and CTF). This is the only valid mode for dictionaries creation (if one requests dictionary creation but the compression was done with external dictionaries, the newly created dictionaries will be empty).
 In the dictionaries creation mode their data are accumulated over all CTFs procssed. User may request periodic (and incremental) saving of dictionaries after every `N` TFs processed by passing `--save-dict-after <N>` option.
 
-Option `--ctf-dict-dir <dir>` can be provided to indicate the (existing) directory where the dictionary will be stored.
+Option `--ctf-dict-dir <dir>` can be provided to indicate the directory where the dictionary will be stored.
+
+The external dictionaries created by the `o2-ctf-writer-workflow` containes a TTree (one for all participating detectos) and separate dictionaries per detector which can be uploaded to the CCDB. The per-detector dictionaries compatible with CCDB can be also extracted from the common TTree-based dictionary file using the macro `O2/Detectors/CTF/utils/CTFdict2CCDBfiles.C` (installed to $O2_ROOT/share/macro/CTFdict2CCDBfiles.C) which extracts the dictionary for every detector into separate file containing plain `vector<char>`. These per-detector files can be directly
+uploaded to CCDB and accessed via `CcdbAPI` (the reference of the vector should be provided to corresponding detector CTFCoder::createCoders method to build the run-time dictionary). These files can be also used as per-detector command-line
+parameters, on the same footing as tree-based dictionaries, e.g.
+```
+o2-ctf-reader-workflow --ctf-input input.lst --onlyDet ITS,TPC,TOF --its-entropy-decoder ' --ctf-dict ctfdict_ITS_v1.0_1626472046.root' --tpc-entropy-decoder ' --ctf-dict ctfdict_TPC_v1.0_1626472048.root' --tof-entropy-decoder  ' --ctf-dict ctfdict_TOF_v1.0_1626472048.root'
+```
+
+See below for the details of `--ctf-dict` option.
+
+One can pause the writing if available disk space is low using a combination of following options:
+```bash
+--require-free-disk <float>: pause writing operation if available disk space is below this margin in bytes (if > 0) or this fraction of total (if < 0)
+```
+
+```bash
+--wait-for-free-disk <float seconds>: if paused due to the low disk space, recheck after this time (in s)
+```
+
+```bash
+--max-wait-for-free-disk <float seconds>: produce fatal if paused due to the low disk space for more than this amount( in s).
+```
+
+
+
 
 ## CTF reader workflow
 
@@ -56,7 +81,7 @@ o2-ctf-reader-workflow --onlyDet ITS --ctf-input o2_ctf_0000000000.root  | o2-it
 
 The option are:
 ```
---ctf-input arg (=none)
+--ctf-input arg (=ccdb)
 ```
 inptu data (obligatort): comma-separated list of CTF  files and/or files with list of data files and/or directories containing files
 
@@ -70,10 +95,23 @@ comma-separated list of detectors to read, Overrides skipDet
 ```
 comma-separated list of detectors to skip
 
+
+By default an exception will be thrown if detector is requested but missing in the CTF. To enable injection of the empty output in such case one should use option `--allow-missing-detectors`.
+
+```
+--ctf-data-subspec arg (=0)
+```
+allows to alter the `subSpecification` used to send the CTFDATA from the reader to decoders. Non-0 value must be used in case the data extracted by the CTF-reader should be processed and stored in new CTFs (in order to avoid clash of CTFDATA messages of the reader and writer).
+
 ```
 --max-tf arg (=-1)
 ```
 max CTFs to process (<= 0 : infinite)
+
+```
+--max-tf-per-file arg (=-1)
+```
+max TFs to process from every CTF file (<= 0 : infinite)
 
 ```
 --loop arg (=0)
@@ -111,12 +149,72 @@ There is a possibility to read remote root files directly, w/o caching them loca
 2) provide proper regex to define remote files, e.g. for the example above: `--remote-regex "^root://.+/eos/aliceo2/.+"`.
 3) pass an option `--copy-cmd no-copy`.
 
+## Selective TF reading
+
 ```
 --select-ctf-ids <id's of CTFs to select>
 ```
 This is a `ctf-reader` device local option allowing selective reading of particular CTFs. It is useful when dealing with CTF files containing multiple TFs. The comma-separated list of increasing CTFs indices must be provided in the format parsed by the `RangeTokenizer<int>`, e.g. `1,4-6,...`.
 Note that the index corresponds not to the entry of the TF in the CTF tree but to the reader own counter incremented throught all input files (e.g. if the 10 CTF files with 20 TFs each are provided for the input and the selection of TFs
 `0,2,22,66` is provided, the reader will inject to the DPL the TFs at entries 0 and 2 from the 1st CTF file, entry 5 of the second file, entry 6 of the 3d and will finish the job.
+
+```
+--ir-frames-files <root_file_with_IRFrames_to_select> --skip-skimmed-out-tf
+```
+This option (used for skimming) allow to push to DPL only those TFs which overlap with selected BC-ranges provided via input root file (for various formats see `o2::utils::IRFrameSelector::loadIRFrames` method).
+
+```
+--ir-frames-files <root_file_with_IRFrames_to_select>
+```
+This option allows to push to DPL only those TFs which overlap with the `<runnumber> <range-min> <range-max>` (separators can be any whitespace, comma or semicolon) records provided via text file (assuming that there are some entries for a given run, otherwise the option is ignored).
+Multiple ranges per run and multiple runs can be mentioned in a single input file. The range limits can be indicated either as a UNIX timestamp in `ms` or as an orbit number (in the fill the run belongs to).
+
+In case an option
+```
+--invert-irframe-selection
+```
+is provided, the selections above are inverted: TFs matching some of the provided ranges will be discarded, while the rest will be pushed to the DPL
+
+At the end of the processing the `ctf-writer` will create a local file `ctf_read_ntf.txt` containing only the number of TFs pushed to the DPL.
+In case no TF passed the selections above, this file will contain 0.
+
+## Support for externally provided encoding dictionaries
+
+In absence of the external dictionary the encoding with generate for every TF and store in the CTF the dictionary information necessary to decode the CTF.
+Since the time needed for the creation of dictionary and encoder/decoder may exceed encoding/decoding time, there is a possibility
+to create in a separate pass a dictionary stored in the CTF-like object and use it for further encoding/decoding.
+
+The option `--ctf-dict <OPT>` steers in all detectors entropy encoders the fething of the entropy dictionary. The choices for OPT are:
+1) `"ccdb"` (or empty string): leads to using CCDB objec fetching by the DPL CCDB service (default)
+
+2) `<filename>`: use the dictionary from provided file (either tree-based format or flat one in CCDB format)
+
+3) `"none"`: do not use external dictionary, instead per-TF dictionaries will be stored in the CTF
+
+
+To create a dictionary run usual CTF creation chain but with extra option, e.g.:
+```bash
+
+o2-its-reco-workflow | o2-itsmft-entropy-encoding-workflow --ctf-dict none | o2-ctf-writer-workflow --output-type dict --onlyDet ITS
+```
+This will create a file `ctf_dictionary_<date>_<NTF_used>.root` (linked to `ctf_dictionary.root`) containing dictionary data in a TTree format for all detectors processed by the `o2-ctf-writer-workflow`.
+Additionally, for every participation detector a `ctf_dictionary_<DET>_v<version>_<data>_<NTF_used>.root` file will be produced, with the dictionary in the flat format. These files can be directly uploaded to the CCDB.
+By default the dictionary file is written on the exit from the workflow, in `CTFWriterSpec::endOfStream()` which is currently not called if the workflow is stopped
+by `ctrl-C`. Periodic incremental saving of so-far accumulated dictionary data during processing can be triggered by providing an option
+``--save-dict-after <N>``.
+
+When decoding CTF containing dictionary data (i.e. encoded w/o external dictionaries), externally provided dictionaries will be ignored.
+
+To apply TF rate limiting (make sure that no more than N TFs are in processing) provide `--timeframes-rate-limit <N> --timeframes-rate-limit-ipcid <IPCID>`
+too all workflows (e.g. via ARGS_ALL).
+The IPCID is the NUMA domain ID (usually 0 on non-EPN workflow).
+Additionally, one may throttle on the free SHM by providing an option to the reader `--timeframes-shm-limit <shm-size>`.
+
+Note that by default the reader reads into the memory the CTF data and prepares all output messages but injects them only once the rate-limiter allows that.
+With the option `--limit-tf-before-reading` set also the preparation of the data to inject will be conditioned by the green light from the rate-limiter.
+
+
+## Modifying ITS/MFT CTF output
 
 For the ITS and MFT entropy decoding one can request either to decompose clusters to digits and send them instead of clusters (via `o2-ctf-reader-workflow` global options `--its-digits` and `--mft-digits` respectively)
 or to apply the noise mask to decoded clusters (or decoded digits). If the masking (e.g. via option `--its-entropy-decoder " --mask-noise "`) is requested, user should provide to the entropy decoder the noise mask file (eventually will be loaded from CCDB) and cluster patterns decoding dictionary (if the clusters were encoded with patterns IDs).
@@ -129,26 +227,3 @@ will decode ITS and MFT data, decompose on the fly ITS clusters to digits, mask 
 o2-ctf-reader-workflow --ctf-input <ctfFiles> --onlyDet ITS,MFT --mft-digits --mft-entropy-decoder ' --mask-noise' | ...
 ```
 will send decompose clusters to digits and send ben out after masking the noise for the MFT, while ITS clusters will be sent as decoded.
-Note that the necessary cluster topology dictionary and noise mask file paths need to be provided via corresponding `o2::itsmft::ClustererParam<o2::detectors::DetID::ITS>.dictFilePath` and `o2::itsmft::ClustererParam<o2::detectors::DetID::ITS>.noiseFilePath` configurables (same for the MFT).
-
-## Support for externally provided encoding dictionaries
-
-By default encoding with generate for every TF and store in the CTF the dictionary information necessary to decode the CTF.
-Since the time needed for the creation of dictionary and encoder/decoder may exceed encoding/decoding time, there is a possibility
-to create in a separate pass a dictionary stored in the CTF-like object and use it for further encoding/decoding.
-
-To create a dictionary run usual CTF creation chain but with extra option, e.g.:
-```bash
-o2-its-reco-workflow --entropy-encoding | o2-ctf-writer-workflow --output-type dict --onlyDet ITS
-```
-This will create a file `ctf_dictionary.root` containing dictionary data for all detectors processed by the `o2-ctf-writer-workflow`.
-By default the dictionary file is written on the exit from the workflow, in `CTFWriterSpec::endOfStream()` which is currently not called if the workflow is stopped
-by `ctrl-C`. Periodic incremental saving of so-far accumulated dictionary data during processing can be triggered by providing an option
-``--save-dict-after <N>``.
-
-Following encoding / decoding will use external dictionaries automatically if this file is found in the working directory (eventually it will be provided via CCDB).
-Note that if the file is found but dictionary data for some detector participating in the workflow are not found, an error will be printed and for given detector
-the workflows will use in-ctf dictionaries.
-The dictionaries must be provided for decoding of CTF data encoded using external dictionaries (otherwise an exception will be thrown).
-
-When decoding CTF containing dictionary data (i.e. encoded w/o external dictionaries), the CTF-specific dictionary will be created/used on the fly, ignoring eventually provided external dictionary data.

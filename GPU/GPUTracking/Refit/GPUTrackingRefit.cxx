@@ -20,8 +20,8 @@
 #include "GPUTPCGMMergedTrack.h"
 #include "GPUTPCGMPropagator.h"
 #include "GPUConstantMem.h"
-#include "TPCFastTransform.h"
 #include "ReconstructionDataFormats/Track.h"
+#include "CorrectionMapsHelper.h"
 #include "DetectorsBase/Propagator.h"
 #include "DataFormatsTPC/TrackTPC.h"
 #include "GPUParam.inc"
@@ -30,12 +30,12 @@
 #include "GPUTrackParamConvert.h"
 #include "GPUCommonTypeTraits.h"
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 using namespace o2::track;
 using namespace o2::base;
 using namespace o2::tpc;
 
-static constexpr int kIGNORE_ENDS = 3;
+static constexpr int32_t kIGNORE_ENDS = 3;
 
 #define IgnoreErrors(SNP)                                                                                            \
   if (mIgnoreErrorsOnTrackEnds) {                                                                                    \
@@ -63,7 +63,9 @@ void GPUTrackingRefitProcessor::SetMaxData(const GPUTrackingInOutPointers& io)
 }
 #endif
 
-namespace
+namespace o2::gpu::internal
+{
+namespace // anonymous
 {
 template <class T>
 struct refitTrackTypes;
@@ -76,9 +78,10 @@ struct refitTrackTypes<TrackParCov> {
   using propagator = const Propagator*;
 };
 } // anonymous namespace
+} // namespace o2::gpu::internal
 
 template <>
-GPUd() void GPUTrackingRefit::initProp<GPUTPCGMPropagator>(GPUTPCGMPropagator& prop)
+GPUd() void GPUTrackingRefit::initProp<GPUgeneric() GPUTPCGMPropagator>(GPUTPCGMPropagator& prop) // FIXME: GPUgeneric() needed to make the clang spirv output link correctly
 {
   prop.SetMaterialTPC();
   prop.SetMaxSinPhi(GPUCA_MAX_SIN_PHI);
@@ -91,7 +94,7 @@ GPUd() void GPUTrackingRefit::initProp<GPUTPCGMPropagator>(GPUTPCGMPropagator& p
 }
 
 template <>
-GPUd() void GPUTrackingRefit::initProp<const Propagator*>(const Propagator*& prop)
+GPUd() void GPUTrackingRefit::initProp<const Propagator * GPUgeneric()>(const Propagator*& prop) // FIXME: GPUgeneric() needed to make the clang spirv output link correctly
 {
   prop = mPpropagator;
 }
@@ -207,20 +210,20 @@ GPUd() static const float* getPar(const GPUTPCGMTrackParam& trk) { return trk.Ge
 GPUd() static const float* getPar(const TrackParCov& trk) { return trk.getParams(); }
 
 template <class T, class S>
-GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
+GPUd() int32_t GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
 {
-  CADEBUG(int ii; printf("\nRefitting track\n"));
-  typename refitTrackTypes<S>::propagator prop;
+  CADEBUG(int32_t ii; printf("\nRefitting track\n"));
+  typename internal::refitTrackTypes<S>::propagator prop;
   S trk;
   float TrackParCovChi2 = 0.f;
-  convertTrack<S, T, typename refitTrackTypes<S>::propagator>(trk, trkX, prop, &TrackParCovChi2);
-  int begin = 0, count;
+  convertTrack<S, T, typename internal::refitTrackTypes<S>::propagator>(trk, trkX, prop, &TrackParCovChi2);
+  int32_t begin = 0, count;
   float tOffset;
   if constexpr (std::is_same_v<T, GPUTPCGMMergedTrack>) {
     count = trkX.NClusters();
     if (trkX.Looper()) {
-      int leg = mPtrackHits[trkX.FirstClusterRef() + trkX.NClusters() - 1].leg;
-      for (int i = trkX.NClusters() - 2; i > 0; i--) {
+      int32_t leg = mPtrackHits[trkX.FirstClusterRef() + trkX.NClusters() - 1].leg;
+      for (int32_t i = trkX.NClusters() - 2; i > 0; i--) {
         if (mPtrackHits[trkX.FirstClusterRef() + i].leg != leg) {
           begin = i + 1;
           break;
@@ -237,16 +240,25 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
   } else {
     static_assert("Invalid template");
   }
-  int direction = outward ? -1 : 1;
-  int start = outward ? count - 1 : begin;
-  int stop = outward ? begin - 1 : count;
+  if constexpr (std::is_same_v<S, GPUTPCGMTrackParam>) {
+    CADEBUG(printf("\t%21sInit    Alpha %8.3f    , X %8.3f - Y %8.3f, Z %8.3f   -   QPt %7.2f (%7.2f), SP %5.2f (%5.2f)   ---   Cov sY %8.3f sZ %8.3f sSP %8.3f sPt %8.3f\n", "", prop.GetAlpha(), trk.GetX(), trk.Par()[0], trk.Par()[1], trk.Par()[4], prop.GetQPt0(), trk.Par()[2], prop.GetSinPhi0(), sqrtf(trk.Cov()[0]), sqrtf(trk.Cov()[2]), sqrtf(trk.Cov()[5]), sqrtf(trk.Cov()[14])));
+  }
+
+  int32_t direction = outward ? -1 : 1;
+  int32_t start = outward ? count - 1 : begin;
+  int32_t stop = outward ? begin - 1 : count;
   const ClusterNative* cl = nullptr;
-  uint8_t sector, row = 0, currentSector = 0, currentRow = 0;
-  short clusterState = 0, nextState;
-  int nFitted = 0;
-  for (int i = start; i != stop; i += cl ? 0 : direction) {
-    float x, y, z, charge = 0.f;
-    int clusters = 0;
+  uint8_t sector = 255, row = 255;
+  int32_t lastSector = -1, currentSector = -1, currentRow = -1;
+  int16_t clusterState = 0, nextState = 0;
+  int32_t nFitted = 0;
+  float sumInvSqrtCharge = 0.f;
+  int32_t nAvgCharge = 0;
+
+  for (int32_t i = start; i != stop; i += cl ? 0 : direction) {
+    float x = 0, y = 0, z = 0, charge = 0;                  // FIXME: initialization unneeded, but GCC incorrectly produces uninitialized warnings otherwise
+    float time = 0.f, invCharge = 0.f, invSqrtCharge = 0.f; // Same here...
+    int32_t clusters = 0;
     while (true) {
       if (!cl) {
         CADEBUG(ii = i);
@@ -262,7 +274,7 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
             break;
           }
           row = hit.row;
-          sector = hit.slice;
+          sector = hit.sector;
           nextState = mPclusterState[hit.num];
         } else if constexpr (std::is_same_v<T, TrackTPC>) {
           cl = &trkX.getCluster(mPtrackHitReferences, i, *mPclusterNative, sector, row);
@@ -281,16 +293,19 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
           z *= charge;
         }
         if (clusters == 0) {
-          mPfastTransform->Transform(sector, row, cl->getPad(), cl->getTime(), x, y, z, tOffset);
-          CADEBUG(printf("\tHit %3d/%3d Row %3d: Cluster Alpha %8.3f %3d, X %8.3f - Y %8.3f, Z %8.3f\n", ii, count, row, mPparam->Alpha(sector), (int)sector, x, y, z));
+          mPfastTransformHelper->Transform(sector, row, cl->getPad(), cl->getTime(), x, y, z, tOffset);
+          CADEBUG(printf("\tHit %3d/%3d Row %3d: Cluster Alpha %8.3f %3d, X %8.3f - Y %8.3f, Z %8.3f - State %d\n", ii, count, row, mPparam->Alpha(sector), (int32_t)sector, x, y, z, (int32_t)nextState));
           currentRow = row;
           currentSector = sector;
           charge = cl->qTot;
           clusterState = nextState;
+          time = cl->getTime();
+          invSqrtCharge = CAMath::InvSqrt(cl->qMax);
+          invCharge = (1.f / cl->qMax);
         } else {
           float xx, yy, zz;
-          mPfastTransform->Transform(sector, row, cl->getPad(), cl->getTime(), xx, yy, zz, tOffset);
-          CADEBUG(printf("\tHit %3d/%3d Row %3d: Cluster Alpha %8.3f %3d, X %8.3f - Y %8.3f, Z %8.3f\n", ii, count, row, mPparam->Alpha(sector), (int)sector, xx, yy, zz));
+          mPfastTransformHelper->Transform(sector, row, cl->getPad(), cl->getTime(), xx, yy, zz, tOffset);
+          CADEBUG(printf("\tHit %3d/%3d Row %3d: Cluster Alpha %8.3f %3d, X %8.3f - Y %8.3f, Z %8.3f - State %d\n", ii, count, row, mPparam->Alpha(sector), (int32_t)sector, xx, yy, zz, (int32_t)nextState));
           x += xx * cl->qTot;
           y += yy * cl->qTot;
           z += zz * cl->qTot;
@@ -312,8 +327,11 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
       x /= charge;
       y /= charge;
       z /= charge;
-      CADEBUG(printf("\tMerged Hit  Row %3d: Cluster Alpha %8.3f %3d, X %8.3f - Y %8.3f, Z %8.3f\n", row, mPparam->Alpha(sector), (int)sector, x, y, z));
+      CADEBUG(printf("\tMerged Hit  Row %3d: Cluster Alpha %8.3f %3d, X %8.3f - Y %8.3f, Z %8.3f - State %d\n", row, mPparam->Alpha(sector), (int32_t)sector, x, y, z, (int32_t)clusterState));
     }
+
+    float invAvgCharge = (sumInvSqrtCharge += invSqrtCharge) / ++nAvgCharge;
+    invAvgCharge *= invAvgCharge;
 
     if constexpr (std::is_same_v<S, GPUTPCGMTrackParam>) {
       if (prop.PropagateToXAlpha(x, mPparam->Alpha(currentSector), !outward)) {
@@ -322,12 +340,24 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
       }
       if (resetCov) {
         trk.ResetCovariance();
+      } else if (lastSector != -1 && (lastSector < 18) != (sector < 18)) {
+        if (mPparam->rec.tpc.addErrorsCECrossing) {
+          if (mPparam->rec.tpc.addErrorsCECrossing >= 2) {
+            trk.AddCovDiagErrorsWithCorrelations(mPparam->rec.tpc.errorsCECrossing);
+          } else {
+            trk.AddCovDiagErrors(mPparam->rec.tpc.errorsCECrossing);
+          }
+        } else if (trk.Cov()[2] < 0.5f) {
+          trk.Cov()[2] = 0.5f;
+        }
       }
       CADEBUG(printf("\t%21sPropaga Alpha %8.3f    , X %8.3f - Y %8.3f, Z %8.3f   -   QPt %7.2f (%7.2f), SP %5.2f (%5.2f)   ---   Res %8.3f %8.3f   ---   Cov sY %8.3f sZ %8.3f sSP %8.3f sPt %8.3f   -   YPt %8.3f\n", "", prop.GetAlpha(), x, trk.Par()[0], trk.Par()[1], trk.Par()[4], prop.GetQPt0(), trk.Par()[2], prop.GetSinPhi0(), trk.Par()[0] - y, trk.Par()[1] - z, sqrtf(trk.Cov()[0]), sqrtf(trk.Cov()[2]), sqrtf(trk.Cov()[5]), sqrtf(trk.Cov()[14]), trk.Cov()[10]));
-      if (prop.Update(y, z, row, *mPparam, clusterState, 0, nullptr, true)) {
+      lastSector = sector;
+      if (prop.Update(y, z, row, *mPparam, clusterState, 0, nullptr, true, sector, time, invAvgCharge, invCharge)) {
         IgnoreErrors(trk.GetSinPhi());
         return -3;
       }
+      trk.ConstrainSinPhi();
       CADEBUG(printf("\t%21sFit     Alpha %8.3f    , X %8.3f - Y %8.3f, Z %8.3f   -   QPt %7.2f (%7.2f), SP %5.2f (%5.2f), DzDs %5.2f %16s    ---   Cov sY %8.3f sZ %8.3f sSP %8.3f sPt %8.3f   -   YPt %8.3f\n", "", prop.GetAlpha(), x, trk.Par()[0], trk.Par()[1], trk.Par()[4], prop.GetQPt0(), trk.Par()[2], prop.GetSinPhi0(), trk.Par()[3], "", sqrtf(trk.Cov()[0]), sqrtf(trk.Cov()[2]), sqrtf(trk.Cov()[5]), sqrtf(trk.Cov()[14]), trk.Cov()[10]));
     } else if constexpr (std::is_same_v<S, TrackParCov>) {
       if (!trk.rotate(mPparam->Alpha(currentSector))) {
@@ -338,15 +368,25 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
         IgnoreErrors(trk.getSnp());
         return -2;
       }
+      if (lastSector != -1 && (lastSector < 18) != (sector < 18)) {
+        if (mPparam->rec.tpc.addErrorsCECrossing) {
+          trk.updateCov(mPparam->rec.tpc.errorsCECrossing, mPparam->rec.tpc.addErrorsCECrossing >= 2);
+        } else if (trk.getCov()[2] < 0.5f) {
+          trk.setCov(0.5f, 2);
+        }
+      }
       if (resetCov) {
         trk.resetCovariance();
+        float bzkG = prop->getNominalBz(), qptB5Scale = CAMath::Abs(bzkG) > 0.1f ? CAMath::Abs(bzkG) / 5.006680f : 1.f;
+        float q2pt2 = trk.getQ2Pt() * trk.getQ2Pt(), q2pt2Wgh = q2pt2 * qptB5Scale * qptB5Scale;
+        float err2 = (100.f + q2pt2Wgh) / (1.f + q2pt2Wgh) * q2pt2; // -> 100 for high pTs, -> 1 for low pTs.
+        trk.setCov(err2, 14);                                       // 100% error
         TrackParCovChi2 = 0.f;
       }
       CADEBUG(printf("\t%21sPropaga Alpha %8.3f    , X %8.3f - Y %8.3f, Z %8.3f   -   QPt %7.2f (%7.2f), SP %5.2f (%5.2f)   ---   Res %8.3f %8.3f   ---   Cov sY %8.3f sZ %8.3f sSP %8.3f sPt %8.3f   -   YPt %8.3f\n", "", trk.getAlpha(), x, trk.getParams()[0], trk.getParams()[1], trk.getParams()[4], trk.getParams()[4], trk.getParams()[2], trk.getParams()[2], trk.getParams()[0] - y, trk.getParams()[1] - z, sqrtf(trk.getCov()[0]), sqrtf(trk.getCov()[2]), sqrtf(trk.getCov()[5]), sqrtf(trk.getCov()[14]), trk.getCov()[10]));
       gpu::gpustd::array<float, 2> p = {y, z};
       gpu::gpustd::array<float, 3> c = {0, 0, 0};
-      mPparam->GetClusterErrors2(currentRow, z, getPar(trk)[2], getPar(trk)[3], c[0], c[2]);
-      mPparam->UpdateClusterError2ByState(clusterState, c[0], c[2]);
+      GPUTPCGMPropagator::GetErr2(c[0], c[2], *mPparam, getPar(trk)[2], getPar(trk)[3], z, x, y, currentRow, clusterState, sector, time, invAvgCharge, invCharge, false);
       TrackParCovChi2 += trk.getPredictedChi2(p, c);
       if (!trk.update(p, c)) {
         IgnoreErrors(trk.getSnp());
@@ -370,7 +410,7 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
     if (mPparam->rec.tpc.trackReferenceX <= 500) {
       if (prop->PropagateToXBxByBz(trk, mPparam->rec.tpc.trackReferenceX)) {
         if (CAMath::Abs(trk.getY()) > trk.getX() * CAMath::Tan(kSectAngle / 2.f)) {
-          float newAlpha = trk.getAlpha() + floor(CAMath::ATan2(trk.getY(), trk.getX()) / kDeg2Rad / 20.f + 0.5f) * kSectAngle;
+          float newAlpha = trk.getAlpha() + CAMath::Round(CAMath::ATan2(trk.getY(), trk.getX()) / kDeg2Rad / 20.f) * kSectAngle;
           GPUTPCGMTrackParam::NormalizeAlpha(newAlpha);
           trk.rotate(newAlpha) && prop->PropagateToXBxByBz(trk, mPparam->rec.tpc.trackReferenceX);
         }
@@ -380,30 +420,27 @@ GPUd() int GPUTrackingRefit::RefitTrack(T& trkX, bool outward, bool resetCov)
     static_assert("Invalid template");
   }
 
-  convertTrack<T, S, typename refitTrackTypes<S>::propagator>(trkX, trk, prop, &TrackParCovChi2);
+  convertTrack<T, S, typename internal::refitTrackTypes<S>::propagator>(trkX, trk, prop, &TrackParCovChi2);
   return nFitted;
 }
 
-template GPUd() int GPUTrackingRefit::RefitTrack<GPUTPCGMMergedTrack, TrackParCov>(GPUTPCGMMergedTrack& trk, bool outward, bool resetCov);
-template GPUd() int GPUTrackingRefit::RefitTrack<GPUTPCGMMergedTrack, GPUTPCGMTrackParam>(GPUTPCGMMergedTrack& trk, bool outward, bool resetCov);
-template GPUd() int GPUTrackingRefit::RefitTrack<TrackTPC, TrackParCov>(TrackTPC& trk, bool outward, bool resetCov);
-template GPUd() int GPUTrackingRefit::RefitTrack<TrackTPC, GPUTPCGMTrackParam>(TrackTPC& trk, bool outward, bool resetCov);
-template GPUd() int GPUTrackingRefit::RefitTrack<GPUTrackingRefit::TrackParCovWithArgs, TrackParCov>(GPUTrackingRefit::TrackParCovWithArgs& trk, bool outward, bool resetCov);
-template GPUd() int GPUTrackingRefit::RefitTrack<GPUTrackingRefit::TrackParCovWithArgs, GPUTPCGMTrackParam>(GPUTrackingRefit::TrackParCovWithArgs& trk, bool outward, bool resetCov);
+#if !defined(GPUCA_GPUCODE) || defined(GPUCA_GPUCODE_DEVICE) // FIXME: DR: WORKAROUND to avoid CUDA bug creating host symbols for device code.
+template GPUdni() int32_t GPUTrackingRefit::RefitTrack<GPUTPCGMMergedTrack, TrackParCov>(GPUTPCGMMergedTrack& trk, bool outward, bool resetCov);
+template GPUdni() int32_t GPUTrackingRefit::RefitTrack<GPUTPCGMMergedTrack, GPUTPCGMTrackParam>(GPUTPCGMMergedTrack& trk, bool outward, bool resetCov);
+template GPUdni() int32_t GPUTrackingRefit::RefitTrack<TrackTPC, TrackParCov>(TrackTPC& trk, bool outward, bool resetCov);
+template GPUdni() int32_t GPUTrackingRefit::RefitTrack<TrackTPC, GPUTPCGMTrackParam>(TrackTPC& trk, bool outward, bool resetCov);
+template GPUdni() int32_t GPUTrackingRefit::RefitTrack<GPUTrackingRefit::TrackParCovWithArgs, TrackParCov>(GPUTrackingRefit::TrackParCovWithArgs& trk, bool outward, bool resetCov);
+template GPUdni() int32_t GPUTrackingRefit::RefitTrack<GPUTrackingRefit::TrackParCovWithArgs, GPUTPCGMTrackParam>(GPUTrackingRefit::TrackParCovWithArgs& trk, bool outward, bool resetCov);
+#endif
 
 #ifndef GPUCA_GPUCODE
-void GPUTrackingRefit::SetPtrsFromGPUConstantMem(const GPUConstantMem* v, MEM_CONSTANT(GPUParam) * p)
+void GPUTrackingRefit::SetPtrsFromGPUConstantMem(const GPUConstantMem* v, GPUParam* p)
 {
   mPclusterState = v->ioPtrs.mergedTrackHitStates;
   mPclusterNative = v->ioPtrs.clustersNative;
   mPtrackHits = v->ioPtrs.mergedTrackHits;
-  mPfastTransform = v->calibObjects.fastTransform;
+  mPfastTransformHelper = v->calibObjects.fastTransformHelper;
   mPmatLUT = v->calibObjects.matLUT;
   mPparam = p ? p : &v->param;
-}
-
-void GPUTrackingRefit::SetPropagatorDefault()
-{
-  mPpropagator = mPparam->GetDefaultO2Propagator(false);
 }
 #endif

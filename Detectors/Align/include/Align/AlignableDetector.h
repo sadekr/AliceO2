@@ -18,12 +18,12 @@
 #define ALIGNABLEDETECTOR_H
 
 #include "DetectorsCommonDataFormats/DetID.h"
+#include "ReconstructionDataFormats/VtxTrackIndex.h"
 #include <TObjArray.h>
 #include <cstdio>
 #include "Align/DOFSet.h"
 #include "Align/utils.h"
 #include "Align/AlignmentTrack.h"
-#include "Align/DOFStatistics.h"
 #include "Align/AlignmentPoint.h"
 #include "Align/AlignableSensor.h"
 #include "Align/AlignableVolume.h"
@@ -34,7 +34,7 @@ namespace o2
 {
 namespace align
 {
-
+using GIndex = o2::dataformats::VtxTrackIndex;
 class Controller;
 
 //TODO(milettri) : fix possibly incompatible Detector IDs of O2 and AliROOT
@@ -52,13 +52,13 @@ class AlignableDetector : public DOFSet
   ~AlignableDetector() override;
 
   auto getDetID() const { return mDetID; }
+  auto getName() const { return mDetID.getName(); }
   //
-  virtual void cacheReferenceOCDB();
+  virtual void cacheReferenceCCDB();
   virtual void acknowledgeNewRun(int run);
   virtual void updateL2GRecoMatrices();
   virtual void applyAlignmentFromMPSol();
   //
-  int getNDOFsTot() const;
   int volID2SID(int vid) const;
   int sID2VolID(int sid) const { return sid < getNSensors() ? mSID2VolID[sid] : -1; } //todo
   int getNSensors() const { return mSensors.GetEntriesFast(); }
@@ -109,12 +109,15 @@ class AlignableDetector : public DOFSet
   virtual int assignDOFs();
   virtual void initDOFs();
   virtual void terminate();
-  void fillDOFStat(DOFStatistics& dofst) const;
   virtual void addVolume(AlignableVolume* vol);
   virtual void defineVolumes();
   virtual void defineMatrices();
   void Print(const Option_t* opt = "") const override;
-  //  virtual int ProcessPoints(const AliESDtrack* esdTr, AlignmentTrack* algTrack, bool inv = false); FIXME(milettri): needs AliESDtrack
+
+  virtual void reset();
+  virtual int processPoints(GIndex gid, int npntCut = 0, bool inv = false);
+  virtual bool prepareDetectorData() { return true; }
+
   virtual void updatePointByTrackInfo(AlignmentPoint* pnt, const trackParam_t* t) const;
   virtual void setUseErrorParam(int v = 0);
   int getUseErrorParam() const { return mUseErrorParam; }
@@ -122,8 +125,6 @@ class AlignableDetector : public DOFSet
   //  virtual bool AcceptTrack(const AliESDtrack* trc, int trtype) const = 0; FIXME(milettri): needs AliESDtrack
   //  bool CheckFlags(const AliESDtrack* trc, int trtype) const; FIXME(milettri): needs AliESDtrack
   //
-  virtual AlignmentPoint* getPointFromPool();
-  virtual void resetPool();
   virtual void writeSensorPositions(const char* outFName);
   //
   void setInitGeomDone() { SetBit(kInitGeomDone); }
@@ -132,9 +133,9 @@ class AlignableDetector : public DOFSet
   void setInitDOFsDone() { SetBit(kInitDOFsDone); }
   bool getInitDOFsDone() const { return TestBit(kInitDOFsDone); }
   void fixNonSensors();
-  void setFreeDOFPattern(uint32_t pat = 0xffffffff, int lev = -1, const char* match = nullptr);
-  void setDOFCondition(int dof, float condErr, int lev = -1, const char* match = nullptr);
-  int selectVolumes(TObjArray* arr, int lev = -1, const char* match = nullptr);
+  void setFreeDOFPattern(uint32_t pat = 0xffffffff, int lev = -1, const std::string& regexStr = "");
+  void setDOFCondition(int dof, float condErr, int lev = -1, const std::string& regexStr = "");
+  int selectVolumes(std::vector<AlignableVolume*> cont, int lev = -1, const std::string& regexStr = "");
   //
   void setDisabled(int tp, bool v)
   {
@@ -152,13 +153,6 @@ class AlignableDetector : public DOFSet
   bool isDisabled() const { return IsDisabledColl() && IsDisabledCosm(); }
   bool IsDisabledColl() const { return isDisabled(utils::Coll); }
   bool IsDisabledCosm() const { return isDisabled(utils::Cosm); }
-  //
-  void setTrackFlagSel(int tp, uint64_t f) { mTrackFlagSel[tp] = f; }
-  void setTrackFlagSelColl(uint64_t f) { setTrackFlagSel(utils::Coll, f); }
-  void setTrackFlagSelCosm(uint64_t f) { setTrackFlagSel(utils::Cosm, f); }
-  uint64_t getTrackFlagSel(int tp) const { return mTrackFlagSel[tp]; }
-  uint64_t getTrackFlagSelColl() const { return getTrackFlagSel(utils::Coll); }
-  uint64_t getTrackFlagSelCosm() const { return getTrackFlagSel(utils::Cosm); }
   //
   void setNPointsSel(int tp, int n) { mNPointsSel[tp] = n; }
   void setNPointsSelColl(int n) { setNPointsSel(utils::Coll, n); }
@@ -179,6 +173,7 @@ class AlignableDetector : public DOFSet
   void constrainOrphans(const double* sigma, const char* match = nullptr);
 
   virtual void writePedeInfo(FILE* parOut, const Option_t* opt = "") const;
+  virtual void writeLabeledPedeResults(FILE* parOut) const;
   virtual void writeCalibrationResults() const;
   virtual void writeAlignmentResults() const;
   //
@@ -193,7 +188,7 @@ class AlignableDetector : public DOFSet
  protected:
   //
   DetID mDetID{}; // detector ID
-
+  bool mInitDone = false;
   int mVolIDMin = -1;        // min volID for this detector (for sensors only)
   int mVolIDMax = -1;        // max volID for this detector (for sensors only)
   int mNSensors = 0;         // number of sensors (i.e. volID's)
@@ -206,7 +201,6 @@ class AlignableDetector : public DOFSet
   // Track selection
   bool mDisabled[utils::NTrackTypes] = {};         // detector disabled/enabled in the track
   bool mObligatory[utils::NTrackTypes] = {};       // detector must be present in the track
-  uint64_t mTrackFlagSel[utils::NTrackTypes] = {}; // flag for track selection
   int mNPointsSel[utils::NTrackTypes] = {};        // min number of points to require
   //
   int mUseErrorParam = 0;   // signal that points need to be updated using track info, 0 - no
@@ -215,21 +209,11 @@ class AlignableDetector : public DOFSet
   TObjArray mVolumes;  // all volumes of the detector
   //
   // this is transient info
-  int mNPoints = 0;         //! number of points from this detector
-  int mPoolNPoints = 0;     //! number of points in the pool
-  int mPoolFreePointID = 0; //! id of the last free point in the pool
-  TObjArray mPointsPool;    //! pool of aligment points
+  int mNPoints = 0; //! number of points from this detector
   //
   ClassDefOverride(AlignableDetector, 1); // base class for detector global alignment
 };
 
-//FIXME(milettri): needs AliESDtrack
-////_____________________________________________________
-//inline bool AlignableDetector::CheckFlags(const AliESDtrack* trc, int trtype) const
-//{
-//  // check if flags are ok
-//  return (trc->GetStatus() & mTrackFlagSel[trtype]) == mTrackFlagSel[trtype];
-//}
 } // namespace align
 } // namespace o2
 #endif

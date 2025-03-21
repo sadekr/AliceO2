@@ -23,6 +23,7 @@
 
 #include <Configuration/ConfigurationInterface.h>
 #include <Configuration/ConfigurationFactory.h>
+#include <set>
 
 using namespace o2::configuration;
 using namespace o2::framework;
@@ -40,7 +41,7 @@ void DataSampling::GenerateInfrastructure(WorkflowSpec& workflow, const std::str
 {
   std::unique_ptr<ConfigurationInterface> cfg = ConfigurationFactory::getConfiguration(policiesSource);
   if (cfg->getRecursive("").count("dataSamplingPolicies") == 0) {
-    LOG(WARN) << "No \"dataSamplingPolicies\" structure found in the config file. If no Data Sampling is expected, then it is completely fine.";
+    LOG(warn) << "No \"dataSamplingPolicies\" structure found in the config file. If no Data Sampling is expected, then it is completely fine.";
     return;
   }
   auto policiesTree = cfg->getRecursive("dataSamplingPolicies");
@@ -56,13 +57,22 @@ void DataSampling::GenerateInfrastructure(WorkflowSpec& workflow, const boost::p
 
 void DataSampling::DoGenerateInfrastructure(Dispatcher& dispatcher, WorkflowSpec& workflow, const boost::property_tree::ptree& policiesTree, size_t threads, const std::string& host)
 {
-  LOG(DEBUG) << "Generating Data Sampling infrastructure...";
+  LOG(debug) << "Generating Data Sampling infrastructure...";
+  std::set<std::string> ids; // keep track of the ids we have met so far
 
   for (auto&& policyConfig : policiesTree) {
 
     // We don't want the Dispatcher to exit due to one faulty Policy
     try {
       auto policy = DataSamplingPolicy::fromConfiguration(policyConfig.second);
+      if (!policy.isActive()) {
+        LOG(debug) << "The data sampling policy '" << policy.getName() << "' is inactive, skipping...";
+        continue;
+      }
+      if (ids.count(policy.getName()) == 1) {
+        LOG(error) << "A policy with the same id has already been encountered (" + policy.getName() + ")";
+      }
+      ids.insert(policy.getName());
       std::vector<std::string> machines;
       if (policyConfig.second.count("machines") > 0) {
         for (const auto& machine : policyConfig.second.get_child("machines")) {
@@ -73,11 +83,11 @@ void DataSampling::DoGenerateInfrastructure(Dispatcher& dispatcher, WorkflowSpec
         dispatcher.registerPolicy(std::make_unique<DataSamplingPolicy>(std::move(policy)));
       }
     } catch (const std::exception& ex) {
-      LOG(WARN) << "Could not load the Data Sampling Policy '"
+      LOG(warn) << "Could not load the Data Sampling Policy '"
                 << policyConfig.second.get_optional<std::string>("id").value_or("") << "', because: " << ex.what();
       continue;
     } catch (...) {
-      LOG(WARN) << "Could not load the Data Sampling Policy '"
+      LOG(warn) << "Could not load the Data Sampling Policy '"
                 << policyConfig.second.get_optional<std::string>("id").value_or("") << "'";
       continue;
     }
@@ -95,7 +105,7 @@ void DataSampling::DoGenerateInfrastructure(Dispatcher& dispatcher, WorkflowSpec
 
     workflow.emplace_back(std::move(spec));
   } else {
-    LOG(DEBUG) << "No input to this dispatcher, it won't be added to the workflow.";
+    LOG(debug) << "No input to this dispatcher, it won't be added to the workflow.";
   }
 }
 

@@ -49,7 +49,7 @@ class SAMPAProcessing
   ~SAMPAProcessing() = default;
 
   /// Update the OCDB parameters cached in the class. To be called once per event
-  void updateParameters();
+  void updateParameters(float vdrift = 0);
 
   /// Conversion from a given number of electrons into ADC value without taking into account saturation (vectorized)
   /// \param nElectrons Number of electrons in time bin
@@ -69,7 +69,7 @@ class SAMPAProcessing
   /// \param commonMode value of the common mode
   /// \return ADC value after application of noise, pedestal and saturation
   template <DigitzationMode MODE>
-  float makeSignal(float ADCcounts, const int sector, const int globalPadInSector, const float commonMode, float& pedestal, float& noise);
+  float makeSignal(float ADCcounts, const int sector, const int globalPadInSector, const float commonMode, float& pedestal, float& noise, float tot = 0);
 
   /// A delta signal is shaped by the FECs and thus spread over several time bins
   /// This function returns an array with the signal spread into the following time bins
@@ -113,26 +113,37 @@ class SAMPAProcessing
   float getTimeBinTime(float time) const;
 
   /// Get the noise for a given channel
-  /// \param cru CRU of the channel of interest
-  /// \param padPos PadPos of the channel of interest
+  /// \param sector sector number
+  /// \param globalPadInSector pad number in sector
   /// \return Noise on the channel of interest
   float getNoise(const int sector, const int globalPadInSector);
 
+  /// Get the zero suppression threshold for a given channel
+  float getZeroSuppression(const int sector, const int globalPadInSector) const;
+
   /// Get the pedestal for a given channel
-  /// \param cru CRU of the channel of interest
-  /// \param padPos PadPos of the channel of interest
-  /// \return Pedestal on the channel of interest
+  /// \param sector sector number
+  /// \param globalPadInSector pad number in sector
+  /// \return Pedestal of the channel of interest
   float getPedestal(const int sector, const int globalPadInSector) const;
+
+  /// Get the pedestal for a given channel as used in the CRU with 10+2bit precision
+  /// \param sector sector number
+  /// \param globalPadInSector pad number in sector
+  /// \return Pedestal of the channel of interest
+  float getPedestalCRU(const int sector, const int globalPadInSector) const;
 
  private:
   SAMPAProcessing();
-
-  const ParameterGas* mGasParam;         ///< Caching of the parameter class to avoid multiple CDB calls
-  const ParameterDetector* mDetParam;    ///< Caching of the parameter class to avoid multiple CDB calls
-  const ParameterElectronics* mEleParam; ///< Caching of the parameter class to avoid multiple CDB calls
-  const CalPad* mNoiseMap;               ///< Caching of the parameter class to avoid multiple CDB calls
-  const CalPad* mPedestalMap;            ///< Caching of the parameter class to avoid multiple CDB calls
+  const ParameterGas* mGasParam;             ///< Caching of the parameter class to avoid multiple CDB calls
+  const ParameterDetector* mDetParam;        ///< Caching of the parameter class to avoid multiple CDB calls
+  const ParameterElectronics* mEleParam;     ///< Caching of the parameter class to avoid multiple CDB calls
+  const CalPad* mNoiseMap;                   ///< Caching of the parameter class to avoid multiple CDB calls
+  const CalPad* mPedestalMap;                ///< Caching of the parameter class to avoid multiple CDB calls
+  const CalPad* mPedestalMapCRU;             ///< Caching of the parameter class to avoid multiple CDB calls
+  const CalPad* mZeroSuppression;            ///< Caching of the parameter class to avoid multiple CDB calls
   math_utils::RandomRing<> mRandomNoiseRing; ///< Ring with random number for noise
+  float mVDrift = 0;                         ///< VDrift for current timestamp
 };
 
 template <typename T>
@@ -145,10 +156,11 @@ inline T SAMPAProcessing::getADCvalue(T nElectrons) const
 
 template <DigitzationMode MODE>
 inline float SAMPAProcessing::makeSignal(float ADCcounts, const int sector, const int globalPadInSector, const float commonMode,
-                                         float& pedestal, float& noise)
+                                         float& pedestal, float& noise, float tot)
 {
   float signal = ADCcounts;
   pedestal = getPedestal(sector, globalPadInSector);
+  float pedestalCRU = getPedestalCRU(sector, globalPadInSector);
   noise = getNoise(sector, globalPadInSector);
   switch (MODE) {
     case DigitzationMode::FullMode: {
@@ -158,11 +170,36 @@ inline float SAMPAProcessing::makeSignal(float ADCcounts, const int sector, cons
       return getADCSaturation(signal);
       break;
     }
+    case DigitzationMode::ZeroSuppression: {
+      signal -= commonMode;
+      signal += noise;
+      signal += pedestal;
+      signal += (tot > 0) ? 80 : 0; // TODO: improve to also add tail
+      const float signalSubtractPedestal = getADCSaturation(signal) - pedestalCRU;
+      const float zeroSuppression = getZeroSuppression(sector, globalPadInSector);
+      if (signalSubtractPedestal < zeroSuppression) {
+        return 0.f;
+      }
+      return signalSubtractPedestal;
+      break;
+    }
+    case DigitzationMode::ZeroSuppressionCMCorr: {
+      signal += noise;
+      signal += pedestal;
+      signal += (tot > 0) ? 80 : 0; // TODO: improve to also add tail
+      const float signalSubtractPedestal = getADCSaturation(signal) - pedestalCRU;
+      const float zeroSuppression = getZeroSuppression(sector, globalPadInSector);
+      if (signalSubtractPedestal < zeroSuppression) {
+        return 0.f;
+      }
+      return signalSubtractPedestal;
+      break;
+    }
     case DigitzationMode::SubtractPedestal: {
       signal -= commonMode;
       signal += noise;
       signal += pedestal;
-      float signalSubtractPedestal = getADCSaturation(signal) - pedestal;
+      const float signalSubtractPedestal = getADCSaturation(signal) - pedestalCRU;
       return signalSubtractPedestal;
       break;
     }
@@ -210,17 +247,21 @@ inline T SAMPAProcessing::getGamma4(T time, T startTime, T ADC) const
 
 inline TimeBin SAMPAProcessing::getTimeBin(float zPos) const
 {
-  return static_cast<TimeBin>((mDetParam->TPClength - std::abs(zPos)) / (mGasParam->DriftV * mEleParam->ZbinWidth));
+  return static_cast<TimeBin>((mDetParam->TPClength - std::abs(zPos)) / (mVDrift * mEleParam->ZbinWidth));
 }
 
 inline float SAMPAProcessing::getZfromTimeBin(float timeBin, Side s) const
 {
   const float zSign = (s == 0) ? 1 : -1;
-  return zSign * (mDetParam->TPClength - (timeBin * mGasParam->DriftV * mEleParam->ZbinWidth));
+  return zSign * (mDetParam->TPClength - (timeBin * mVDrift * mEleParam->ZbinWidth));
 }
 
 inline TimeBin SAMPAProcessing::getTimeBinFromTime(float time) const
 {
+  if (time < 0.f) {
+    // protection and convention for negative times (otherwise overflow)
+    return 0;
+  }
   return static_cast<TimeBin>(time / mEleParam->ZbinWidth);
 }
 
@@ -239,9 +280,19 @@ inline float SAMPAProcessing::getNoise(const int sector, const int globalPadInSe
   return mRandomNoiseRing.getNextValue() * mNoiseMap->getValue(sector, globalPadInSector);
 }
 
+inline float SAMPAProcessing::getZeroSuppression(const int sector, const int globalPadInSector) const
+{
+  return mZeroSuppression->getValue(sector, globalPadInSector);
+}
+
 inline float SAMPAProcessing::getPedestal(const int sector, const int globalPadInSector) const
 {
   return mPedestalMap->getValue(sector, globalPadInSector);
+}
+
+inline float SAMPAProcessing::getPedestalCRU(const int sector, const int globalPadInSector) const
+{
+  return mPedestalMapCRU->getValue(sector, globalPadInSector);
 }
 } // namespace tpc
 } // namespace o2

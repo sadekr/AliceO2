@@ -19,16 +19,16 @@
 #include "EventVisualisationView/Initializer.h"
 
 #include "EventVisualisationBase/ConfigurationManager.h"
-#include "EventVisualisationBase/GeometryManager.h"
 #include "EventVisualisationView/EventManager.h"
 #include "EventVisualisationView/MultiView.h"
 #include "EventVisualisationDataConverter/VisualisationConstants.h"
 #include "EventVisualisationView/EventManagerFrame.h"
 #include "EventVisualisationView/Options.h"
 #include "EventVisualisationDetectors/DataReaderJSON.h"
-#include <EventVisualisationBase/DataSourceOnline.h>
+#include "EventVisualisationBase/DataSourceOnline.h"
+#include "EventVisualisationBase/DataSourceOffline.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include <TGTab.h>
 #include <TEnv.h>
 #include <TEveBrowser.h>
@@ -37,6 +37,7 @@
 #include <TSystem.h>
 #include <TApplication.h>
 #include <TEveWindowManager.h>
+
 using namespace std;
 
 namespace o2
@@ -49,18 +50,28 @@ void Initializer::setup()
   TEnv settings;
   ConfigurationManager::getInstance().getConfig(settings);
 
-  const bool fullscreen = settings.GetValue("fullscreen.mode", false);                           // hide left and bottom tabs
-  const string ocdbStorage = settings.GetValue("OCDB.default.path", "local://$ALICE_ROOT/OCDB"); // default path to OCDB
-  LOG(INFO) << "Initializer -- OCDB path:" << ocdbStorage;
+  const bool fullscreen = settings.GetValue("fullscreen.mode",
+                                            false); // hide left and bottom tabs
+  const string ocdbStorage = settings.GetValue("OCDB.default.path",
+                                               o2::base::NameConf::getCCDBServer().c_str()); // default path to OCDB
+  LOGF(info, "Initializer -- OCDB path:", ocdbStorage);
 
   auto& eventManager = EventManager::getInstance();
   eventManager.setCdbPath(ocdbStorage);
 
-  eventManager.Open();
+  auto const options = Options::Instance();
 
-  //if (Options::Instance()->json()) {
-  //  eventManager.getDataSource()->registerDetectorX(new DataReaderJSON(nullptr), EVisualisationGroup::JSON);
-  //}
+  EventManagerFrame::RunMode runMode = EventManagerFrame::decipherRunMode(ConfigurationManager::getDataDefault());
+
+  if (options->json()) {
+    runMode = EventManagerFrame::decipherRunMode(options->dataFolder(), runMode);
+    eventManager.setDataSource(
+      new DataSourceOnline(EventManagerFrame::getSourceDirectory(runMode, EventManagerFrame::OnlineMode)));
+  } else {
+    eventManager.setDataSource(
+      new DataSourceOffline(options->AODConverterPath(), options->dataFolder(), options->fileName(),
+                            options->hideDplGUI()));
+  }
 
   eventManager.getDataSource()->registerReader(new DataReaderJSON());
 
@@ -72,11 +83,15 @@ void Initializer::setup()
 
   // Setup windows size, fullscreen and focus
   TEveBrowser* browser = gEve->GetBrowser();
+  std::string title = std::string("o2-eve version:") + std::to_string(o2_eve_version / 100.0);
+  title = title.substr(0, title.find('.') + 3);
+  browser->SetWindowName(title.c_str());
   browser->GetTabRight()->SetTab(1);
   browser->MoveResize(0, 0, gClient->GetDisplayWidth(), gClient->GetDisplayHeight() - 32);
 
   browser->StartEmbedding(TRootBrowser::kBottom);
   EventManagerFrame* frame = new EventManagerFrame(eventManager);
+  frame->setRunMode(runMode);
   browser->StopEmbedding("EventCtrl");
 
   if (fullscreen) {
@@ -91,14 +106,15 @@ void Initializer::setup()
   // Temporary:
   // Later this will be triggered by button, and finally moved to configuration.
   gEve->AddEvent(&EventManager::getInstance());
-  eventManager.getDataSource()->refresh();
 
   if (Options::Instance()->online()) {
     frame->StartTimer();
   } else {
+    eventManager.getDataSource()->refresh();
     frame->DoFirstEvent();
   }
-  gApplication->Connect("TEveBrowser", "CloseWindow()", "o2::event_visualisation::EventManagerFrame", frame, "DoTerminate()");
+  gApplication->Connect("TEveBrowser", "CloseWindow()", "o2::event_visualisation::EventManagerFrame", frame,
+                        "DoTerminate()");
 }
 
 void Initializer::setupGeometry()
@@ -110,27 +126,29 @@ void Initializer::setupGeometry()
   // get geometry from Geometry Manager and register in multiview
   auto multiView = MultiView::getInstance();
 
-  //auto geometry_enabled = GeometryManager::getInstance().getR2Geometry()? R2Visualisation:R3Visualisation;
+  // auto geometry_enabled = GeometryManager::getInstance().getR2Geometry()? R2Visualisation:R3Visualisation;
   for (int iDet = 0; iDet < NvisualisationGroups; ++iDet) {
     if (!R3Visualisation[iDet]) {
       continue;
     }
     EVisualisationGroup det = static_cast<EVisualisationGroup>(iDet);
     string detName = gVisualisationGroupName[det];
-    LOG(INFO) << detName;
+    LOGF(info, detName);
 
-    if (settings.GetValue((detName + ".draw").c_str(), false)) {
-      if (detName == "TPC" || detName == "MCH" || detName == "MID" || detName == "MFT") { // don't load MUON+MFT and AD and standard TPC to R-Phi view
+    if (detName == "TPC" || detName == "MCH" || detName == "MID" ||
+        detName == "MFT") { // don't load MUON+MFT and AD and standard TPC to R-Phi view
+      multiView->drawGeometryForDetector(detName, true, false);
+    } else if (detName == "RPH") { // special TPC geom from R-Phi view
+      multiView->drawGeometryForDetector(detName, false, true, false);
+    } else if (detName != "TST") { // default
+      multiView->drawGeometryForDetector(detName);
+    }
 
-        multiView->drawGeometryForDetector(detName, true, false);
-      } else if (detName == "RPH") { // special TPC geom from R-Phi view
+    const auto geom = multiView->getDetectorGeometry(detName);
+    const auto show = settings.GetValue((detName + ".draw").c_str(), false);
 
-        multiView->drawGeometryForDetector(detName, false, true, false);
-      } else { // default
-        if (detName != "ACO") {
-          multiView->drawGeometryForDetector(detName);
-        }
-      }
+    if (geom != nullptr) {
+      geom->SetRnrSelfChildren(show, show);
     }
   }
 }
@@ -138,17 +156,13 @@ void Initializer::setupGeometry()
 void Initializer::setupCamera()
 {
   // move and rotate sub-views
-  TEnv settings;
-  ConfigurationManager::getInstance().getConfig(settings);
-
-  // read settings from config file
-  const double angleHorizontal = settings.GetValue("camera.3D.rotation.horizontal", -0.4);
-  const double angleVertical = settings.GetValue("camera.3D.rotation.vertical", 1.0);
+  const double angleHorizontal = ConfigurationManager::getCamera3DRotationHorizontal();
+  const double angleVertical = ConfigurationManager::getCamera3DRotationVertical();
 
   double zoom[MultiView::NumberOfViews];
-  zoom[MultiView::View3d] = settings.GetValue("camera.3D.zoom", 1.0);
-  zoom[MultiView::ViewRphi] = settings.GetValue("camera.R-Phi.zoom", 1.0);
-  zoom[MultiView::ViewZrho] = settings.GetValue("camera.Rho-Z.zoom", 1.0);
+  zoom[MultiView::View3d] = ConfigurationManager::getCamera3DZoom();
+  zoom[MultiView::ViewRphi] = ConfigurationManager::getCameraRPhiZoom();
+  zoom[MultiView::ViewZY] = ConfigurationManager::getCameraZYZoom();
 
   // get necessary elements of the multiview and set camera position
   auto multiView = MultiView::getInstance();

@@ -12,6 +12,7 @@
 #define O2_FRAMEWORK_TRAITS_H_
 
 #include <type_traits>
+#include <concepts>
 
 namespace o2::framework
 {
@@ -27,6 +28,16 @@ template <template <typename...> class Ref, typename... Args>
 struct is_specialization<Ref<Args...>, Ref> : std::true_type {
 };
 
+template <typename T, template <typename...> class Ref>
+inline constexpr bool is_specialization_v = is_specialization<T, Ref>::value;
+
+template <template <typename...> typename T, typename S>
+concept specialization_of_template = requires {
+  {
+    []<typename... Ts>(T<Ts...>*) -> T<Ts...> {}(std::declval<std::decay_t<S>*>())
+  } -> std::same_as<std::decay_t<S>>;
+};
+
 template <typename A, typename B>
 struct is_overriding : public std::bool_constant<std::is_same_v<A, B> == false && std::is_member_function_pointer_v<A> && std::is_member_function_pointer_v<B>> {
 };
@@ -38,16 +49,13 @@ struct always_static_assert : std::false_type {
 template <typename... T>
 inline constexpr bool always_static_assert_v = always_static_assert<T...>::value;
 
-template <template <typename...> class base, typename derived>
-struct is_base_of_template_impl {
-  template <typename... Ts>
-  static constexpr std::true_type test(const base<Ts...>*);
-  static constexpr std::false_type test(...);
-  using type = decltype(test(std::declval<derived*>()));
+template <template <typename...> typename B, typename D>
+concept base_of_template = requires {
+  []<typename... Ts>(B<Ts...>*) {}(std::declval<std::decay_t<D>*>());
 };
 
-template <template <typename...> class base, typename derived>
-using is_base_of_template = typename is_base_of_template_impl<base, derived>::type;
+template <template <typename...> typename B, typename D>
+constexpr bool is_base_of_template_v = base_of_template<B, D>;
 
 } // namespace o2::framework
 

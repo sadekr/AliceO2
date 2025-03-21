@@ -24,7 +24,7 @@
 #include "TString.h"
 #include "AliTPCTransform.h"
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -43,21 +43,21 @@ class TPCFastTransformManager
   TPCFastTransformManager();
 
   /// Copy constructor: disabled
-  TPCFastTransformManager(const TPCFastTransformManager&) CON_DELETE;
+  TPCFastTransformManager(const TPCFastTransformManager&) = delete;
 
   /// Assignment operator: disabled
-  TPCFastTransformManager& operator=(const TPCFastTransformManager&) CON_DELETE;
+  TPCFastTransformManager& operator=(const TPCFastTransformManager&) = delete;
 
   /// Destructor
-  ~TPCFastTransformManager() CON_DEFAULT;
+  ~TPCFastTransformManager() = default;
 
   /// _______________  Main functionality  ________________________
 
   /// Initializes TPCFastTransform object
-  int create(TPCFastTransform& spline, AliTPCTransform* transform, Long_t TimeStamp);
+  int32_t create(TPCFastTransform& spline, AliTPCTransform* transform, long TimeStamp);
 
   /// Updates the transformation with the new time stamp
-  Int_t updateCalibration(TPCFastTransform& spline, Long_t TimeStamp);
+  Int_t updateCalibration(TPCFastTransform& spline, long TimeStamp);
 
   /// _______________  Utilities   ________________________
 
@@ -68,19 +68,19 @@ class TPCFastTransformManager
 
  private:
   /// Stores an error message
-  int storeError(Int_t code, const char* msg);
+  int32_t storeError(Int_t code, const char* msg);
 
   TString mError;                  ///< error string
   AliTPCTransform* mOrigTransform; ///< transient
-  int fLastTimeBin;                ///< last calibrated time bin
+  int32_t fLastTimeBin;            ///< last calibrated time bin
 };
 
-inline int TPCFastTransformManager::storeError(int code, const char* msg)
+inline int32_t TPCFastTransformManager::storeError(int32_t code, const char* msg)
 {
   mError = msg;
   return code;
 }
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

@@ -16,9 +16,8 @@
 
 #include "ITSSimulation/V1Layer.h"
 #include "ITSBase/GeometryTGeo.h"
-#include "ITSSimulation/Detector.h"
 
-#include "FairLogger.h" // for LOG
+#include <fairlogger/Logger.h> // for LOG
 
 #include <TGeoArb8.h>    // for TGeoArb8
 #include <TGeoBBox.h>    // for TGeoBBox
@@ -89,7 +88,7 @@ ClassImp(V1Layer);
 #define SQ(A) (A) * (A)
 
 V1Layer::V1Layer()
-  : V11Geometry(),
+  : V11Geometry(0, "ITS"),
     mLayerNumber(0),
     mPhi0(0),
     mLayerRadius(0),
@@ -104,15 +103,15 @@ V1Layer::V1Layer()
     mChipTypeID(0),
     mIsTurbo(false),
     mBuildLevel(0),
-    mStaveModel(Detector::kIBModelDummy)
+    mStaveModel(kIBModelDummy)
 {
   for (int i = kNHLevels; i--;) {
     mHierarchy[i] = 0;
   }
 }
 
-V1Layer::V1Layer(Int_t debug)
-  : V11Geometry(debug),
+V1Layer::V1Layer(Int_t debug, const char* name)
+  : V11Geometry(debug, name),
     mLayerNumber(0),
     mPhi0(0),
     mLayerRadius(0),
@@ -127,15 +126,15 @@ V1Layer::V1Layer(Int_t debug)
     mChipTypeID(0),
     mIsTurbo(false),
     mBuildLevel(0),
-    mStaveModel(Detector::kIBModelDummy)
+    mStaveModel(kIBModelDummy)
 {
   for (int i = kNHLevels; i--;) {
     mHierarchy[i] = 0;
   }
 }
 
-V1Layer::V1Layer(Int_t lay, Int_t debug)
-  : V11Geometry(debug),
+V1Layer::V1Layer(Int_t lay, Int_t debug, const char* name)
+  : V11Geometry(debug, name),
     mLayerNumber(lay),
     mPhi0(0),
     mLayerRadius(0),
@@ -150,15 +149,15 @@ V1Layer::V1Layer(Int_t lay, Int_t debug)
     mChipTypeID(0),
     mIsTurbo(false),
     mBuildLevel(0),
-    mStaveModel(Detector::kIBModelDummy)
+    mStaveModel(kIBModelDummy)
 {
   for (int i = kNHLevels; i--;) {
     mHierarchy[i] = 0;
   }
 }
 
-V1Layer::V1Layer(Int_t lay, Bool_t turbo, Int_t debug)
-  : V11Geometry(debug),
+V1Layer::V1Layer(Int_t lay, Bool_t turbo, Int_t debug, const char* name)
+  : V11Geometry(debug, name),
     mLayerNumber(lay),
     mPhi0(0),
     mLayerRadius(0),
@@ -173,7 +172,7 @@ V1Layer::V1Layer(Int_t lay, Bool_t turbo, Int_t debug)
     mChipTypeID(0),
     mIsTurbo(turbo),
     mBuildLevel(0),
-    mStaveModel(Detector::kIBModelDummy)
+    mStaveModel(kIBModelDummy)
 {
   for (int i = kNHLevels; i--;) {
     mHierarchy[i] = 0;
@@ -241,39 +240,39 @@ void V1Layer::createLayer(TGeoVolume* motherVolume)
 
   // Check if the user set the proper parameters
   if (mLayerRadius <= 0) {
-    LOG(FATAL) << "Wrong layer radius " << mLayerRadius;
+    LOG(fatal) << "Wrong layer radius " << mLayerRadius;
   }
 
   if (mZLength <= 0) {
-    LOG(FATAL) << "Wrong layer length " << mZLength;
+    LOG(fatal) << "Wrong layer length " << mZLength;
   }
 
   if (mNumberOfStaves <= 0) {
-    LOG(FATAL) << "Wrong number of staves " << mNumberOfStaves;
+    LOG(fatal) << "Wrong number of staves " << mNumberOfStaves;
   }
 
   if (mNumberOfChips <= 0) {
-    LOG(FATAL) << "Wrong number of chips " << mNumberOfChips;
+    LOG(fatal) << "Wrong number of chips " << mNumberOfChips;
   }
 
   if (mLayerNumber >= sNumberOmInnerLayers && mNumberOfModules <= 0) {
-    LOG(FATAL) << "Wrong number of modules " << mNumberOfModules;
+    LOG(fatal) << "Wrong number of modules " << mNumberOfModules;
   }
 
   if (mStaveThickness <= 0) {
-    LOG(INFO) << "Stave thickness wrong or not set " << mStaveThickness << " using default "
+    LOG(info) << "Stave thickness wrong or not set " << mStaveThickness << " using default "
               << sDefaultStaveThick;
     mStaveThickness = sDefaultStaveThick;
   }
 
   if (mSensorThickness <= 0) {
-    LOG(INFO) << "Sensor thickness wrong or not set " << mSensorThickness << " using default "
+    LOG(info) << "Sensor thickness wrong or not set " << mSensorThickness << " using default "
               << sDefaultSensorThick;
     mSensorThickness = sDefaultSensorThick;
   }
 
   if (mSensorThickness > mStaveThickness) {
-    LOG(WARNING) << "Sensor thickness " << mSensorThickness << " is greater than stave thickness "
+    LOG(warning) << "Sensor thickness " << mSensorThickness << " is greater than stave thickness "
                  << mStaveThickness << " fixing";
     mSensorThickness = mStaveThickness;
   }
@@ -327,11 +326,11 @@ void V1Layer::createLayerTurbo(TGeoVolume* motherVolume)
 
   // Check if the user set the proper (remaining) parameters
   if (mStaveWidth <= 0) {
-    LOG(FATAL) << "Wrong stave width " << mStaveWidth;
+    LOG(fatal) << "Wrong stave width " << mStaveWidth;
   }
 
   if (Abs(mStaveTilt) > 45) {
-    LOG(WARNING) << "Stave tilt angle (" << mStaveTilt << ") greater than 45deg";
+    LOG(warning) << "Stave tilt angle (" << mStaveTilt << ") greater than 45deg";
   }
 
   snprintf(volumeName, 30, "%s%d", GeometryTGeo::getITSLayerPattern(), mLayerNumber);
@@ -415,7 +414,7 @@ TGeoVolume* V1Layer::createStave(const TGeoManager* /*mgr*/)
     }
   } else {
     TGeoVolume* hstaveVol = createStaveOuterB();
-    if (mStaveModel == Detector::kOBModel0) { // Create simplified stave struct as in v0
+    if (mStaveModel == kOBModel0) { // Create simplified stave struct as in v0
       staveVol->AddNode(hstaveVol, 0);
       mHierarchy[kHalfStave] = 1;
     } else { // (if mStaveModel) Create new stave struct as in TDR
@@ -453,7 +452,7 @@ TGeoVolume* V1Layer::createStaveInnerB(const Double_t xsta, const Double_t ysta,
 
   auto* hstave = new TGeoBBox(xmod, ymod, zmod);
 
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   snprintf(volumeName, 30, "%s%d", GeometryTGeo::getITSHalfStavePattern(), mLayerNumber);
   auto* hstaveVol = new TGeoVolume(volumeName, hstave, medAir);
@@ -480,7 +479,7 @@ TGeoVolume* V1Layer::createModuleInnerB(Double_t xmod, Double_t ymod, Double_t z
   // Then create the module and populate it with the chips
   auto* module = new TGeoBBox(xmod, ymod, zmod);
 
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   snprintf(volumeName, 30, "%s%d", GeometryTGeo::getITSModulePattern(), mLayerNumber);
   auto* modVol = new TGeoVolume(volumeName, module, medAir);
@@ -501,26 +500,26 @@ TGeoVolume* V1Layer::createStaveStructInnerB(const Double_t xsta, const Double_t
   TGeoVolume* mechStavVol = nullptr;
 
   switch (mStaveModel) {
-    case Detector::kIBModelDummy:
+    case kIBModelDummy:
       mechStavVol = createStaveModelInnerBDummy(xsta, zsta, mgr);
       break;
-    case Detector::kIBModel0:
+    case kIBModel0:
       mechStavVol = createStaveModelInnerB0(xsta, zsta, mgr);
       break;
-    case Detector::kIBModel1:
+    case kIBModel1:
       mechStavVol = createStaveModelInnerB1(xsta, zsta, mgr);
       break;
-    case Detector::kIBModel21:
+    case kIBModel21:
       mechStavVol = createStaveModelInnerB21(xsta, zsta, mgr);
       break;
-    case Detector::kIBModel22:
+    case kIBModel22:
       mechStavVol = createStaveModelInnerB22(xsta, zsta, mgr);
       break;
-    case Detector::kIBModel3:
+    case kIBModel3:
       mechStavVol = createStaveModelInnerB3(xsta, zsta, mgr);
       break;
     default:
-      LOG(FATAL) << "Unknown stave model " << mStaveModel;
+      LOG(fatal) << "Unknown stave model " << mStaveModel;
       break;
   }
   return mechStavVol;
@@ -537,13 +536,13 @@ TGeoVolume* V1Layer::createStaveModelInnerB0(const Double_t xsta, const Double_t
                                              const TGeoManager* mgr)
 {
   // Materials defined in Detector
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
 
-  TGeoMedium* medM60J3K = mgr->GetMedium("ITS_M60J3K$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medFlexCable = mgr->GetMedium("ITS_FLEXCABLE$");
+  TGeoMedium* medM60J3K = mgr->GetMedium(Form("%s_M60J3K$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medFlexCable = mgr->GetMedium(Form("%s_FLEXCABLE$", GetDetName()));
 
   // Local parameters
   Double_t kConeOutRadius = 0.15 / 2;
@@ -564,7 +563,7 @@ TGeoVolume* V1Layer::createStaveModelInnerB0(const Double_t xsta, const Double_t
   // Double_t s3 = kWidth/(2*TMath::Sin(kTheta));
   // Double_t s4 = 3*kWidth/(2*TMath::Sin(kTheta));
 
-  LOG(DEBUG1) << "BuildLevel " << mBuildLevel;
+  LOG(debug1) << "BuildLevel " << mBuildLevel;
 
   char volumeName[30];
   snprintf(volumeName, 30, "%s%d_StaveStruct", GeometryTGeo::getITSStavePattern(),
@@ -575,7 +574,6 @@ TGeoVolume* V1Layer::createStaveModelInnerB0(const Double_t xsta, const Double_t
   TGeoVolume* mechStavVol = nullptr;
 
   if (mBuildLevel < 5) {
-
     // world (trapezoid)
     auto* mechStruct = new TGeoXtru(2); // z sections
     Double_t xv[5] = {
@@ -728,13 +726,13 @@ TGeoVolume* V1Layer::createStaveModelInnerB1(const Double_t xsta, const Double_t
                                              const TGeoManager* mgr)
 {
   // Materials defined in Detector
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
 
-  TGeoMedium* medM60J3K = mgr->GetMedium("ITS_M60J3K$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medFlexCable = mgr->GetMedium("ITS_FLEXCABLE$");
+  TGeoMedium* medM60J3K = mgr->GetMedium(Form("%s_M60J3K$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medFlexCable = mgr->GetMedium(Form("%s_FLEXCABLE$", GetDetName()));
 
   // Local parameters
   Double_t kConeOutRadius = 0.15 / 2;
@@ -932,16 +930,16 @@ TGeoVolume* V1Layer::createStaveModelInnerB21(const Double_t xsta, const Double_
                                               const TGeoManager* mgr)
 {
   // Materials defined in Detector
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
 
-  TGeoMedium* medM60J3K = mgr->GetMedium("ITS_M60J3K$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medFlexCable = mgr->GetMedium("ITS_FLEXCABLE$");
-  TGeoMedium* medK13D2U2k = mgr->GetMedium("ITS_K13D2U2k$");
-  TGeoMedium* medFGS003 = mgr->GetMedium("ITS_FGS003$");
-  TGeoMedium* medCarbonFleece = mgr->GetMedium("ITS_CarbonFleece$");
+  TGeoMedium* medM60J3K = mgr->GetMedium(Form("%s_M60J3K$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medFlexCable = mgr->GetMedium(Form("%s_FLEXCABLE$", GetDetName()));
+  TGeoMedium* medK13D2U2k = mgr->GetMedium(Form("%s_K13D2U2k$", GetDetName()));
+  TGeoMedium* medFGS003 = mgr->GetMedium(Form("%s_FGS003$", GetDetName()));
+  TGeoMedium* medCarbonFleece = mgr->GetMedium(Form("%s_CarbonFleece$", GetDetName()));
 
   // Local parameters
   Double_t kConeOutRadius = 0.151384 / 2;
@@ -1212,16 +1210,16 @@ TGeoVolume* V1Layer::createStaveModelInnerB22(const Double_t xsta, const Double_
                                               const TGeoManager* mgr)
 {
   // Materials defined in Detector
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
 
-  TGeoMedium* medM60J3K = mgr->GetMedium("ITS_M60J3K$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medFlexCable = mgr->GetMedium("ITS_FLEXCABLE$");
-  TGeoMedium* medK13D2U2k = mgr->GetMedium("ITS_K13D2U2k$");
-  TGeoMedium* medFGS003 = mgr->GetMedium("ITS_FGS003$");
-  TGeoMedium* medCarbonFleece = mgr->GetMedium("ITS_CarbonFleece$");
+  TGeoMedium* medM60J3K = mgr->GetMedium(Form("%s_M60J3K$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medFlexCable = mgr->GetMedium(Form("%s_FLEXCABLE$", GetDetName()));
+  TGeoMedium* medK13D2U2k = mgr->GetMedium(Form("%s_K13D2U2k$", GetDetName()));
+  TGeoMedium* medFGS003 = mgr->GetMedium(Form("%s_FGS003$", GetDetName()));
+  TGeoMedium* medCarbonFleece = mgr->GetMedium(Form("%s_CarbonFleece$", GetDetName()));
 
   // Local parameters
   Double_t kConeOutRadius = (0.1024 + 0.0025) / 2; // 0.107/2;
@@ -1518,16 +1516,16 @@ TGeoVolume* V1Layer::createStaveModelInnerB3(const Double_t xsta, const Double_t
                                              const TGeoManager* mgr)
 {
   // Materials defined in Detector
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
 
-  TGeoMedium* medM60J3K = mgr->GetMedium("ITS_M60J3K$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medFlexCable = mgr->GetMedium("ITS_FLEXCABLE$");
-  // TGeoMedium *medK13D2U2k  = mgr->GetMedium("ITS_K13D2U2k$");
-  // TGeoMedium *medFGS003    = mgr->GetMedium("ITS_FGS003$");
-  // TGeoMedium *medCarbonFleece = mgr->GetMedium("ITS_CarbonFleece$");
+  TGeoMedium* medM60J3K = mgr->GetMedium(Form("%s_M60J3K$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medFlexCable = mgr->GetMedium(Form("%s_FLEXCABLE$", GetDetName()));
+  // TGeoMedium *medK13D2U2k  = mgr->GetMedium(Form("%s_K13D2U2k$", GetDetName()));
+  // TGeoMedium *medFGS003    = mgr->GetMedium(Form("%s_FGS003$", GetDetName()));
+  // TGeoMedium *medCarbonFleece = mgr->GetMedium(Form("%s_CarbonFleece$", GetDetName()));
 
   // Local parameters
   Double_t kConeOutRadius = 0.15 / 2;
@@ -1943,17 +1941,17 @@ TGeoVolume* V1Layer::createStaveOuterB(const TGeoManager* mgr)
   TGeoVolume* mechStavVol = nullptr;
 
   switch (mStaveModel) {
-    case Detector::kOBModelDummy:
+    case kOBModelDummy:
       mechStavVol = createStaveModelOuterBDummy(mgr);
       break;
-    case Detector::kOBModel0:
+    case kOBModel0:
       mechStavVol = createStaveModelOuterB0(mgr);
       break;
-    case Detector::kOBModel1:
+    case kOBModel1:
       mechStavVol = createStaveModelOuterB1(mgr);
       break;
     default:
-      LOG(FATAL) << "Unknown stave model " << mStaveModel;
+      LOG(fatal) << "Unknown stave model " << mStaveModel;
       break;
   }
   return mechStavVol;
@@ -1990,7 +1988,7 @@ TGeoVolume* V1Layer::createStaveModelOuterB0(const TGeoManager* mgr)
   auto* hstave = new TGeoBBox(xlen, ylen, zlen / 2);
 
   // We have all shapes: now create the real volumes
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   snprintf(volumeName, 30, "%s%d", GeometryTGeo::getITSModulePattern(), mLayerNumber);
   auto* modVol = new TGeoVolume(volumeName, module, medAir);
@@ -2100,13 +2098,13 @@ TGeoVolume* V1Layer::createStaveModelOuterB1(const TGeoManager* mgr)
 
   // We have all shapes: now create the real volumes
 
-  TGeoMedium* medAluminum = mgr->GetMedium("ITS_ALUMINUM$");
-  TGeoMedium* medCarbon = mgr->GetMedium("ITS_CARBON$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
-  TGeoMedium* medWater = mgr->GetMedium("ITS_WATER$");
-  TGeoMedium* medCarbonFleece = mgr->GetMedium("ITS_CarbonFleece$");
-  TGeoMedium* medFGS003 = mgr->GetMedium("ITS_FGS003$"); // amec thermasol
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medAluminum = mgr->GetMedium(Form("%s_ALUMINUM$", GetDetName()));
+  TGeoMedium* medCarbon = mgr->GetMedium(Form("%s_CARBON$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
+  TGeoMedium* medWater = mgr->GetMedium(Form("%s_WATER$", GetDetName()));
+  TGeoMedium* medCarbonFleece = mgr->GetMedium(Form("%s_CarbonFleece$", GetDetName()));
+  TGeoMedium* medFGS003 = mgr->GetMedium(Form("%s_FGS003$", GetDetName())); // amec thermasol
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   auto* busAlVol = new TGeoVolume("BusAlVol", busAl, medAluminum);
   busAlVol->SetLineColor(kCyan);
@@ -2295,15 +2293,15 @@ TGeoVolume* V1Layer::createSpaceFrameOuterB(const TGeoManager* mgr)
   TGeoVolume* mechStavVol = nullptr;
 
   switch (mStaveModel) {
-    case Detector::kOBModelDummy:
-    case Detector::kOBModel0:
+    case kOBModelDummy:
+    case kOBModel0:
       mechStavVol = createSpaceFrameOuterBDummy(mgr);
       break;
-    case Detector::kOBModel1:
+    case kOBModel1:
       mechStavVol = createSpaceFrameOuterB1(mgr);
       break;
     default:
-      LOG(FATAL) << "Unknown stave model " << mStaveModel;
+      LOG(fatal) << "Unknown stave model " << mStaveModel;
       break;
   }
 
@@ -2319,8 +2317,8 @@ TGeoVolume* V1Layer::createSpaceFrameOuterBDummy(const TGeoManager*) const
 TGeoVolume* V1Layer::createSpaceFrameOuterB1(const TGeoManager* mgr)
 {
   // Materials defined in Detector
-  TGeoMedium* medCarbon = mgr->GetMedium("ITS_CARBON$");
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
+  TGeoMedium* medCarbon = mgr->GetMedium(Form("%s_CARBON$", GetDetName()));
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
 
   // Local parameters
   Double_t sframeWidth = sOBSpaceFrameWidth;
@@ -2523,7 +2521,7 @@ TGeoVolume* V1Layer::createChipInnerB(const Double_t xchip, const Double_t ychip
   auto* sensor = new TGeoBBox(xlen, ylen, zlen);
 
   // We have all shapes: now create the real volumes
-  TGeoMedium* medSi = mgr->GetMedium("ITS_SI$");
+  TGeoMedium* medSi = mgr->GetMedium(Form("%s_SI$", GetDetName()));
 
   snprintf(volumeName, 30, "%s%d", GeometryTGeo::getITSChipPattern(), mLayerNumber);
   auto* chipVol = new TGeoVolume(volumeName, chip, medSi);
@@ -2598,11 +2596,11 @@ TGeoVolume* V1Layer::createModuleOuterB(const TGeoManager* mgr)
 
   // We have all shapes: now create the real volumes
 
-  TGeoMedium* medAir = mgr->GetMedium("ITS_AIR$");
-  TGeoMedium* medCarbon = mgr->GetMedium("ITS_CARBON$");
-  TGeoMedium* medGlue = mgr->GetMedium("ITS_GLUE$");
-  TGeoMedium* medAluminum = mgr->GetMedium("ITS_ALUMINUM$");
-  TGeoMedium* medKapton = mgr->GetMedium("ITS_KAPTON(POLYCH2)$");
+  TGeoMedium* medAir = mgr->GetMedium(Form("%s_AIR$", GetDetName()));
+  TGeoMedium* medCarbon = mgr->GetMedium(Form("%s_CARBON$", GetDetName()));
+  TGeoMedium* medGlue = mgr->GetMedium(Form("%s_GLUE$", GetDetName()));
+  TGeoMedium* medAluminum = mgr->GetMedium(Form("%s_ALUMINUM$", GetDetName()));
+  TGeoMedium* medKapton = mgr->GetMedium(Form("%s_KAPTON(POLYCH2)$", GetDetName()));
 
   auto* modPlateVol = new TGeoVolume("CarbonPlateVol", modPlate, medCarbon);
   modPlateVol->SetLineColor(kMagenta - 8);
@@ -2692,7 +2690,7 @@ void V1Layer::setStaveTilt(const Double_t t)
   if (mIsTurbo) {
     mStaveTilt = t;
   } else {
-    LOG(ERROR) << "Not a Turbo layer";
+    LOG(error) << "Not a Turbo layer";
   }
 }
 
@@ -2701,7 +2699,7 @@ void V1Layer::setStaveWidth(const Double_t w)
   if (mIsTurbo) {
     mStaveWidth = w;
   } else {
-    LOG(ERROR) << "Not a Turbo layer";
+    LOG(error) << "Not a Turbo layer";
   }
 }
 

@@ -12,12 +12,19 @@
 #define BOOST_TEST_MODULE Test ITSMFTCTFIO
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
+
+#undef NDEBUG
+#include <cassert>
+
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/dataset.hpp>
 #include "DataFormatsITSMFT/CompCluster.h"
 #include "DataFormatsITSMFT/CTF.h"
 #include "DataFormatsITSMFT/ROFRecord.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "ITSMFTReconstruction/CTFCoder.h"
+#include "ITSMFTReconstruction/LookUp.h"
 #include "Framework/Logger.h"
 #include <TFile.h>
 #include <TRandom.h>
@@ -25,14 +32,17 @@
 #include <cstring>
 
 using namespace o2::itsmft;
+namespace boost_data = boost::unit_test::data;
 
-BOOST_AUTO_TEST_CASE(CompressedClustersTest)
+inline std::vector<o2::ctf::ANSHeader> ANSVersions{o2::ctf::ANSVersionCompat, o2::ctf::ANSVersion1};
+
+BOOST_DATA_TEST_CASE(CompressedClustersTest, boost_data::make(ANSVersions), ansVersion)
 {
 
   std::vector<ROFRecord> rofRecVec;
   std::vector<CompClusterExt> cclusVec;
   std::vector<unsigned char> pattVec;
-
+  LookUp pattIdConverter;
   TStopwatch sw;
   sw.Start();
   std::vector<int> row, col;
@@ -66,16 +76,17 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
     rofr.setNEntries(int(cclusVec.size()) - rofr.getFirstEntry());
   }
   sw.Stop();
-  LOG(INFO) << "Generated " << cclusVec.size() << " in " << rofRecVec.size() << " ROFs in " << sw.CpuTime() << " s";
+  LOG(info) << "Generated " << cclusVec.size() << " in " << rofRecVec.size() << " ROFs in " << sw.CpuTime() << " s";
 
   sw.Start();
   std::vector<o2::ctf::BufferType> vec;
   {
-    CTFCoder coder(o2::detectors::DetID::ITS);
-    coder.encode(vec, rofRecVec, cclusVec, pattVec); // compress
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Encoder, o2::detectors::DetID::ITS);
+    coder.setANSVersion(ansVersion);
+    coder.encode(vec, rofRecVec, cclusVec, pattVec, pattIdConverter, 0); // compress
   }
   sw.Stop();
-  LOG(INFO) << "Compressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Compressed in " << sw.CpuTime() << " s";
 
   // writing
   {
@@ -87,7 +98,7 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
     ctfImage->appendToTree(ctfTree, "ITS");
     ctfTree.Write();
     sw.Stop();
-    LOG(INFO) << "Wrote to tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Wrote to tree in " << sw.CpuTime() << " s";
   }
 
   // reading
@@ -99,7 +110,7 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
     BOOST_CHECK(tree);
     o2::itsmft::CTF::readFromTree(vec, *(tree.get()), "ITS");
     sw.Stop();
-    LOG(INFO) << "Read back from tree in " << sw.CpuTime() << " s";
+    LOG(info) << "Read back from tree in " << sw.CpuTime() << " s";
   }
 
   std::vector<ROFRecord> rofRecVecD;
@@ -109,11 +120,11 @@ BOOST_AUTO_TEST_CASE(CompressedClustersTest)
   sw.Start();
   const auto ctfImage = o2::itsmft::CTF::getImage(vec.data());
   {
-    CTFCoder coder(o2::detectors::DetID::ITS);
+    CTFCoder coder(o2::ctf::CTFCoderBase::OpType::Decoder, o2::detectors::DetID::ITS);
     coder.decode(ctfImage, rofRecVecD, cclusVecD, pattVecD, nullptr, clPattLookup); // decompress
   }
   sw.Stop();
-  LOG(INFO) << "Decompressed in " << sw.CpuTime() << " s";
+  LOG(info) << "Decompressed in " << sw.CpuTime() << " s";
 
   //
   // check

@@ -19,7 +19,7 @@
 #include <memory>
 #include <TFile.h>
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 std::weak_ptr<GPUROOTDumpCore> GPUROOTDumpCore::sInstance;
 
@@ -30,7 +30,8 @@ GPUROOTDumpCore::GPUROOTDumpCore(GPUROOTDumpCore::GPUROOTDumpCorePrivate)
 GPUROOTDumpCore::~GPUROOTDumpCore()
 {
   if (mFile) {
-    for (unsigned int i = 0; i < mBranches.size(); i++) {
+    mFile->cd();
+    for (uint32_t i = 0; i < mBranches.size(); i++) {
       mBranches[i]->write();
     }
     mFile->Close();
@@ -59,6 +60,7 @@ GPUROOTDumpBase::GPUROOTDumpBase()
   }
   p->mBranches.emplace_back(this);
   if (!p->mFile) {
+    std::remove("gpudebug.root");
     p->mFile.reset(new TFile("gpudebug.root", "recreate"));
   }
   p->mFile->cd();

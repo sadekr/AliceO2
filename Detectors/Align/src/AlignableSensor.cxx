@@ -14,14 +14,12 @@
 /// @since  2021-02-01
 /// @brief  End-chain alignment volume in detector branch, where the actual measurement is done.
 
-#include <cstdio>
-#include <TClonesArray.h>
-
 #include "Align/AlignableSensor.h"
 #include "Framework/Logger.h"
 #include "Align/AlignmentPoint.h"
 #include "Align/AlignableDetector.h"
 #include "DetectorsBase/GeometryManager.h"
+#include <vector>
 
 ClassImp(o2::align::AlignableSensor);
 
@@ -49,7 +47,7 @@ void AlignableSensor::dPosTraDParGeomLOC(const AlignmentPoint* pnt, double* deri
   // Jacobian of position in sensor tracking frame (tra) vs sensor LOCAL frame
   // parameters in TGeoHMatrix convention.
   // Result is stored in array deriv as linearized matrix 6x3
-  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5, 0.5, 0.5};
+  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5 * DegToRad(), 0.5 * DegToRad(), 0.5 * DegToRad()}; // changed angles to radians
   double delta[kNDOFGeom], pos0[3], pos1[3], pos2[3], pos3[3];
   TGeoHMatrix matMod;
   //
@@ -96,7 +94,7 @@ void AlignableSensor::dPosTraDParGeomLOC(const AlignmentPoint* pnt, double* deri
   // Jacobian of position in sensor tracking frame (tra) vs parent volume LOCAL frame parameters.
   // NO check of parentship is done!
   // Result is stored in array deriv as linearized matrix 6x3
-  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5, 0.5, 0.5};
+  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5 * DegToRad(), 0.5 * DegToRad(), 0.5 * DegToRad()}; // changed angles to radians
   double delta[kNDOFGeom], pos0[3], pos1[3], pos2[3], pos3[3];
   TGeoHMatrix matMod;
   // this is the matrix for transition from sensor to parent volume local frames: LOC=matRel*loc
@@ -109,7 +107,7 @@ void AlignableSensor::dPosTraDParGeomLOC(const AlignmentPoint* pnt, double* deri
   //
   for (int ip = kNDOFGeom; ip--;) {
     //
-    if (!isFreeDOF(ip)) {
+    if (!parent->isFreeDOF(ip)) { // RSCHANGE: was isFreeDOF(ip)
       continue;
     }
     //
@@ -147,7 +145,7 @@ void AlignableSensor::dPosTraDParGeomTRA(const AlignmentPoint* pnt, double* deri
   // tra' = tau*tra
   //
   // Result is stored in array deriv as linearized matrix 6x3
-  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5, 0.5, 0.5};
+  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5 * DegToRad(), 0.5 * DegToRad(), 0.5 * DegToRad()}; // changed angles to radians
   double delta[kNDOFGeom], pos0[3], pos1[3], pos2[3], pos3[3];
   TGeoHMatrix matMod;
   //
@@ -190,12 +188,12 @@ void AlignableSensor::dPosTraDParGeomTRA(const AlignmentPoint* pnt, double* deri
 //_________________________________________________________
 void AlignableSensor::dPosTraDParGeomTRA(const AlignmentPoint* pnt, double* deriv, const AlignableVolume* parent) const
 {
-  // Jacobian of position in sensor tracking frame (tra) vs sensor TRACKING
+  // Jacobian of position in sensor tracking frame (tra) vs parent TRACKING
   // frame parameters in TGeoHMatrix convention, i.e. the modified parameter is
   // tra' = tau*tra
   //
   // Result is stored in array deriv as linearized matrix 6x3
-  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5, 0.5, 0.5};
+  const double kDelta[kNDOFGeom] = {0.1, 0.1, 0.1, 0.5 * DegToRad(), 0.5 * DegToRad(), 0.5 * DegToRad()}; // changed angles to radians
   double delta[kNDOFGeom], pos0[3], pos1[3], pos2[3], pos3[3];
   TGeoHMatrix matMod;
   //
@@ -220,7 +218,7 @@ void AlignableSensor::dPosTraDParGeomTRA(const AlignmentPoint* pnt, double* deri
   //
   for (int ip = kNDOFGeom; ip--;) {
     //
-    if (!isFreeDOF(ip)) {
+    if (!parent->isFreeDOF(ip)) { // RSCHANGE: was isFreeDOF(ip)
       continue;
     }
     //
@@ -264,7 +262,7 @@ void AlignableSensor::dPosTraDParGeom(const AlignmentPoint* pnt, double* deriv, 
       parent ? dPosTraDParGeomTRA(pnt, deriv, parent) : dPosTraDParGeomTRA(pnt, deriv);
       break;
     default:
-      LOG(ERROR) << "Alignment frame " << parent->getVarFrame() << " is not implemented";
+      LOG(error) << "Alignment frame " << parent->getVarFrame() << " is not implemented";
       break;
   }
 }
@@ -292,7 +290,7 @@ void AlignableSensor::getModifiedMatrixT2LmodTRA(TGeoHMatrix& matMod, const doub
 //__________________________________________________________________
 void AlignableSensor::addChild(AlignableVolume*)
 {
-  LOG(FATAL) << "Sensor volume cannot have children: id=" << getVolID() << " " << GetName();
+  LOG(fatal) << "Sensor volume cannot have children: id=" << getVolID() << " " << GetName();
 }
 
 //__________________________________________________________________
@@ -303,6 +301,7 @@ int AlignableSensor::Compare(const TObject* b) const
 }
 
 //__________________________________________________________________
+/* // RS FIXME REM
 void AlignableSensor::setTrackingFrame()
 {
   // define tracking frame of the sensor
@@ -316,7 +315,7 @@ void AlignableSensor::setTrackingFrame()
   utils::bringToPiPM(mAlp);
   //
 }
-
+*/
 //____________________________________________
 void AlignableSensor::Print(const Option_t* opt) const
 {
@@ -370,28 +369,6 @@ void AlignableSensor::Print(const Option_t* opt) const
 }
 
 //____________________________________________
-void AlignableSensor::prepareMatrixT2L()
-{
-  // extract geometry T2L matrix
-  TGeoHMatrix t2l;
-  t2l.Clear();
-  t2l.RotateZ(mAlp * RadToDeg()); // rotate in direction of normal to the sensor plane
-  const TGeoHMatrix* matL2G = base::GeometryManager::getMatrix(mDet->getDetID(), getSID());
-  const TGeoHMatrix& matL2Gi = matL2G->Inverse();
-  t2l.MultiplyLeft(&matL2Gi);
-  setMatrixT2L(t2l);
-
-  //  const TGeoHMatrix* t2l = AliGeomManager::GetTracking2LocalMatrix(getVolID());
-  //  const if (!t2l)
-  //  {
-  //    Print("long");
-  //    LOG(FATAL) << "Failed to find T2L matrix for VID: " << getVolID() << ", " << getSymName();
-  //  }
-  //  setMatrixT2L(*t2l);
-  //  //
-}
-
-//____________________________________________
 void AlignableSensor::prepareMatrixClAlg()
 {
   // prepare alignment matrix in the LOCAL frame: delta = Gideal^-1 * G
@@ -428,15 +405,14 @@ void AlignableSensor::dPosTraDParCalib(const AlignmentPoint* pnt, double* deriv,
 }
 
 //______________________________________________________
-int AlignableSensor::finalizeStat(DOFStatistics& st)
+int AlignableSensor::finalizeStat()
 {
   // finalize statistics on processed points
-  fillDOFStat(st);
   return mNProcPoints;
 }
 
 //_________________________________________________________________
-void AlignableSensor::updateL2GRecoMatrices(const TClonesArray* algArr, const TGeoHMatrix* cumulDelta)
+void AlignableSensor::updateL2GRecoMatrices(const std::vector<o2::detectors::AlignParam>& algArr, const TGeoHMatrix* cumulDelta)
 {
   // recreate mMatL2GReco matrices from ideal L2G matrix and alignment objects
   // used during data reconstruction.
@@ -446,16 +422,6 @@ void AlignableSensor::updateL2GRecoMatrices(const TClonesArray* algArr, const TG
   prepareMatrixClAlgReco();
   //
 }
-
-/*
-//_________________________________________________________________
-AlignmentPoint* AlignableSensor::TrackPoint2AlgPoint(int, const AliTrackPointArray*, const AliESDtrack*)
-{
-  // dummy converter
-  AliError("Generic method, must be implemented in specific sensor");
-  return 0;
-}
-*/
 
 //_________________________________________________________________
 void AlignableSensor::applyAlignmentFromMPSol()

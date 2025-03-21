@@ -62,8 +62,31 @@ class TrackMFT : public o2::track::TrackParCovFwd
 
   void print() const;
 
+  /// get the number of degrees of freedom of the track
+  int getNDF() const { return 2 * mClusRef.getEntries() - 5; }
+  /// get the track normalized chi2
+  double getChi2OverNDF() const { return getTrackChi2() / getNDF(); }
+
   const o2::track::TrackParCovFwd& getOutParam() const { return mOutParameters; }       ///< Returns track parameters fitted outwards
   void setOutParam(const o2::track::TrackParCovFwd parcov) { mOutParameters = parcov; } ///< Set track out parameters
+
+  void setClusterSize(int l, int size)
+  {
+    if (l >= 10) {
+      return;
+    }
+    if (size > 63) {
+      size = 63;
+    }
+
+    mClusterSizes &= ~(0x3fULL << (l * 6));
+    mClusterSizes |= (static_cast<uint64_t>(size) << (l * 6));
+  }
+
+  uint64_t getClusterSizes() const
+  {
+    return mClusterSizes;
+  }
 
  private:
   Bool_t mIsCA = false; ///< Track finding method CA vs. LTF
@@ -74,8 +97,9 @@ class TrackMFT : public o2::track::TrackParCovFwd
 
   Double_t mSeedinvQPtFitChi2 = 0.; ///< Seed InvQPt Chi2 from FCF clusters X,Y positions
   Double_t mInvQPtSeed;             ///< Seed InvQPt from FCF clusters X,Y positions
+  uint64_t mClusterSizes = 0;       ///< MFT cluster sizes per track
 
-  ClassDefNV(TrackMFT, 2);
+  ClassDefNV(TrackMFT, 3);
 };
 
 class TrackMFTExt : public TrackMFT
@@ -89,14 +113,28 @@ class TrackMFTExt : public TrackMFT
   using TrackMFT::TrackMFT; // inherit base constructors
 
   int getExternalClusterIndex(int i) const { return mExtClsIndex[i]; }
+  int getExternalClusterSize(int i) const { return mExtClsSize[i]; }
+  int getExternalClusterLayer(int i) const { return mExtClsLayer[i]; }
 
   void setExternalClusterIndex(int np, int idx)
   {
     mExtClsIndex[np] = idx;
   }
 
+  void setExternalClusterSize(int np, int clsSize)
+  {
+    mExtClsSize[np] = clsSize;
+  }
+
+  void setExternalClusterLayer(int np, int clsLayer)
+  {
+    mExtClsLayer[np] = clsLayer;
+  }
+
  protected:
   std::array<int, MaxClusters> mExtClsIndex = {-1}; ///< External indices of associated clusters
+  std::array<int, MaxClusters> mExtClsSize = {-1};  ///< Cluster size
+  std::array<int, MaxClusters> mExtClsLayer = {-1}; ///< Cluster layer
 
   ClassDefNV(TrackMFTExt, 1);
 };

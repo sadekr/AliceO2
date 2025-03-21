@@ -28,7 +28,7 @@
 
 using namespace o2::mch::raw;
 
-const char* sampaClusterFormat = "{}-CH{}-{}";
+constexpr const char* sampaClusterFormat = "{}-CH{}-{}";
 const bool useDummyElecMap = true;
 
 struct DePadId {
@@ -128,16 +128,15 @@ template <typename T>
 std::vector<T> readDigits()
 {
   std::vector<T> result;
-  DataDecoder dd(handlePacketStoreAsVec<T>(result), nullptr, 0, "", "", false, false, useDummyElecMap);
+  DataDecoder dd(handlePacketStoreAsVec<T>(result), nullptr, "", "", false, false, useDummyElecMap);
 
-  auto buffer = getBuffer("mch.raw");
+  auto buffer = getBuffer("MCH.raw");
   dd.decodeBuffer(buffer);
   return result;
 }
 
 BOOST_AUTO_TEST_CASE(WrittenAndReadBackDigitsShouldBeTheSameStringVersion)
 {
-  o2::conf::ConfigurableParam::setValue("MCHCoDecParam", "sampaBcOffset", 0);
   std::vector<std::string> expected = {
     "S481-J5-DS1-CH58-ts-0-bc-3456-cs-1-q-959",
     "S481-J5-DS1-CH11-ts-0-bc-3456-cs-1-q-974",
@@ -172,7 +171,6 @@ BOOST_AUTO_TEST_CASE(WrittenAndReadBackDigitsShouldBeTheSameStringVersion)
 
 BOOST_AUTO_TEST_CASE(WrittenAndReadBackDigitsShouldBeTheSame)
 {
-  o2::conf::ConfigurableParam::setValue("MCHCoDecParam", "sampaBcOffset", 0);
   std::vector<DePadId> expected = {
     DePadId{923, 3959},
     DePadId{923, 3974},

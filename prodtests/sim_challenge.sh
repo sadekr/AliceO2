@@ -1,7 +1,11 @@
 #!/bin/bash
 
-# chain of algorithms from MC and reco
-
+# A linearized and simplified chain of algorithms from MC to reco (and analysis) for ALICE Run3.
+# Please note that this script was originally provided as first and quick integration of
+# algorithms in the MC pipeline (mainly for testing purposes).
+# The script does, however, not represent a production setup and it is not maintained actively.
+# The official MC configs and production system is maintained in O2DPG (https://github.com/AliceO2Group/O2DPG)
+# and it is advised to use that one. Some documentation can be found here: https://aliceo2group.github.io/simulation/docs/o2dpgworkflow/
 
 # ------------ LOAD UTILITY FUNCTIONS ----------------------------
 . ${O2_ROOT}/share/scripts/jobutils.sh
@@ -9,6 +13,13 @@
 
 
 if [ -z "$SHMSIZE" ]; then export SHMSIZE=10000000000; fi
+
+# default run number
+# (for now set to a pilot beam run until we have all CCDB objects for default unanchored MC)
+runNumDef=300000
+
+# default time stamp --> will be determined from run number during the sim stage
+# startTimeDef=$(($(date +%s%N)/1000000))
 
 # default number of events
 nevPP=10
@@ -41,7 +52,7 @@ tpcLanes=""
 
 Usage()
 {
-  echo "Usage: ${0##*/} [-s system /pp[Def] or pbpb/] [-r IR(kHz) /Def = $intRatePP(pp)/$intRatePbPb(pbpb)] [-n Number of events /Def = $nevPP(pp) or $nevPbPb(pbpb)/] [-e TGeant3|TGeant4] [-f fromstage sim|digi|reco /Def = sim]"
+  echo "Usage: ${0##*/} [-s system /pp[Def] or pbpb/] [-r IR(kHz) /Def = $intRatePP(pp)/$intRatePbPb(pbpb)] [-n Number of events /Def = $nevPP(pp) or $nevPbPb(pbpb)/] [-e TGeant3|TGeant4] [-t startTime/Def = $startTimeDef] [-run runNumber/Def = $runNumDef] [-f fromstage sim|digi|reco /Def = sim]"
   exit
 }
 
@@ -55,6 +66,8 @@ while [ $# -gt 0 ] ; do
     -f) fromstage=$2; shift 2 ;;
     -j) simWorker="-j $2"; shift 2 ;;
     -l) tpcLanes="--tpc-lanes $2"; shift 2 ;;
+    -t) startTime=$2; shift 2 ;;
+    -run) runNumber=$2; shift 2 ;;
     -h) Usage ;;
     *) echo "Wrong input"; Usage;
   esac
@@ -75,6 +88,9 @@ else
     echo "Wrong collision system $collSyst provided, should be pp or pbpb"
     Usage
 fi
+
+[[ -z $startTime ]] && startTime=$startTimeDef
+[[ -z $runNumber ]] && runNumber=$runNumDef
 
 dosim="0"
 dodigi="0"
@@ -100,9 +116,13 @@ fi
 
 
 if [ "$dosim" == "1" ]; then
+  #---- GRP creation ------
+  echo "Creating GRPs ... and publishing in local CCDB overwrite"
+  taskwrapper grp.log o2-grp-simgrp-tool createGRPs --run ${runNumber} --publishto GRP -o mcGRP
+
   #---------------------------------------------------
-  echo "Running simulation for $nev $collSyst events with $gener generator and engine $engine"
-  taskwrapper sim.log o2-sim -n"$nev" --configKeyValues "Diamond.width[2]=6." -g "$gener" -e "$engine" $simWorker
+  echo "Running simulation for $nev $collSyst events with $gener generator and engine $engine and run number $runNumber"
+  taskwrapper sim.log o2-sim -n"$nev" --configKeyValues "Diamond.width[2]=6." -g "$gener" -e "$engine" $simWorker --run ${runNumber}
 
   ##------ extract number of hits
   taskwrapper hitstats.log root -q -b -l ${O2_ROOT}/share/macro/analyzeHits.C
@@ -111,7 +131,8 @@ fi
 if [ "$dodigi" == "1" ]; then
   echo "Running digitization for $intRate kHz interaction rate"
   intRate=$((1000*(intRate)));
-  taskwrapper digi.log o2-sim-digitizer-workflow $gloOpt --interactionRate $intRate $tpcLanes
+  if [[ "$dotrdtrap" == "1" ]]; then trddigioption="--disable-trd-trapsim"; fi # no need to run the TRAP simulation twice
+  taskwrapper digi.log o2-sim-digitizer-workflow $gloOpt $trddigioption --interactionRate $intRate $tpcLanes --configKeyValues "HBFUtils.runNumber=${runNumber}" --early-forward-policy always --combine-devices
   echo "Return status of digitization: $?"
   # existing checks
   #root -b -q O2/Detectors/ITSMFT/ITS/macros/test/CheckDigits.C+
@@ -128,7 +149,7 @@ if [ "$doreco" == "1" ]; then
 
   echo "Running TPC reco flow"
   #needs TPC digitized data
-  taskwrapper tpcreco.log o2-tpc-reco-workflow $gloOpt --input-type digits --output-type clusters,tracks,send-clusters-per-sector  --configKeyValues "GPU_rec.maxTrackQPt=20"
+  taskwrapper tpcreco.log o2-tpc-reco-workflow $gloOpt --input-type digits --output-type clusters,tracks,send-clusters-per-sector  --configKeyValues "GPU_rec.maxTrackQPtB5=20"
   echo "Return status of tpcreco: $?"
 
   echo "Running ITS reco flow"
@@ -141,7 +162,8 @@ if [ "$doreco" == "1" ]; then
 
   echo "Running MFT reco flow"
   #needs MFT digitized data
-  taskwrapper mftreco.log  o2-mft-reco-workflow  $gloOpt
+  MFTRecOpt=" --configKeyValues \"MFTTracking.forceZeroField=false;MFTTracking.LTFclsRCut=0.0100;\""
+  taskwrapper mftreco.log  o2-mft-reco-workflow  $gloOpt $MFTRecOpt
   echo "Return status of mftreco: $?"
 
   echo "Running MCH reco flow"
@@ -168,9 +190,18 @@ if [ "$doreco" == "1" ]; then
   taskwrapper midreco.log "o2-mid-digits-reader-workflow | o2-mid-reco-workflow $gloOpt"
   echo "Return status of midreco: $?"
 
+  echo "Running HMPID reco flow to produce clusters"
+  #needs HMPID digitized data
+  taskwrapper hmpreco.log "o2-hmpid-digits-to-clusters-workflow $gloOpt"
+  echo "Return status of hmpid cluster reco: $?"
+
+  echo "Running MCH-MID matching flow"
+  taskwrapper mchmidMatch.log "o2-muon-tracks-matcher-workflow $gloOpt"
+  echo "Return status of mchmidmatch: $?"
+
   echo "Running ITS-TPC matching flow"
   #needs results of o2-tpc-reco-workflow, o2-its-reco-workflow and o2-fit-reco-workflow
-  taskwrapper itstpcMatch.log o2-tpcits-match-workflow $gloOpt
+  taskwrapper itstpcMatch.log o2-tpcits-match-workflow --use-ft0 $gloOpt
   echo "Return status of itstpcMatch: $?"
 
   echo "Running TRD matching to ITS-TPC and TPC"
@@ -180,10 +211,11 @@ if [ "$doreco" == "1" ]; then
   taskwrapper trdMatch.log o2-trd-global-tracking $gloOpt
   echo "Return status of trdTracker: $?"
 
-  echo "Running MFT-MCH matching flow"
-  #needs results of o2-mch-reco-workflow and o2-mft-reco-workflow
-  taskwrapper mftmchMatch.log o2-globalfwd-matcher-workflow $gloOpt
-  echo "Return status of mftmchMatch: $?"
+  echo "Running MFT-MCH-MID matching flow"
+  #needs results of o2-mch-reco-workflow, o2-mft-reco-workflow and o2-muon-tracks-matcher-workflow
+  FwdMatchOpt=" --configKeyValues \"FwdMatching.useMIDMatch=true;\""
+  taskwrapper mftmchMatch.log o2-globalfwd-matcher-workflow $gloOpt $FwdMatchOpt
+  echo "Return status of globalfwdMatch: $?"
 
   echo "Running TOF reco flow to produce clusters"
   #needs results of TOF digitized data and results of o2-tpcits-match-workflow
@@ -195,20 +227,15 @@ if [ "$doreco" == "1" ]; then
   taskwrapper tofMatchTracks.log o2-tof-matcher-workflow $gloOpt
   echo "Return status of o2-tof-matcher-workflow: $?"
 
+  echo "Running Track-HMPID macthing flow"
+  #needs results of HMPID clusters data from o2-hmpid-digits-to-clusters-workflow
+  taskwrapper hmpidMatchTracks.log o2-hmpid-matcher-workflow $gloOpt
+  echo "Return status of o2-hmpid-matcher-workflow: $?"
+
   echo "Running TOF matching QA"
   #need results of ITSTPC-TOF matching (+ TOF clusters and ITS-TPC tracks)
   taskwrapper tofmatch_qa.log root -b -q -l $O2_ROOT/share/macro/checkTOFMatching.C
   echo "Return status of TOF matching qa: $?"
-
-  echo "Running primary vertex finding flow"
-  #needs results of TPC-ITS matching and FIT workflows
-  taskwrapper pvfinder.log o2-primary-vertexing-workflow $gloOpt
-  echo "Return status of primary vertexing: $?"
-
-  echo "Running secondary vertex finding flow"
-  #needs results of all trackers + P.Vertexer
-  taskwrapper svfinder.log o2-secondary-vertexing-workflow $gloOpt
-  echo "Return status of secondary vertexing: $?"
 
   echo "Running ZDC reconstruction"
   #need ZDC digits
@@ -230,7 +257,34 @@ if [ "$doreco" == "1" ]; then
   taskwrapper cpvreco.log o2-cpv-reco-workflow $gloOpt
   echo "Return status of CPV reconstruction: $?"
 
+  echo "Running primary vertex finding flow"
+  #needs results of TPC-ITS matching and FIT workflows
+  taskwrapper pvfinder.log o2-primary-vertexing-workflow $gloOpt --condition-remap file://./GRP=GLO/Config/GRPECS
+  echo "Return status of primary vertexing: $?"
+
+  echo "Running secondary vertex finding flow"
+  #needs results of all trackers + P.Vertexer
+  taskwrapper svfinder.log o2-secondary-vertexing-workflow $gloOpt
+  echo "Return status of secondary vertexing: $?"
+
+  # the strangeness trackin is now called from the secondary-vertexing. To enable it as a standalone workflow
+  # one should run the previous o2-secondary-vertexing-workflow with options
+  # --configKeyValues "svertexer.createFullV0s=true;svertexer.createFullCascades=true;svertexer.createFull3Bodies=true" --disable-strangeness-tracker
+  #  echo "Running strangeness tracking flow"
+  #  #needs results of S.Vertexer + ITS reco
+  #  taskwrapper sttracking.log o2-strangeness-tracking-workflow $gloOpt
+  #  echo "Return status of strangeness tracking: $?"
+
   echo "Producing AOD"
-  taskwrapper aod.log o2-aod-producer-workflow --aod-writer-keep dangling --aod-writer-resfile "AO2D" --aod-writer-resmode UPDATE --aod-timeframe-id 1
+  taskwrapper aod.log o2-aod-producer-workflow $gloOpt --aod-writer-keep dangling --aod-writer-resfile "AO2D" --aod-writer-resmode UPDATE --aod-timeframe-id 1 --run-number 300000
   echo "Return status of AOD production: $?"
+
+  # let's do some very basic analysis tests (mainly to enlarge coverage in full CI) and enabled when SIM_CHALLENGE_ANATESTING=ON
+  if [[ ${O2DPG_ROOT} && ${SIM_CHALLENGE_ANATESTING} ]]; then
+    # to be added again: Efficiency
+    for t in ${ANATESTLIST:-MCHistograms Validation PIDTOF PIDTPC EventTrackQA WeakDecayTutorial}; do
+      ${O2DPG_ROOT}/MC/analysis_testing/analysis_test.sh ${t}
+      echo "Return status of ${t}: ${?}"
+    done
+  fi
 fi

@@ -24,18 +24,18 @@
 #include "TPCCalibration/IDCContainer.h"
 #include "TPCCalibration/IDCGroupHelperSector.h"
 #include "DataFormatsTPC/Defs.h"
-
-#if (defined(WITH_OPENMP) || defined(_OPENMP)) && !defined(__CLING__)
-#include <omp.h>
-#endif
+#include <boost/property_tree/ptree.hpp>
 
 namespace o2::tpc
 {
 
-/// IDC Delta IDC Compression types
-enum class IDCDeltaCompression { NO = 0,     ///< no compression using floats
-                                 MEDIUM = 1, ///< medium compression using short (data compression ratio 2 when stored in CCDB)
-                                 HIGH = 2    ///< high compression using char (data compression ratio ~5.5 when stored in CCDB)
+template <class T>
+class CalDet;
+
+struct IDCFactorizeSplit {
+  std::array<std::vector<float>, CRU::MaxCRU> idcs{};
+  int relTF{};
+  ClassDefNV(IDCFactorizeSplit, 1)
 };
 
 class IDCFactorization : public IDCGroupHelperSector
@@ -48,15 +48,66 @@ class IDCFactorization : public IDCGroupHelperSector
   /// \param groupLastPadsThreshold minimum number of pads in pad direction for the last group in pad direction for all regions
   /// \param timeFrames number of time frames which will be stored
   /// \param timeframesDeltaIDC number of time frames stored for each DeltaIDC object
-  IDCFactorization(const std::array<unsigned char, Mapper::NREGIONS>& groupPads, const std::array<unsigned char, Mapper::NREGIONS>& groupRows, const std::array<unsigned char, Mapper::NREGIONS>& groupLastRowsThreshold, const std::array<unsigned char, Mapper::NREGIONS>& groupLastPadsThreshold, const unsigned int timeFrames, const unsigned int timeframesDeltaIDC);
+  IDCFactorization(const std::array<unsigned char, Mapper::NREGIONS>& groupPads, const std::array<unsigned char, Mapper::NREGIONS>& groupRows, const std::array<unsigned char, Mapper::NREGIONS>& groupLastRowsThreshold, const std::array<unsigned char, Mapper::NREGIONS>& groupLastPadsThreshold, const unsigned int groupNotnPadsSectorEdges, const unsigned int timeFrames, const unsigned int timeframesDeltaIDC, const std::vector<uint32_t>& crus);
+
+  /// constructor for creating and object without grouped input IDCs
+  /// \param timeFrames number of time frames which will be stored
+  /// \param timeframesDeltaIDC number of time frames stored for each DeltaIDC object
+  IDCFactorization(const unsigned int timeFrames, const unsigned int timeframesDeltaIDC, const std::vector<uint32_t>& crus) : IDCFactorization(std::array<unsigned char, Mapper::NREGIONS>{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, std::array<unsigned char, Mapper::NREGIONS>{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, std::array<unsigned char, Mapper::NREGIONS>{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, std::array<unsigned char, Mapper::NREGIONS>{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, 0, timeFrames, timeframesDeltaIDC, crus){};
 
   /// default constructor for ROOT I/O
   IDCFactorization() = default;
 
+  /// destructor
+  ~IDCFactorization();
+
+  /// default move constructor
+  IDCFactorization(IDCFactorization&&) = default;
+
+  /// returns sides for CRUs
+  /// \param crus crus which will be checked for their side
+  static std::vector<o2::tpc::Side> getSides(const std::vector<uint32_t>& crus);
+
   /// calculate I_0(r,\phi) = <I(r,\phi,t)>_t
   /// calculate I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
   /// calculate \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
-  void factorizeIDCs();
+  /// \param norm normalize IDCs to pad size
+  /// \param calcDeltas calculate the \Delta I(r,\phi,t) currents
+  void factorizeIDCs(const bool norm, const bool calcDeltas);
+
+  /// calculate I_0(r,\phi) = <I(r,\phi,t)>_t
+  /// \param norm normalize IDCs to pad area
+  void calcIDCZero(const bool norm);
+
+  /// fill I_0 values in case of dead pads,FECs etc.
+  void fillIDCZeroDeadPads();
+
+  /// create status map for pads which are dead or delivering extremly high values (static outliers will be mapped)
+  /// \param debug create debug output
+  void createStatusMapOutlier(const bool debug = false);
+
+  /// 1. createStatusMap, 2. checkFECs, 3. checkNeighbourOutliers
+  void createStatusMap();
+
+  /// after the pad-by-pad status map has been created it can be used to mark FECs which deliver wrong values
+  /// \param maxOutliersPerFEC  if the ratio n_outliers_per_FEC / n_pads_per_FEC is larger than this value, the whole FEC is masked
+  void checkFECs(const float maxOutliersPerFEC = 0.7);
+
+  /// check for each pad where there is no outlier found the neighbouring pads for outliers. If more than n neighbours contains outliers this pad is also marked as an outlier pad
+  /// +- one pad in row direction and +- two pads in pad direction are considered
+  /// \param maxIter maximum number of iterations of the procedure
+  /// \param nOutliersNeighbours minimum number of outliers of the neighbouring pads which are required to mask a pad as outlier
+  void checkNeighbourOutliers(const int maxIter = 10, const int nOutliersNeighbours = 8);
+
+  /// calculate I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
+  void calcIDCOne();
+
+  /// calculate \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
+  void calcIDCDelta();
+
+  /// calculate I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
+  template <typename DataVec>
+  static void calcIDCOne(const DataVec& idcsData, const int idcsPerCRU, const int integrationIntervalOffset, const unsigned int indexOffset, const CRU cru, std::vector<std::vector<float>>& idcOneTmp, const IDCZero* idcZero, const CalDet<PadFlags>* flagMap = nullptr, const bool usePadStatusMap = false);
 
   /// \return returns the stored grouped and integrated IDC
   /// \param sector sector
@@ -79,7 +130,7 @@ class IDCFactorization : public IDCGroupHelperSector
   /// \param region region
   /// \param urow row of the ungrouped IDCs
   /// \param upad pad number of the ungrouped IDCs
-  float getIDCZeroVal(const unsigned int sector, const unsigned int region, unsigned int urow, unsigned int upad) const { return mIDCZero.getValueIDCZero(Sector(sector).side(), getIndexUngrouped(sector, region, urow, upad, 0)); }
+  float getIDCZeroVal(const unsigned int sector, const unsigned int region, unsigned int urow, unsigned int upad) const { return mIDCZero[mSideIndex[Sector(sector).side()]].getValueIDCZero(getIndexUngrouped(sector, region, urow, upad, 0)); }
 
   /// \return returns the stored DeltaIDC value for local ungrouped pad row and ungrouped pad
   /// \param sector sector
@@ -88,64 +139,100 @@ class IDCFactorization : public IDCGroupHelperSector
   /// \param upad pad number of the ungrouped IDCs
   /// \param chunk chunk of the Delta IDC (can be obtained with getLocalIntegrationInterval())
   /// \param localintegrationInterval local integration interval for chunk (can be obtained with getLocalIntegrationInterval())
-  float getIDCDeltaVal(const unsigned int sector, const unsigned int region, unsigned int urow, unsigned int upad, unsigned int chunk, unsigned int localintegrationInterval) const { return mIDCDelta[chunk].getValue(Sector(sector).side(), getIndexUngrouped(sector, region, urow, upad, localintegrationInterval)); }
+  float getIDCDeltaVal(const unsigned int sector, const unsigned int region, unsigned int urow, unsigned int upad, unsigned int chunk, unsigned int localintegrationInterval) const { return mIDCDelta[mSideIndex[Sector(sector).side()]][chunk].getValue(getIndexUngrouped(sector, region, urow, upad, localintegrationInterval)); }
 
   /// \return returns index of integration interval in the chunk from global integration interval
-  /// \param region TPC region
   /// \param integrationInterval integration interval
   /// \param chunk which will be set in the function
   /// \param localintegrationInterval local integration interval for chunk which will be set in the function
-  void getLocalIntegrationInterval(const unsigned int region, const unsigned int integrationInterval, unsigned int& chunk, unsigned int& localintegrationInterval) const;
+  void getLocalIntegrationInterval(const unsigned int integrationInterval, unsigned int& chunk, unsigned int& localintegrationInterval) const;
 
   /// \return returns number of timeframes for which the IDCs are stored
   unsigned int getNTimeframes() const { return mTimeFrames; }
 
-  /// \return returns the number of stored integration intervals for given Delta IDC chunk
+  /// \return returns the number of stored integration intervals for given Delta IDC chunk (dropped TFs taken into account)
   /// \param chunk chunk of Delta IDC
-  unsigned long getNIntegrationIntervals(const unsigned int chunk) const;
+  unsigned long getNIntegrationIntervalsInChunk(const unsigned int chunk) const;
 
-  /// \return returns the total number of stored integration intervals
+  /// \return returns the number of stored integration intervals up to a given Delta IDC chunk (dropped TFs taken into account)
+  /// \param chunk chunk of Delta IDC
+  unsigned long getNIntegrationIntervalsToChunk(const unsigned int chunk) const;
+
+  /// \return returns the total number of stored integration intervals (dropped TFs not taken into account)
+  unsigned long getNIntegrationIntervals(const int cru) const;
+
+  /// \return returns the total number of stored integration intervals (dropped TFs are taken into account)
   unsigned long getNIntegrationIntervals() const;
 
   /// \return returns stored IDC0 I_0(r,\phi) = <I(r,\phi,t)>_t
   /// \param side TPC side
-  const std::vector<float>& getIDCZero(const o2::tpc::Side side) const { return mIDCZero.mIDCZero[side]; }
+  const std::vector<float>& getIDCZeroVec(const o2::tpc::Side side) const { return mIDCZero[mSideIndex[side]].mIDCZero; }
+
+  /// \return returns stored IDC0 I_0(r,\phi) = <I(r,\phi,t)>_t
+  /// \param side TPC side
+  const IDCZero& getIDCZero(const o2::tpc::Side side) const& { return mIDCZero[mSideIndex[side]]; }
+
+  /// \return returns stored IDC0 I_0(r,\phi) = <I(r,\phi,t)>_t
+  /// \param side TPC side
+  auto getIDCZero(const o2::tpc::Side side) && { return mIDCZero[mSideIndex[side]]; }
 
   /// \return returns stored IDC1 I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
   /// \param side TPC side
-  const std::vector<float>& getIDCOne(const o2::tpc::Side side) const { return mIDCOne.mIDCOne[side]; }
+  const std::vector<float>& getIDCOneVec(const o2::tpc::Side side) const { return mIDCOne[mSideIndex[side]].mIDCOne; }
+
+  /// \return returns stored IDC1 I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
+  /// \param side TPC side
+  const IDCOne& getIDCOne(const o2::tpc::Side side) const { return mIDCOne[mSideIndex[side]]; }
 
   /// \return returns stored IDCDelta \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
   /// \param side TPC side
   /// \param chunk chunk of Delta IDC
-  const std::vector<float>& getIDCDeltaUncompressed(const o2::tpc::Side side, const unsigned int chunk) const { return mIDCDelta[chunk].getIDCDelta(side); }
+  const std::vector<float>& getIDCDeltaValuesUncompressed(const unsigned int chunk, const o2::tpc::Side side) const { return mIDCDelta[mSideIndex[side]][chunk].getIDCDelta(); }
 
   /// \return returns stored IDCDelta \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
   /// \param chunk chunk of Delta IDC
-  const auto& getIDCDeltaUncompressed(const unsigned int chunk) const { return mIDCDelta[chunk]; }
+  const auto& getIDCDeltaUncompressed(const unsigned int chunk, const Side side) const& { return mIDCDelta[mSideIndex[side]][chunk]; }
+
+  /// \return returns returns stored IDCDelta \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) ) using move semantics
+  auto getIDCDeltaUncompressed(const unsigned int chunk, const Side side) && { return std::move(mIDCDelta[mSideIndex[side]][chunk]); }
 
   /// \return creates and returns medium compressed IDCDelta \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
   /// \param chunk chunk of Delta IDC
-  auto getIDCDeltaMediumCompressed(const unsigned int chunk) const { return IDCDeltaCompressionHelper<short>::getCompressedIDCs(mIDCDelta[chunk]); }
+  auto getIDCDeltaMediumCompressed(const unsigned int chunk, const Side side) const { return IDCDeltaCompressionHelper<unsigned short>::getCompressedIDCs(mIDCDelta[mSideIndex[side]][chunk]); }
 
   /// \return creates and returns high compressed IDCDelta \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
   /// \param chunk chunk of Delta IDC
-  auto getIDCDeltaHighCompressed(const unsigned int chunk) const { return IDCDeltaCompressionHelper<char>::getCompressedIDCs(mIDCDelta[chunk]); }
+  auto getIDCDeltaHighCompressed(const unsigned int chunk, const Side side) const { return IDCDeltaCompressionHelper<unsigned char>::getCompressedIDCs(mIDCDelta[mSideIndex[side]][chunk]); }
 
   /// \return returns number of chunks for Delta IDCs
-  unsigned int getNChunks() const { return mIDCDelta.size(); }
+  unsigned int getNChunks(const Side side) const { return mIDCDelta[mSideIndex[side]].size(); }
 
-  /// \return returns struct containing IDC0
+  /// \return returns vector of structs containing IDC0
   const auto& getIDCZero() const { return mIDCZero; }
 
-  /// \return returns struct containing IDC1
+  /// \return returns vector of structs containing IDC1
   const auto& getIDCOne() const& { return mIDCOne; }
 
-  /// \return returns struct containing IDC1 using move semantics
+  /// \return returns vector of structs containing IDC1 using move semantics
   auto getIDCOne() && { return std::move(mIDCOne); }
 
   /// \return returns grouped IDCs
   const auto& getIDCs() const { return mIDCs; }
+
+  /// \return returns vector of processed CRUs
+  auto getCRUs() const { return mCRUs; }
+
+  /// \param timeStamp time stamp of the first aggregated IDCs
+  void setTimeStamp(const long timeStamp) { mTimeStamp = timeStamp; }
+
+  /// \return returns time stamp of the first aggregated IDCs
+  long getTimeStamp() const { return mTimeStamp; }
+
+  /// \param run of the aggregated IDCs
+  void setRun(const int run) { mRun = run; }
+
+  /// \return returns run of the IDCs
+  int getRun() const { return mRun; }
 
   // get number of TFs in which the DeltaIDCs are split/stored
   unsigned int getTimeFramesDeltaIDC() const { return mTimeFramesDeltaIDC; }
@@ -163,95 +250,195 @@ class IDCFactorization : public IDCGroupHelperSector
   /// \param nThreads number of threads
   static void setNThreads(const int nThreads) { sNThreads = nThreads; }
 
+  /// \param minIDCDeltaValue minimum IDC delta value for compressed IDC delta
+  static void setMinCompressedIDCDelta(const float minIDCDeltaValue) { o2::conf::ConfigurableParam::setValue<float>("TPCIDCCompressionParam", "minIDCDeltaValue", minIDCDeltaValue); }
+
   /// \param maxIDCDeltaValue maximum IDC delta value for compressed IDC delta
-  static void setMaxCompressedIDCDelta(const float maxIDCDeltaValue) { o2::conf::ConfigurableParam::setValue<float>("TPCIDCCompressionParam", "MaxIDCDeltaValue", maxIDCDeltaValue); }
+  static void setMaxCompressedIDCDelta(const float maxIDCDeltaValue) { o2::conf::ConfigurableParam::setValue<float>("TPCIDCCompressionParam", "maxIDCDeltaValue", maxIDCDeltaValue); }
 
   /// draw IDCs for one sector for one integration interval
   /// \param sector sector which will be drawn
   /// \param integrationInterval which will be drawn
   /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawIDCsSector(const unsigned int sector, const unsigned int integrationInterval, const std::string filename = "IDCsSector.pdf") const { drawSector(IDCType::IDC, sector, integrationInterval, filename); }
+  void drawIDCsSector(const unsigned int sector, const unsigned int integrationInterval, const float minZ = 0, const float maxZ = -1, const std::string filename = "IDCsSector.pdf") const { drawIDCHelper(false, Sector(sector), integrationInterval, filename, minZ, maxZ); }
 
   /// draw IDC zero I_0(r,\phi) = <I(r,\phi,t)>_t
   /// \param sector sector which will be drawn
   /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawIDCZeroSector(const unsigned int sector, const std::string filename = "IDCZeroSector.pdf") const { drawSector(IDCType::IDCZero, sector, 0, filename); }
+  void drawIDCZeroSector(const unsigned int sector, const float minZ = 0, const float maxZ = -1, const std::string filename = "IDCZeroSector.pdf") const { drawIDCZeroHelper(false, Sector(sector), filename, minZ, maxZ); }
 
   /// draw IDCDelta for one sector for one integration interval
   /// \param sector sector which will be drawn
   /// \param integrationInterval which will be drawn
   /// \param compression compression of Delta IDCs. (setMaxCompressedIDCDelta() should be called first in case of non standard compression parameter)
   /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawIDCDeltaSector(const unsigned int sector, const unsigned int integrationInterval, const IDCDeltaCompression compression, const std::string filename = "IDCDeltaSector.pdf") const { drawSector(IDCType::IDCDelta, sector, integrationInterval, filename, compression); }
+  void drawIDCDeltaSector(const unsigned int sector, const unsigned int integrationInterval, const float minZ = 0, const float maxZ = -1, const IDCDeltaCompression compression = IDCDeltaCompression::NO, const std::string filename = "IDCDeltaSector.pdf") const { drawIDCDeltaHelper(false, Sector(sector), integrationInterval, compression, filename, minZ, maxZ); }
 
   /// draw IDCs for one side for one integration interval
   /// \param side side which will be drawn
   /// \param integrationInterval which will be drawn
   /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawIDCsSide(const o2::tpc::Side side, const unsigned int integrationInterval, const std::string filename = "IDCsSide.pdf") const { drawSide(IDCType::IDC, side, integrationInterval, filename); }
+  void drawIDCsSide(const o2::tpc::Side side, const unsigned int integrationInterval, const float minZ = 0, const float maxZ = -1, const std::string filename = "IDCsSide.pdf") const { drawIDCHelper(true, side == Side::A ? Sector(0) : Sector(Sector::MAXSECTOR - 1), integrationInterval, filename, minZ, maxZ); }
+
+  /// draw GIF for IDCs
+  /// \param integrationIntervals number of ms to draw
+  void drawIDCsSideGIF(const unsigned int integrationIntervals = 0, const float minZ = 0, const float maxZ = -1, const int run = -1, const std::string filename = "IDCsSideGIF") const { drawIDCHelper(true, Sector(0), integrationIntervals, filename, minZ, maxZ, true, run); }
 
   /// draw IDC zero I_0(r,\phi) = <I(r,\phi,t)>_t
   /// \param side side which will be drawn
   /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawIDCZeroSide(const o2::tpc::Side side, const std::string filename = "IDCZeroSide.pdf") const { drawSide(IDCType::IDCZero, side, 0, filename); }
+  void drawIDCZeroSide(const o2::tpc::Side side, const float minZ = 0, const float maxZ = -1, const std::string filename = "IDCZeroSide.pdf") const { drawIDCZeroHelper(true, side == Side::A ? Sector(0) : Sector(Sector::MAXSECTOR - 1), filename, minZ, maxZ); }
 
   /// draw IDCDelta for one side for one integration interval
   /// \param side side which will be drawn
   /// \param integrationInterval which will be drawn
   /// \param compression compression of Delta IDCs. (setMaxCompressedIDCDelta() should be called first in case of non standard compression parameter)
   /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawIDCDeltaSide(const o2::tpc::Side side, const unsigned int integrationInterval, const IDCDeltaCompression compression, const std::string filename = "IDCDeltaSide.pdf") const { drawSide(IDCType::IDCDelta, side, integrationInterval, filename, compression); }
+  void drawIDCDeltaSide(const o2::tpc::Side side, const unsigned int integrationInterval, const float minZ = 0, const float maxZ = -1, const IDCDeltaCompression compression = IDCDeltaCompression::NO, const std::string filename = "IDCDeltaSide.pdf") const { drawIDCDeltaHelper(true, side == Side::A ? Sector(0) : Sector(Sector::MAXSECTOR - 1), integrationInterval, compression, filename, minZ, maxZ); }
+
+  /// draw the status map for the flags (for debugging) for a sector
+  /// \param sector sector which will be drawn
+  /// \flag flag which will be drawn
+  /// \param filename name of the output file. If empty the canvas is drawn.
+  void drawPadStatusFlagsMapSector(const unsigned int sector, const PadFlags flag = PadFlags::flagSkip, const std::string filename = "PadStatusFlags_Sector.pdf") const { drawPadFlagMap(false, Sector(sector), filename, flag); }
+
+  /// draw the status map for the flags (for debugging) for a full side
+  /// \param side side which will be drawn
+  /// \flag flag which will be drawn
+  /// \param filename name of the output file. If empty the canvas is drawn.
+  void drawPadStatusFlagsMapSide(const o2::tpc::Side side, const PadFlags flag = PadFlags::flagSkip, const std::string filename = "PadStatusFlags_Side.pdf") const { drawPadFlagMap(true, side == Side::A ? Sector(0) : Sector(Sector::MAXSECTOR - 1), filename, flag); }
 
   /// dump object to disc
   /// \param outFileName name of the output file
   /// \param outName name of the object in the output file
   void dumpToFile(const char* outFileName = "IDCFactorized.root", const char* outName = "IDCFactorized") const;
 
+  /// dump large object to disc which exceeds the maximum size of 1GB for an object in a ROOT file
+  /// \param outFileName name of the output file
+  /// \param outName name of the object in the output file
+  void dumpLargeObjectToFile(const char* outFileName = "IDCFactorized.root", const char* outName = "IDCFactorized") const;
+
+  /// read in an object which was created with dumpLargeObjectToFile
+  /// \param inpFileName name of the output file
+  /// \param inName name of the object in the output file
+  /// \return returns the stored object
+  static std::unique_ptr<IDCFactorization> getLargeObjectFromFile(const char* inpFileName = "IDCFactorized.root", const char* inName = "IDCFactorized");
+
+  /// dump the IDC0 to file
+  void dumpIDCZeroToFile(const Side side, const char* outFileName = "IDCZero.root", const char* outName = "IDC0") const;
+
+  /// dump the IDC1 to file
+  void dumpIDCOneToFile(const Side side, const char* outFileName = "IDCOne.root", const char* outName = "IDC1") const;
+
   /// \param integrationIntervals number of integration intervals which will be dumped to the tree (-1: all integration intervalls)
   /// \param outFileName name of the output file
-  void dumpToTree(int integrationIntervals = -1, const char* outFileName = "IDCTree.root") const;
+  void dumpToTree(const Side side, const char* outFileName = "IDCTree.root");
 
-  /// \returns vector containing the number of integration intervals for each stored TF
-  std::vector<unsigned int> getIntegrationIntervalsPerTF(const unsigned int region = 0) const;
+  /// dumping the IDC1 to a TTree including the timestamps (the start time stamp in ms should be set with setTimeStamp())
+  /// \param integrationTimeOrbits integration time in orbits
+  /// \param outFileName name of the output file
+  void dumpToTreeIDC1(const float integrationTimeOrbits = 12, const char* outFileName = "IDC1Tree.root") const;
+
+  /// dump IDCDelta to a TTree
+  void dumpIDCDeltaToTree(const Side side, const int chunk = 0, const char* outFileName = "IDCDeltaTree.root");
+
+  /// \returns vector containing the number of integration intervals for each stored TF (dropped TFs not taken into account)
+  /// \param cru cru which is used for the lookup (cru=-1: automatic cru lookup)
+  std::vector<unsigned int> getIntegrationIntervalsPerTF(const int cru = -1) const;
+
+  /// \returns vector containing the number of integration intervals for each stored TF (dropped TFs taken into account)
+  std::vector<unsigned int> getAllIntegrationIntervalsPerTF() const;
 
   /// resetting aggregated IDCs
   void reset();
+
+  /// setting a gain map from a file
+  /// \param inpFile input file containing some caldet
+  /// \param mapName name of the caldet
+  void setGainMap(const char* inpFile, const char* mapName);
+
+  /// setting a gain map from a file
+  void setGainMap(const CalDet<float>& gainmap);
+
+  /// setting a map containing status flags for each pad
+  /// \param inpFile input file containing the object
+  /// \param mapName name of the caldet
+  void setPadFlagMap(const char* inpFile, const char* mapName);
+
+  /// setting a map containing status flags for each pad
+  void setPadFlagMap(const CalDet<PadFlags>& flagmap);
+
+  /// setting the usage of the pad-by-pad status map during the factorization of the IDCs
+  void setUsePadStatusMap(const bool usePadStatusMap) { mUsePadStatusMap = usePadStatusMap; }
+
+  /// \return returns whether the pad-by-pad status map will be used during the factorization of the IDCs
+  bool getUsePadStatusMap() const { return mUsePadStatusMap; }
+
+  /// writing the pad status map to file
+  /// \param outFile output file name
+  /// \param mapName output name of the object
+  void dumpPadFlagMap(const char* outFile, const char* mapName);
+
+  /// \return returns pointer to pad status map
+  CalDet<PadFlags>* getPadStatusMapPtr() const { return mPadFlagsMap.get(); }
+
+  /// \return returns unique_ptr to pad status map
+  std::unique_ptr<CalDet<PadFlags>> getPadStatusMap() { return std::move(mPadFlagsMap); }
+
+  /// \return returns TPC sides for which the factorization is performed
+  const std::vector<Side>& getSides() const { return mSides; }
+
+  /// set the IDCZero object
+  void setIDCZero(const Side side, const IDCZero& idcZero) { mIDCZero[mSideIndex[side]] = idcZero; }
+
+  /// set the IDCOne
+  void setIDCOne(const Side side, const IDCOne& idcOne) { mIDCOne[mSideIndex[side]] = idcOne; }
+
+  /// set the IDCDelta
+  void setIDCDelta(const Side side, const IDCDelta<float>& idcDelta, const int index = 0) { mIDCDelta[mSideIndex[side]][index] = idcDelta; }
+
+  /// \return returns mean of IDC0 for given side
+  float getMeanZ(const Side side) const;
+
+  /// normalize IDC0 with the set gain map
+  void normIDCZeroGain() { normIDCZero(0); }
+
+  /// normalize IDC0 with the median per stack
+  void normIDCZeroStackMedian() { normIDCZero(1); }
+
+  /// \return returns median of IDC0 per stack for all stacks
+  std::array<float, o2::tpc::GEMSTACKS> getStackMedian() const;
 
  private:
   const unsigned int mTimeFrames{};                                 ///< number of timeframes which are stored
   const unsigned int mTimeFramesDeltaIDC{};                         ///< number of timeframes of which Delta IDCs are stored
   std::array<std::vector<std::vector<float>>, CRU::MaxCRU> mIDCs{}; ///< grouped and integrated IDCs for the whole TPC. CRU -> time frame -> IDCs
-  IDCZero mIDCZero{};                                               ///< I_0(r,\phi) = <I(r,\phi,t)>_t
-  IDCOne mIDCOne{};                                                 ///< I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
-  std::vector<IDCDelta<float>> mIDCDelta{};                         ///< uncompressed: chunk -> Delta IDC: \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
+  std::vector<IDCZero> mIDCZero{};                                  ///< sides -> I_0(r,\phi) = <I(r,\phi,t)>_t
+  std::vector<IDCOne> mIDCOne{};                                    ///< I_1(t) = sides -> <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
+  std::vector<std::vector<IDCDelta<float>>> mIDCDelta{};            ///< uncompressed: sides -> chunk -> Delta IDC: \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
   inline static int sNThreads{1};                                   ///< number of threads which are used during the calculations
+  std::unique_ptr<CalDet<float>> mGainMap;                          ///<! static Gain map object used for filling missing IDC_0 values
+  std::unique_ptr<CalDet<PadFlags>> mPadFlagsMap;                   ///< status flag for each pad (i.e. if the pad is dead)
+  bool mInputGrouped{false};                                        ///< flag which is set to true if the input IDCs are grouped (checked via the grouping parameters from the constructor)
+  bool mUsePadStatusMap{true};                                      ///< flag for using the pad-by-pad status map during the factorization of the IDCs
+  const std::vector<uint32_t> mCRUs{};                              ///< CRUs to process in this instance
+  std::array<unsigned int, SIDES> mSideIndex{0, 1};                 ///< index to mIDCZero, mIDCOne and mIDCDelta for TPC side
+  std::vector<Side> mSides{};                                       ///< processed TPC sides
+  std::vector<unsigned int> mIntegrationIntervalsPerTF{};           ///< storage of integration intervals per TF (taken dropped TFs into account)
+  long mTimeStamp{0};                                               ///< first time stamp of IDCs
+  int mRun{0};                                                      ///< run number of IDCs
 
-  /// calculate I_0(r,\phi) = <I(r,\phi,t)>_t
-  void calcIDCZero();
+  /// helper function for drawing IDCDelta
+  void drawIDCDeltaHelper(const bool type, const Sector sector, const unsigned int integrationInterval, const IDCDeltaCompression compression, const std::string filename, const float minZ, const float maxZ) const;
 
-  /// calculate I_1(t) = <I(r,\phi,t) / I_0(r,\phi)>_{r,\phi}
-  void calcIDCOne();
+  /// helper function for drawing IDCs
+  void drawIDCHelper(const bool type, const Sector sector, const unsigned int integrationInterval, const std::string filename, const float minZ, const float maxZ, const bool drawGIF = false, const int run = 0) const;
 
-  /// calculate \Delta I(r,\phi,t) = I(r,\phi,t) / ( I_0(r,\phi) * I_1(t) )
-  void calcIDCDelta();
-
-  /// draw IDCs for one sector for one integration interval
-  /// \param sector sector which will be drawn
-  /// \param integrationInterval which will be drawn
-  /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawSector(const IDCType type, const unsigned int sector, const unsigned int integrationInterval, const std::string filename, const IDCDeltaCompression compression = IDCDeltaCompression::NO) const;
-
-  /// draw IDCs for one side for one integration interval
-  /// \param Side side which will be drawn
-  /// \param integrationInterval which will be drawn
-  /// \param filename name of the output file. If empty the canvas is drawn.
-  void drawSide(const IDCType type, const o2::tpc::Side side, const unsigned int integrationInterval, const std::string filename, const IDCDeltaCompression compression = IDCDeltaCompression::NO) const;
-
-  /// get z axis title for given IDC type and compression type
-  std::string getZAxisTitle(const IDCType type, const IDCDeltaCompression compression) const;
+  /// helper function for drawing IDCZero
+  void drawIDCZeroHelper(const bool type, const Sector sector, const std::string filename, const float minZ, const float maxZ) const;
 
   /// get time frame and index of integrationInterval in the TF
-  void getTF(const unsigned int region, unsigned int integrationInterval, unsigned int& timeFrame, unsigned int& interval) const;
+  void getTF(unsigned int integrationInterval, unsigned int& timeFrame, unsigned int& interval) const;
 
   /// \returns chunk from timeframe
   unsigned int getChunk(const unsigned int timeframe) const;
@@ -259,7 +446,17 @@ class IDCFactorization : public IDCGroupHelperSector
   /// \return returns number of TFs for given chunk
   unsigned int getNTFsPerChunk(const unsigned int chunk) const;
 
-  ClassDefNV(IDCFactorization, 1)
+  /// helper function for drawing
+  void drawPadFlagMap(const bool type, const Sector sector, const std::string filename, const PadFlags flag) const;
+
+  /// normalize IDC0
+  void normIDCZero(const int type);
+
+  /// check if received have all the same size -received IDCs which have different size than expected are cleared-
+  /// \return returns true if all IDCs have same size
+  bool checkReceivedIDCs();
+
+  ClassDefNV(IDCFactorization, 2)
 };
 
 } // namespace o2::tpc

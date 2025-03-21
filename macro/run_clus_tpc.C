@@ -6,15 +6,16 @@
 #include "TStopwatch.h"
 #include "TGeoManager.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "FairRunAna.h"
 #include "FairFileSource.h"
 #include "FairSystemInfo.h"
 #include "FairRuntimeDb.h"
 #include "FairParRootFileIo.h"
+#include <FairRootFileSink.h>
 
-#include "TPCReconstruction/ClustererTask.h"
 #endif
+#include "TPCReconstruction/ClustererTask.h"
 
 void run_clus_tpc(std::string outputfile = "o2clus_tpc.root", std::string inputfile = "o2dig.root",
                   std::string paramfile = "o2sim_par.root", bool isContinuous = true, unsigned threads = 0);
@@ -44,7 +45,7 @@ void run_clus_tpc(std::string outputfile, std::string inputfile, std::string par
   FairRunAna* run = new FairRunAna();
   FairFileSource* fFileSource = new FairFileSource(inputfile.data());
   run->SetSource(fFileSource);
-  run->SetOutputFile(outputfile.data());
+  run->SetSink(new FairRootFileSink(outputfile.c_str()));
 
   // Setup Runtime DB
   FairRuntimeDb* rtdb = run->GetRuntimeDb();

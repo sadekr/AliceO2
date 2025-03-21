@@ -14,7 +14,7 @@
 #include "CCDB/CcdbObjectInfo.h"
 #include <string>
 #include <ctime>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "CommonDataFormat/InteractionRecord.h"
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/ControlService.h"
@@ -34,8 +34,8 @@ using namespace o2::cpv;
 
 void CPVGainCalibDevice::init(o2::framework::InitContext& ic)
 {
-  //Check if files from previous runs exist
-  //if yes, read histogram
+  // Check if files from previous runs exist
+  // if yes, read histogram
   mMean = std::unique_ptr<TH2F>(new TH2F("Gains", "Signals per channel", o2::cpv::Geometry::kNCHANNELS, 0.5, o2::cpv::Geometry::kNCHANNELS + 0.5, 1024, 0., 4096.));
 
   std::string filename = mPath + "CPVGains.root";
@@ -58,22 +58,22 @@ void CPVGainCalibDevice::run(o2::framework::ProcessingContext& ctx)
       try {
         rawreader.next();
       } catch (RawErrorType_t e) {
-        LOG(ERROR) << "Raw decoding error " << (int)e;
-        //if problem in header, abandon this page
+        LOG(error) << "Raw decoding error " << (int)e;
+        // if problem in header, abandon this page
         if (e == RawErrorType_t::kRDH_DECODING) {
           break;
         }
-        //if problem in payload, try to continue
+        // if problem in payload, try to continue
         continue;
       }
-      auto& header = rawreader.getRawHeader();
-      auto triggerBC = o2::raw::RDHUtils::getTriggerBC(header);
-      auto triggerOrbit = o2::raw::RDHUtils::getTriggerOrbit(header);
+      // auto& header = rawreader.getRawHeader();
+      //       auto triggerBC = o2::raw::RDHUtils::getTriggerBC(header);
+      //       auto triggerOrbit = o2::raw::RDHUtils::getTriggerOrbit(header);
       // use the altro decoder to decode the raw data, and extract the RCU trailer
       o2::cpv::RawDecoder decoder(rawreader);
       RawErrorType_t err = decoder.decode();
       if (err != kOK) {
-        //TODO handle severe errors
+        // TODO handle severe errors
         continue;
       }
       // Loop over all the channels
@@ -82,15 +82,15 @@ void CPVGainCalibDevice::run(o2::framework::ProcessingContext& ctx)
         unsigned short absId = ac.Address;
         mMean->Fill(absId, ac.Charge);
       }
-    } //RawReader::hasNext
+    } // RawReader::hasNext
   }
 }
 
 void CPVGainCalibDevice::endOfStream(o2::framework::EndOfStreamContext& ec)
 {
 
-  LOG(INFO) << "[CPVGainCalibDevice - endOfStream]";
-  //calculate stuff here
+  LOG(info) << "[CPVGainCalibDevice - endOfStream]";
+  // calculate stuff here
   calculateGains();
   checkGains();
   sendOutput(ec.outputs());
@@ -113,11 +113,11 @@ void CPVGainCalibDevice::sendOutput(DataAllocator& output)
     // TODO: should be changed to time of the run
     time_t now = time(nullptr);
     info.setStartValidityTimestamp(now);
-    info.setEndValidityTimestamp(99999999999999);
+    info.setEndValidityTimestamp(o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
     std::map<std::string, std::string> md;
     info.setMetaData(md);
 
-    LOG(INFO) << "Sending object CPV/Calib/CalibParams";
+    LOG(info) << "Sending object CPV/Calib/CalibParams";
 
     header::DataHeader::SubSpecificationType subSpec{(header::DataHeader::SubSpecificationType)0};
 
@@ -125,33 +125,33 @@ void CPVGainCalibDevice::sendOutput(DataAllocator& output)
     output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBWrapper, "CPV_CalibParams", subSpec}, info);
   }
 
-  //Write either final spectra (to calculate bad map) or temporary file
-  if (mUpdateCCDB) { //good statistics, final spectra
+  // Write either final spectra (to calculate bad map) or temporary file
+  if (mUpdateCCDB) { // good statistics, final spectra
     std::string filename = mPath + "CPVGains";
     time_t now = time(nullptr);
     tm* ltm = localtime(&now);
     filename += TString::Format("_%d%d%d%d%d.root", 1 + ltm->tm_min, 1 + ltm->tm_hour, ltm->tm_mday, 1 + ltm->tm_mon, 1970 + ltm->tm_year);
-    LOG(DEBUG) << "opening file " << filename.data();
+    LOG(debug) << "opening file " << filename.data();
     TFile fout(filename.data(), "RECREATE");
     mMean->Write();
     fout.Close();
   } else {
     std::string filename = mPath + "CPVGains.root";
-    LOG(INFO) << "statistics not sufficient yet: " << mMean->Integral() / mMean->GetNbinsX() << ", writing file " << filename;
+    LOG(info) << "statistics not sufficient yet: " << mMean->Integral() / mMean->GetNbinsX() << ", writing file " << filename;
     TFile fout(filename.data(), "RECREATE");
     mMean->Write();
     fout.Close();
   }
-  //Anyway send change to QC
-  output.snapshot(o2::framework::Output{"CPV", "GAINDIFF", 0, o2::framework::Lifetime::Timeframe}, mGainRatio);
+  // Anyway send change to QC
+  output.snapshot(o2::framework::Output{"CPV", "GAINDIFF", 0}, mGainRatio);
 }
 
 void CPVGainCalibDevice::calculateGains()
 {
-  //Check if statistics is sufficient to fit distributions
-  //Mean statistics should be ~2 times larger than minimal
+  // Check if statistics is sufficient to fit distributions
+  // Mean statistics should be ~2 times larger than minimal
   mUpdateCCDB = false;
-  if (mMean->Integral() > 2 * kMinimalStatistics * (o2::cpv::Geometry::kNCHANNELS)) { //average per channel
+  if (mMean->Integral() > 2 * kMinimalStatistics * (o2::cpv::Geometry::kNCHANNELS)) { // average per channel
     mCalibParams.reset(new CalibParams());
 
     TF1* fitFunc = new TF1("fitFunc", "landau", 0., 4000.);
@@ -168,22 +168,22 @@ void CPVGainCalibDevice::calculateGains()
       float a = fitFunc->GetParameter(1);
       if (a > 0) {
         a = 200. / a;
-        mCalibParams->setGain(i - 1, a); //absId starts from 0
+        mCalibParams->setGain(i - 1, a); // absId starts from 0
       }
       tmp->Delete();
     }
     mUpdateCCDB = true;
-    //TODO: if file historam processed, remove temporary root file if it exists
+    // TODO: if file historam processed, remove temporary root file if it exists
   }
 }
 
 void CPVGainCalibDevice::checkGains()
 {
-  //Estimate if newly calculated gains are reasonable: close to reviously calculated
-  // Do not update existing object automatically if difference is too strong
-  // create object with validity range if far future (?) and send warning (e-mail?) to operator
+  // Estimate if newly calculated gains are reasonable: close to reviously calculated
+  //  Do not update existing object automatically if difference is too strong
+  //  create object with validity range if far future (?) and send warning (e-mail?) to operator
 
-  if (!mUpdateCCDB) { //gains were not calculated, do nothing
+  if (!mUpdateCCDB) { // gains were not calculated, do nothing
     return;
   }
 
@@ -214,10 +214,10 @@ o2::framework::DataProcessorSpec o2::cpv::getGainCalibSpec(bool useCCDB, bool fo
 {
 
   std::vector<o2::framework::OutputSpec> outputs;
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "CPV_CalibParams"});
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "CPV_CalibParams"});
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "CPV_CalibParams"}, o2::framework::Lifetime::Sporadic);
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "CPV_CalibParams"}, o2::framework::Lifetime::Sporadic);
 
-  outputs.emplace_back("CPV", "GAINDIFF", 0, o2::framework::Lifetime::Timeframe);
+  outputs.emplace_back("CPV", "GAINDIFF", 0, o2::framework::Lifetime::Sporadic);
 
   return o2::framework::DataProcessorSpec{"GainCalibSpec",
                                           o2::framework::select("A:CPV/RAWDATA"),

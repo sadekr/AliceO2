@@ -12,8 +12,10 @@
 /// \file GPUTRDTrackO2.cxx
 /// \author David Rohr
 
-#define GPU_TRD_TRACK_O2
-#include "GPUTRDTrack.cxx"
+#include "GPUTRDTrackO2.h"
+using namespace o2::gpu;
+
+#include "GPUTRDTrack.inc"
 #include "ReconstructionDataFormats/GlobalTrackID.h"
 #include "ReconstructionDataFormats/Track.h"
 

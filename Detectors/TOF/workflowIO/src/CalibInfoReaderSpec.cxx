@@ -21,7 +21,7 @@
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/Logger.h"
 #include "TOFWorkflowIO/CalibInfoReaderSpec.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 using namespace o2::tof;
@@ -31,15 +31,15 @@ namespace o2
 namespace tof
 {
 
-constexpr o2::header::DataDescription ddCalib{"CALIBDATA"}, ddCalib_tpc{"CALIBDATA_TPC"};
+constexpr o2::header::DataDescription ddCalib{"CALIBDATA"}, ddCalib_tpc{"CALIBDATA_TPC"}, ddDia{"DIAFREQ"};
 
 void CalibInfoReader::init(InitContext& ic)
 {
-  LOG(DEBUG) << "Init CalibInfo reader!";
+  LOG(debug) << "Init CalibInfo reader!";
   auto fname = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")), mFileName);
   mFile = fopen(fname.c_str(), "r");
   if (!mFile) {
-    LOG(ERROR) << "Cannot open the " << fname << " file !";
+    LOG(error) << "Cannot open the " << fname << " file !";
     mState = 0;
     return;
   }
@@ -51,7 +51,7 @@ void CalibInfoReader::run(ProcessingContext& pc)
   if (mState != 1) {
     return;
   }
-
+  auto& timingInfo = pc.services().get<o2::framework::TimingInfo>();
   char filename[100];
 
   if ((mTree && mCurrentEntry < mTree->GetEntries()) || fscanf(mFile, "%s", filename) == 1) {
@@ -59,13 +59,43 @@ void CalibInfoReader::run(ProcessingContext& pc)
       TFile* fin = TFile::Open(filename);
       mTree = (TTree*)fin->Get("calibTOF");
       mCurrentEntry = 0;
-      mTree->SetBranchAddress("TOFCalibInfo", &mPvect);
+      if (mTree->GetBranch("TOFCalibInfo")) {
+        mTree->SetBranchAddress("TOFCalibInfo", &mPvect);
+      }
+      mTree->SetBranchAddress("TOFDiaInfo", &mPdia);
+
+      LOG(debug) << "Open " << filename;
+
+      mIndices.clear();
+      for (unsigned long i = 0; i < mTree->GetEntries(); i++) { // check time order inside the tree
+        mTree->GetEvent(i);
+        const auto& info = mDia.getTFIDInfo();
+        mIndices.push_back(std::make_pair(i, info.tfCounter));
+      }
+      std::sort(mIndices.begin(), mIndices.end(),
+                [&](const auto& a, const auto& b) {
+                  return a.second < b.second;
+                });
     }
     if ((mGlobalEntry % mNinstances) == mInstance) {
-      mTree->GetEvent(mCurrentEntry);
-      LOG(DEBUG) << "Send " << mVect.size() << " calib infos";
-      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, mTOFTPC ? ddCalib_tpc : ddCalib, 0, Lifetime::Timeframe}, mVect);
-      usleep(10000);
+      mTree->GetEvent(mIndices[mCurrentEntry].first);
+
+      // add TFIDInfo
+      const auto& info = mDia.getTFIDInfo();
+      timingInfo.firstTForbit = info.firstTForbit;
+      timingInfo.tfCounter = info.tfCounter;
+      timingInfo.runNumber = info.runNumber;
+      //    timingInfo.timeslice = info.startTime; // NOT TO BE SET (done by DPL)
+      timingInfo.creation = info.creation;
+      //        printf("TF=%ld, creationTime=%ld: firstTForbit=%ld, runNumber=%d, startTime=%ld\n",timingInfo.tfCounter,timingInfo.creation,timingInfo.firstTForbit,timingInfo.runNumber,timingInfo.timeslice);
+
+      LOG(debug) << "Current entry " << mCurrentEntry;
+      LOG(debug) << "Send " << mVect.size() << " calib infos";
+
+      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, mTOFTPC ? ddCalib_tpc : ddCalib, 0}, mVect);
+
+      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, ddDia, 0}, mDia);
+      usleep(100);
     }
     mGlobalEntry++;
     mCurrentEntry++;
@@ -88,6 +118,8 @@ DataProcessorSpec getCalibInfoReaderSpec(int instance, int ninstances, const cha
   if (ninstances > 1) {
     nameSpec += fmt::format("-{:d}", instance);
   }
+
+  outputs.emplace_back(o2::header::gDataOriginTOF, ddDia, 0, Lifetime::Timeframe);
 
   return DataProcessorSpec{
     nameSpec,

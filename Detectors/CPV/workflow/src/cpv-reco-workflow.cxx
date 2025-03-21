@@ -20,10 +20,25 @@
 #include "Algorithm/RangeTokenizer.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
+#include "Framework/CompletionPolicyHelpers.h"
 
 #include <string>
 #include <stdexcept>
 #include <unordered_map>
+
+using namespace o2::framework;
+
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
+
+void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+{
+  // ordered policies for the writers
+  policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*(?:CPV|cpv).*[W,w]riter.*"));
+}
 
 // add workflow options, note that customization needs to be declared before
 // including Framework/runDataProcessing
@@ -36,10 +51,11 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
     {"disable-root-input", o2::framework::VariantType::Bool, false, {"disable root-files input reader"}},
     {"disable-root-output", o2::framework::VariantType::Bool, false, {"disable root-files output writer"}},
     {"ignore-dist-stf", o2::framework::VariantType::Bool, false, {"do not subscribe to FLP/DISTSUBTIMEFRAME/0 message (no lost TF recovery)"}},
+    {"pedestal", o2::framework::VariantType::Bool, false, {"do not use ccdb calibration (applied only when processing raw data)"}},
+    {"no-bad-channel-map", o2::framework::VariantType::Bool, false, {"do not use bad channel map from ccdb (applied only when processing raw data)"}},
+    {"no-gain-calibration", o2::framework::VariantType::Bool, false, {"do not use gain calibration from ccdb (applied only when processing raw data)"}},
     {"configKeyValues", o2::framework::VariantType::String, "", {"Semicolon separated key=value strings ..."}}};
-
   o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
   std::swap(workflowOptions, options);
 }
 
@@ -67,11 +83,14 @@ o2::framework::WorkflowSpec defineDataProcessing(o2::framework::ConfigContext co
                                                 cfgc.options().get<bool>("disable-root-output"),
                                                 !cfgc.options().get<bool>("disable-mc"),
                                                 !cfgc.options().get<bool>("ignore-dist-stf"),
+                                                cfgc.options().get<bool>("pedestal"),
+                                                !cfgc.options().get<bool>("no-bad-channel-map"),
+                                                !cfgc.options().get<bool>("no-gain-calibration"),
                                                 cfgc.options().get<std::string>("input-type"),
                                                 cfgc.options().get<std::string>("output-type"));
 
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(cfgc, wf);
 
-  return std::move(wf);
+  return wf;
 }

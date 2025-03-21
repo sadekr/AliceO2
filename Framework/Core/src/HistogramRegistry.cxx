@@ -12,19 +12,24 @@
 #include "Framework/HistogramRegistry.h"
 #include <regex>
 #include <TList.h>
+#include <TClass.h>
 
 namespace o2::framework
 {
 
+template void HistogramRegistry::fill(const HistName& histName, double);
+template void HistogramRegistry::fill(const HistName& histName, float);
+template void HistogramRegistry::fill(const HistName& histName, int);
+
 constexpr HistogramRegistry::HistName::HistName(char const* const name)
   : str(name),
-    hash(compile_time_hash(name)),
+    hash(runtime_hash(name)),
     idx(hash & REGISTRY_BITMASK)
 {
 }
 
 HistogramRegistry::HistogramRegistry(char const* const name, std::vector<HistogramSpec> histSpecs, OutputObjHandlingPolicy policy, bool sortHistos, bool createRegistryDir)
-  : mName(name), mPolicy(policy), mRegistryKey(), mRegistryValue(), mSortHistos(sortHistos), mCreateRegistryDir(createRegistryDir)
+  : mName(name), mPolicy(policy), mCreateRegistryDir(createRegistryDir), mSortHistos(sortHistos), mRegistryKey(), mRegistryValue()
 {
   mRegistryKey.fill(0u);
   for (auto& histSpec : histSpecs) {
@@ -36,7 +41,7 @@ HistogramRegistry::HistogramRegistry(char const* const name, std::vector<Histogr
 OutputSpec const HistogramRegistry::spec()
 {
   header::DataDescription desc{};
-  auto lhash = compile_time_hash(mName.data());
+  auto lhash = runtime_hash(mName.data());
   std::memset(desc.str, '_', 16);
   std::stringstream s;
   s << std::hex << lhash;
@@ -46,9 +51,9 @@ OutputSpec const HistogramRegistry::spec()
   return OutputSpec{OutputLabel{mName}, "ATSK", desc, 0, Lifetime::QA};
 }
 
-OutputRef HistogramRegistry::ref()
+OutputRef HistogramRegistry::ref(uint16_t pipelineIndex, uint16_t pipelineSize)
 {
-  return OutputRef{std::string{mName}, 0, o2::header::Stack{OutputObjHeader{mPolicy, OutputObjSourceType::HistogramRegistrySource, mTaskHash}}};
+  return OutputRef{std::string{mName}, 0, o2::header::Stack{OutputObjHeader{mPolicy, OutputObjSourceType::HistogramRegistrySource, mTaskHash, pipelineIndex, pipelineSize}}};
 }
 
 void HistogramRegistry::setHash(uint32_t hash)
@@ -72,25 +77,30 @@ HistPtr HistogramRegistry::insert(const HistogramSpec& histSpec)
       return mRegistryValue[imask(idx + i)];
     }
   }
-  LOGF(FATAL, R"(Internal array of HistogramRegistry "%s" is full.)", mName);
+  LOGF(fatal, R"(Internal array of HistogramRegistry "%s" is full.)", mName);
   return HistPtr();
 }
 
 // helper function that checks if histogram name can be used in registry
 void HistogramRegistry::validateHistName(const std::string& name, const uint32_t hash)
 {
+  // check that there are still slots left in the registry
+  if (mRegisteredNames.size() == MAX_REGISTRY_SIZE) {
+    LOGF(fatal, R"(HistogramRegistry "%s" is full! It can hold only %d histograms.)", mName, MAX_REGISTRY_SIZE);
+  }
+
   // validate that hash is unique
   auto it = std::find(mRegistryKey.begin(), mRegistryKey.end(), hash);
   if (it != mRegistryKey.end()) {
     auto idx = it - mRegistryKey.begin();
     std::string collidingName{};
     std::visit([&](const auto& hist) { collidingName = hist->GetName(); }, mRegistryValue[idx]);
-    LOGF(FATAL, R"(Hash collision in HistogramRegistry "%s"! Please rename histogram "%s" or "%s".)", mName, name, collidingName);
+    LOGF(fatal, R"(Hash collision in HistogramRegistry "%s"! Please rename histogram "%s" or "%s".)", mName, name, collidingName);
   }
 
   // validate that name contains only allowed characters
-  if (!std::regex_match(name, std::regex("([a-zA-Z0-9])(([\\/_])?[a-zA-Z0-9])*"))) {
-    LOGF(FATAL, R"(Histogram name "%s" contains invalid characters.)", name);
+  if (!std::regex_match(name, std::regex("([a-zA-Z0-9])(([\\/_-])?[a-zA-Z0-9])*"))) {
+    LOGF(fatal, R"(Histogram name "%s" contains invalid characters. Only letters, numbers, and (except for the beginning or end of the word) the special characters '/', '_', '-' are allowed.)", name);
   }
 }
 
@@ -109,6 +119,11 @@ HistPtr HistogramRegistry::add(char const* const name, char const* const title, 
   return insert({name, title, {histType, axes}, callSumw2});
 }
 
+HistPtr HistogramRegistry::add(const std::string& name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2)
+{
+  return add(name.c_str(), title, histType, axes, callSumw2);
+}
+
 // store a copy of an existing histogram (or group of histograms) under a different name
 void HistogramRegistry::addClone(const std::string& source, const std::string& target)
 {
@@ -125,7 +140,7 @@ void HistogramRegistry::addClone(const std::string& source, const std::string& t
       }
       // when cloning a single histogram the specified target_ must not be a group name
       if (sourceName.size() == source.size() && target.back() == '/') {
-        LOGF(FATAL, "Cannot turn histogram into folder!");
+        LOGF(fatal, "Cannot turn histogram into folder!");
       }
       std::string targetName{target};
       targetName += sourceName.substr(sourceName.find(source) + source.size());
@@ -172,6 +187,13 @@ double HistogramRegistry::getSize(double fillFraction)
   return size;
 }
 
+void HistogramRegistry::clean()
+{
+  for (auto& value : mRegistryValue) {
+    std::visit([](auto&& hist) { hist.reset(); }, value);
+  }
+}
+
 // print some useful meta-info about the stored histograms
 void HistogramRegistry::print(bool showAxisDetails)
 {
@@ -205,7 +227,7 @@ void HistogramRegistry::print(bool showAxisDetails)
         sizeInfo = fmt::format("{:.2f} kB", sizes[0] * 1024);
       }
       std::transform(totalSizes.begin(), totalSizes.end(), sizes.begin(), totalSizes.begin(), std::plus<double>());
-      LOGF(INFO, "Hist %03d: %-35s  %-19s [%s]", nHistos, hist->GetName(), hist->IsA()->GetName(), sizeInfo);
+      LOGF(info, "Hist %03d: %-35s  %-19s [%s]", nHistos, hist->GetName(), hist->IsA()->GetName(), sizeInfo);
 
       if (showAxisDetails) {
         int nDim = 0;
@@ -227,16 +249,16 @@ void HistogramRegistry::print(bool showAxisDetails)
               axis = hist->GetZaxis();
             }
           }
-          LOGF(INFO, "- Axis %d: %-20s (%d bins)", d, axis->GetTitle(), axis->GetNbins());
+          LOGF(info, "- Axis %d: %-20s (%d bins)", d, axis->GetTitle(), axis->GetNbins());
         }
       }
     }
   };
 
   std::string titleString{"======================== HistogramRegistry ========================"};
-  LOGF(INFO, "");
-  LOGF(INFO, "%s", titleString);
-  LOGF(INFO, "%s\"%s\"", std::string((int)(0.5 * titleString.size() - (1 + 0.5 * mName.size())), ' '), mName);
+  LOGF(info, "");
+  LOGF(info, "%s", titleString);
+  LOGF(info, "%s\"%s\"", std::string((int)(0.5 * titleString.size() - (1 + 0.5 * mName.size())), ' '), mName);
   for (auto& curHistName : mRegisteredNames) {
     std::visit(printHistInfo, mRegistryValue[getHistIndex(HistName{curHistName.data()})]);
   }
@@ -251,17 +273,17 @@ void HistogramRegistry::print(bool showAxisDetails)
   } else {
     totalSizeInfo = fmt::format("{:.2f} MB", totalSizes[0]);
   }
-  LOGF(INFO, "%s", std::string(titleString.size(), '='), titleString);
-  LOGF(INFO, "Total: %d histograms, ca. %s", nHistos, totalSizeInfo);
+  LOGF(info, "%s", std::string(titleString.size(), '='), titleString);
+  LOGF(info, "Total: %d histograms, ca. %s", nHistos, totalSizeInfo);
   if (lookup) {
-    LOGF(INFO, "Due to index collisions, histograms were shifted by %d registry slots in total.", lookup);
+    LOGF(info, "Due to index collisions, histograms were shifted by %d registry slots in total.", lookup);
   }
-  LOGF(INFO, "%s", std::string(titleString.size(), '='), titleString);
-  LOGF(INFO, "");
+  LOGF(info, "%s", std::string(titleString.size(), '='), titleString);
+  LOGF(info, "");
 }
 
 // create output structure will be propagated to file-sink
-TList* HistogramRegistry::operator*()
+TList* HistogramRegistry::getListOfHistograms()
 {
   TList* list = new TList();
   list->SetName(mName.data());
@@ -286,7 +308,7 @@ TList* HistogramRegistry::operator*()
         rawPtr->SetName(name.data());
         targetList->Add(rawPtr);
       } else {
-        LOGF(FATAL, "Specified subfolder could not be created.");
+        LOGF(fatal, "Specified subfolder could not be created.");
       }
     }
   }
@@ -359,25 +381,25 @@ std::deque<std::string> HistogramRegistry::splitPath(const std::string& pathAndN
 void HistogramRegistry::registerName(const std::string& name)
 {
   if (name.empty() || name.back() == '/') {
-    LOGF(FATAL, "Invalid name for a histogram.");
+    LOGF(fatal, "Invalid name for a histogram.");
   }
   std::deque<std::string> path = splitPath(name);
   std::string cumulativeName{};
   int depth = path.size();
   for (auto& step : path) {
     if (step.empty()) {
-      LOGF(FATAL, R"(Found empty group name in path for histogram "%s".)", name);
+      LOGF(fatal, R"(Found empty group name in path for histogram "%s".)", name);
     }
     cumulativeName += step;
     for (auto& curName : mRegisteredNames) {
       // there is already a histogram where we want to put a folder or histogram
       if (cumulativeName == curName) {
-        LOGF(FATAL, R"(Histogram name "%s" is not compatible with existing names.)", name);
+        LOGF(fatal, R"(Histogram name "%s" is not compatible with existing names.)", name);
       }
       // for the full new histogram name we need to check that none of the existing histograms already uses this as a group name
       if (depth == 1) {
         if (curName.rfind(cumulativeName, 0) == 0 && curName.size() > cumulativeName.size() && curName.at(cumulativeName.size()) == '/') {
-          LOGF(FATAL, R"(Histogram name "%s" is not compatible with existing names.)", name);
+          LOGF(fatal, R"(Histogram name "%s" is not compatible with existing names.)", name);
         }
       }
     }
@@ -386,5 +408,80 @@ void HistogramRegistry::registerName(const std::string& name)
   }
   mRegisteredNames.push_back(name);
 }
+
+void HistFiller::badHistogramFill(char const* name)
+{
+  LOGF(fatal, "The number of arguments in fill function called for histogram %s is incompatible with histogram dimensions.", name);
+}
+
+template <typename T>
+HistPtr HistogramRegistry::insertClone(const HistName& histName, const std::shared_ptr<T> originalHist)
+{
+  validateHistName(histName.str, histName.hash);
+  for (auto i = 0u; i < MAX_REGISTRY_SIZE; ++i) {
+    TObject* rawPtr = nullptr;
+    std::visit([&](const auto& sharedPtr) { rawPtr = sharedPtr.get(); }, mRegistryValue[imask(histName.idx + i)]);
+    if (!rawPtr) {
+      registerName(histName.str);
+      mRegistryKey[imask(histName.idx + i)] = histName.hash;
+      mRegistryValue[imask(histName.idx + i)] = std::shared_ptr<T>(static_cast<T*>(originalHist->Clone(histName.str)));
+      lookup += i;
+      return mRegistryValue[imask(histName.idx + i)];
+    }
+  }
+  LOGF(fatal, R"(Internal array of HistogramRegistry "%s" is full.)", mName);
+  return HistPtr();
+}
+
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<TH1>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<TH2>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<TH3>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<TProfile>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<TProfile2D>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<TProfile3D>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<THnSparse>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<THn>);
+template HistPtr HistogramRegistry::insertClone(const HistName&, const std::shared_ptr<StepTHn>);
+
+template <typename T>
+std::shared_ptr<T> HistogramRegistry::add(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2)
+{
+  auto histVariant = add(name, title, histConfigSpec, callSumw2);
+  if (auto histPtr = std::get_if<std::shared_ptr<T>>(&histVariant)) {
+    return *histPtr;
+  } else {
+    throw runtime_error_f(R"(Histogram type specified in add<>("%s") does not match the actual type of the histogram!)", name);
+  }
+}
+
+template <typename T>
+std::shared_ptr<T> HistogramRegistry::add(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2)
+{
+  auto histVariant = add(name, title, histType, axes, callSumw2);
+  if (auto histPtr = std::get_if<std::shared_ptr<T>>(&histVariant)) {
+    return *histPtr;
+  } else {
+    throw runtime_error_f(R"(Histogram type specified in add<>("%s") does not match the actual type of the histogram!)", name);
+  }
+}
+
+template std::shared_ptr<TH1> HistogramRegistry::add<TH1>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<TH1> HistogramRegistry::add<TH1>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<TH2> HistogramRegistry::add<TH2>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<TH2> HistogramRegistry::add<TH2>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<TH3> HistogramRegistry::add<TH3>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<TH3> HistogramRegistry::add<TH3>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<TProfile> HistogramRegistry::add<TProfile>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<TProfile> HistogramRegistry::add<TProfile>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<TProfile2D> HistogramRegistry::add<TProfile2D>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<TProfile2D> HistogramRegistry::add<TProfile2D>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<TProfile3D> HistogramRegistry::add<TProfile3D>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<TProfile3D> HistogramRegistry::add<TProfile3D>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<THn> HistogramRegistry::add<THn>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<THn> HistogramRegistry::add<THn>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<THnSparse> HistogramRegistry::add<THnSparse>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<THnSparse> HistogramRegistry::add<THnSparse>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
+template std::shared_ptr<StepTHn> HistogramRegistry::add<StepTHn>(char const* const name, char const* const title, const HistogramConfigSpec& histConfigSpec, bool callSumw2);
+template std::shared_ptr<StepTHn> HistogramRegistry::add<StepTHn>(char const* const name, char const* const title, HistType histType, const std::vector<AxisSpec>& axes, bool callSumw2);
 
 } // namespace o2::framework

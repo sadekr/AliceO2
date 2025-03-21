@@ -15,6 +15,9 @@
 #include <memory>
 #include <Rtypes.h>
 #include "Framework/Logger.h"
+#include "CommonDataFormat/TFIDInfo.h"
+#include "CommonConstants/LHCConstants.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 
 /// @brief Wrapper for the container of calibration data for single time slot
 
@@ -23,7 +26,8 @@ namespace o2
 namespace calibration
 {
 
-using TFType = uint64_t;
+using TFType = uint32_t;
+inline constexpr TFType INFINITE_TF = std::numeric_limits<TFType>::max();
 
 template <typename Container>
 class TimeSlot
@@ -31,27 +35,30 @@ class TimeSlot
  public:
   TimeSlot() = default;
   TimeSlot(TFType tfS, TFType tfE) : mTFStart(tfS), mTFEnd(tfE) {}
-  TimeSlot(const TimeSlot& src) : mTFStart(src.mTFStart), mTFEnd(src.mTFEnd), mContainer(std::make_unique<Container>(*src.getContainer())) {}
-  TimeSlot& operator=(const TimeSlot& src)
+  TimeSlot(const TimeSlot& src) : mTFStart(src.mTFStart), mTFEnd(src.mTFEnd), mEntries(src.mEntries), mRunStartOrbit(src.mRunStartOrbit), mTFStartMS(src.mTFStartMS)
   {
-    if (&src != this) {
-      mTFStart = src.mTFStart;
-      mTFEnd = src.mTFEnd;
-      mContainer = std::make_unique<Container>(*src.getContainer());
-    }
-    return *this;
+    mContainer = src.mContainer ? std::make_unique<Container>(*src.mContainer) : nullptr;
   }
+  TimeSlot& operator=(TimeSlot&& src) = default;
 
   ~TimeSlot() = default;
 
   TFType getTFStart() const { return mTFStart; }
   TFType getTFEnd() const { return mTFEnd; }
+
+  long getStaticStartTimeMS() const { return mTFStartMS; }
+  long getStartTimeMS() const { return o2::base::GRPGeomHelper::instance().getOrbitResetTimeMS() + (mRunStartOrbit + long(o2::base::GRPGeomHelper::getNHBFPerTF()) * mTFStart) * o2::constants::lhc::LHCOrbitMUS / 1000; }
+  long getEndTimeMS() const { return o2::base::GRPGeomHelper::instance().getOrbitResetTimeMS() + (mRunStartOrbit + long(o2::base::GRPGeomHelper::getNHBFPerTF()) * (mTFEnd + 1)) * o2::constants::lhc::LHCOrbitMUS / 1000; }
+
   const Container* getContainer() const { return mContainer.get(); }
   Container* getContainer() { return mContainer.get(); }
   void setContainer(std::unique_ptr<Container> ptr) { mContainer = std::move(ptr); }
 
   void setTFStart(TFType v) { mTFStart = v; }
   void setTFEnd(TFType v) { mTFEnd = v; }
+  void setStaticStartTimeMS(long t) { mTFStartMS = t; }
+  void setRunStartOrbit(long t) { mRunStartOrbit = t; }
+  auto getRunStartOrbit() const { return mRunStartOrbit; }
 
   // compare the TF with this slot boundaties
   int relateToTF(TFType tf) { return tf < mTFStart ? -1 : (tf > mTFEnd ? 1 : 0); }
@@ -61,11 +68,12 @@ class TimeSlot
   {
     mContainer->merge(prev.mContainer.get());
     mTFStart = prev.mTFStart;
+    mTFStartMS = prev.mTFStartMS;
   }
 
   void print() const
   {
-    LOGF(INFO, "Calibration slot %5d <=TF<=  %5d", mTFStart, mTFEnd);
+    LOGF(info, "Calibration slot %5d <=TF<=  %5d (start in ms = %ld)", mTFStart, mTFEnd, mTFStartMS);
     mContainer->print();
   }
 
@@ -73,9 +81,11 @@ class TimeSlot
   TFType mTFStart = 0;
   TFType mTFEnd = 0;
   size_t mEntries = 0;
+  long mRunStartOrbit = 0;
   std::unique_ptr<Container> mContainer; // user object to accumulate the calibration data for this slot
+  long mTFStartMS = 0;                   // start time of the slot in ms that avoids to calculate it on the fly; needed when a slot covers more runs, otherwise the OrbitReset that is read is the one of the latest run, and the validity will be wrong
 
-  ClassDefNV(TimeSlot, 1);
+  ClassDefNV(TimeSlot, 2);
 };
 
 } // namespace calibration

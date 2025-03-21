@@ -18,7 +18,8 @@
 #include "Framework/DeviceControl.h"
 #include "Framework/DeviceMetricsInfo.h"
 #include "Framework/ServiceSpec.h"
-#include "GuiCallbackContext.h"
+#include "Framework/GuiCallbackContext.h"
+#include "Framework/DataProcessingStates.h"
 
 #include <uv.h>
 #include <vector>
@@ -30,15 +31,28 @@ struct ServiceRegistry;
 struct GuiCallbackContext;
 
 struct DriverServerContext {
+  ServiceRegistryRef registry;
   uv_loop_t* loop = nullptr;
-  ServiceRegistry* registry = nullptr;
   std::vector<DeviceControl>* controls = nullptr;
   std::vector<DeviceInfo>* infos = nullptr;
+  std::vector<DataProcessingStates>* states = nullptr;
   std::vector<DeviceSpec>* specs = nullptr;
   std::vector<DeviceMetricsInfo>* metrics = nullptr;
   std::vector<ServiceMetricHandling>* metricProcessingCallbacks = nullptr;
+  std::vector<ServiceSummaryHandling>* summaryCallbacks = nullptr;
+
   DriverInfo* driver = nullptr;
   GuiCallbackContext* gui = nullptr;
+  /// Whether or not this server is associated to
+  /// the DPL driver or one of the devices.
+  /// FIXME: we should probably rename this completely and simply call it "DPLServerContext"
+  ///        or something like that.
+  bool isDriver = false;
+
+  /// The handle to the server component of the
+  /// driver.
+  uv_tcp_t serverHandle;
+  uv_async_t* asyncLogProcessing = nullptr;
 };
 } // namespace o2::framework
 

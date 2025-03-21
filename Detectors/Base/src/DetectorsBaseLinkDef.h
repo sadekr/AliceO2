@@ -18,22 +18,28 @@
 #pragma link C++ class o2::base::Detector + ;
 #pragma link C++ class o2::base::Propagator + ;
 #pragma link C++ class o2::base::PropagatorF + ;
+#pragma link C++ class o2::base::PropagatorD + ;
 #pragma link C++ class o2::base::PropagatorImpl < double> + ;
 #pragma link C++ class o2::base::PropagatorImpl < float> + ;
 
 #pragma link C++ class o2::base::GeometryManager + ;
 #pragma link C++ class o2::base::GeometryManager::MatBudgetExt + ;
 #pragma link C++ class o2::base::MaterialManager + ;
+#pragma link C++ class o2::MaterialManagerParam + ;
+#pragma link C++ class o2::GeometryManagerParam + ;
+#pragma link C++ class o2::base::SimFieldUtils + ;
 
 #pragma link C++ class o2::base::Ray + ;
 #pragma link C++ class o2::base::MatCell + ;
 #pragma link C++ class o2::base::MatBudget + ;
 #pragma link C++ class o2::base::MatLayerCyl + ;
 #pragma link C++ class o2::base::MatLayerCylSet + ;
-
-#pragma link C++ class o2::ctf::CTFCoderBase + ;
-
 #pragma link C++ class o2::base::Aligner + ;
 #pragma link C++ class o2::conf::ConfigurableParamHelper < o2::base::Aligner> + ;
+
+#pragma link C++ class o2::GlobalParams + ;
+#pragma link C++ class o2::conf::ConfigurableParamHelper < o2::GlobalParams> + ;
+
+#pragma link C++ class o2::data::Stack + ;
 
 #endif

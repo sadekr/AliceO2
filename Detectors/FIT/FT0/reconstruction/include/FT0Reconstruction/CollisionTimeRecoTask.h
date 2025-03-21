@@ -10,21 +10,20 @@
 // or submit itself to any jurisdiction.
 
 /// \file CollisionTimeRecoTask.h
-/// \brief Definition of the FIT collision time reconstruction task
-#ifndef ALICEO2_FIT_COLLISIONTIMERECOTASK_H
-#define ALICEO2_FIT_COLLISIONTIMERECOTASK_H
+/// \brief Definition of the FT0 collision time reconstruction task
+#ifndef ALICEO2_FT0_COLLISIONTIMERECOTASK_H
+#define ALICEO2_FT0_COLLISIONTIMERECOTASK_H
 
+#include "FT0Base/Geometry.h"
 #include "DataFormatsFT0/Digit.h"
 #include "DataFormatsFT0/ChannelData.h"
 #include "DataFormatsFT0/RecPoints.h"
-#include "CommonDataFormat/InteractionRecord.h"
-#include "CommonDataFormat/TimeStamp.h"
-#include "FT0Calibration/FT0ChannelTimeCalibrationObject.h"
-#include "FT0Base/Geometry.h"
+#include "DataFormatsFT0/FT0ChannelTimeCalibrationObject.h"
+#include "DataFormatsFT0/SpectraInfoObject.h"
+#include "DataFormatsFT0/SlewingCoef.h"
 #include <gsl/span>
-#include <bitset>
-#include <vector>
 #include <array>
+#include <vector>
 #include <TGraph.h>
 
 namespace o2
@@ -43,23 +42,26 @@ class CollisionTimeRecoTask
                Vertex };
   CollisionTimeRecoTask() = default;
   ~CollisionTimeRecoTask() = default;
-  o2::ft0::RecPoints process(o2::ft0::Digit const& bcd,
-                             gsl::span<const o2::ft0::ChannelData> inChData,
-                             gsl::span<o2::ft0::ChannelDataFloat> outChData);
+  void processTF(const gsl::span<const o2::ft0::Digit>& digits,
+                 const gsl::span<const o2::ft0::ChannelData>& channels,
+                 std::vector<o2::ft0::RecPoints>& vecRecPoints,
+                 std::vector<o2::ft0::ChannelDataFloat>& vecChData);
+
+  o2::ft0::RecPoints processDigit(const o2::ft0::Digit& digit,
+                                  const gsl::span<const o2::ft0::ChannelData> inChData,
+                                  std::vector<o2::ft0::ChannelDataFloat>& outChData);
   void FinishTask();
-  void SetChannelOffset(o2::ft0::FT0ChannelTimeCalibrationObject* caliboffsets) { mCalibOffset = caliboffsets; };
-  void SetSlew(std::array<TGraph, NCHANNELS>* calibslew)
+  void SetTimeCalibObject(o2::ft0::TimeSpectraInfoObject const* timeCalibObject) { mTimeCalibObject = timeCalibObject; };
+  void SetSlewingCalibObject(o2::ft0::SlewingCoef const* calibSlew)
   {
-    LOG(INFO) << "@@@SetSlew " << calibslew->size();
-    mCalibSlew = calibslew;
+    LOG(info) << "Init for slewing calib object";
+    mCalibSlew = calibSlew->makeSlewingPlots();
   };
-  int getOffset(int channel, int amp);
+  float getTimeInPS(const o2::ft0::ChannelData& channelData);
 
  private:
-  o2::ft0::FT0ChannelTimeCalibrationObject* mCalibOffset;
-  std::array<TGraph, NCHANNELS>* mCalibSlew = nullptr;
-
-  ClassDefNV(CollisionTimeRecoTask, 3);
+  o2::ft0::TimeSpectraInfoObject const* mTimeCalibObject = nullptr;
+  typename o2::ft0::SlewingCoef::SlewingPlots_t mCalibSlew{};
 };
 } // namespace ft0
 } // namespace o2

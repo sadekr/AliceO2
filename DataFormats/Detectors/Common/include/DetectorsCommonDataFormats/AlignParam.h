@@ -39,6 +39,8 @@ class AlignParam
              double psi, double theta, double phi, // delta rotation
              bool global = true);                  // global (preferable) or local delta definition
 
+  AlignParam(const char* symname, int algID, TGeoMatrix& m, bool global = true);
+
   /// return symbolic name of the volume
   const std::string& getSymName() const { return mSymName; }
   /// iparamater's getters
@@ -110,6 +112,8 @@ class AlignParam
 
   void print() const;
 
+  int rectify(double zero = 1e-13);
+
  protected:
   bool matrixToAngles(const double* rot, double& psi, double& theta, double& phi) const;
   void anglesToMatrix(double psi, double theta, double phi, double* rot) const;
@@ -132,7 +136,7 @@ class AlignParam
   ClassDefNV(AlignParam, 1);
 };
 
-}
-}
+} // namespace detectors
+} // namespace o2
 
 #endif

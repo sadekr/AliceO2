@@ -46,7 +46,7 @@ DataProcessorSpec getDigitWriterSpec(bool mctruth, bool dec, bool calib, o2::hea
   detStrL += detStr;
   std::transform(detStrL.begin(), detStrL.end(), detStrL.begin(), ::tolower);
   auto logger = [](std::vector<o2::itsmft::Digit> const& inDigits) {
-    LOG(INFO) << "RECEIVED DIGITS SIZE " << inDigits.size();
+    LOG(info) << "RECEIVED DIGITS SIZE " << inDigits.size();
   };
 
   // the callback to be set as hook for custom action when the writer is closed
@@ -56,12 +56,15 @@ DataProcessorSpec getDigitWriterSpec(bool mctruth, bool dec, bool calib, o2::hea
     for (const auto* brc : *brArr) {
       int64_t n = ((const TBranch*)brc)->GetEntries();
       if (nent && (nent != n)) {
-        LOG(ERROR) << "Branches have different number of entries";
+        LOG(error) << "Branches have different number of entries";
       }
       nent = n;
     }
     outputtree->SetEntries(nent);
-    outputtree->Write("", TObject::kOverwrite);
+    // do not use TTree::Write .. as this writes to default directory (not the associated file)
+    // instead of outputtree->Write("", TObject::kOverwrite)
+    // --> better use TFile::Write or TFile::WriteObject
+    outputfile->Write("", TObject::kOverwrite);
     outputfile->Close();
   };
 
@@ -70,7 +73,7 @@ DataProcessorSpec getDigitWriterSpec(bool mctruth, bool dec, bool calib, o2::hea
   // We therefore convert it to a special split class.
   auto fillLabels = [](TBranch& branch, std::vector<char> const& labelbuffer, DataRef const& /*ref*/) {
     o2::dataformats::ConstMCTruthContainerView<o2::MCCompLabel> labels(labelbuffer);
-    LOG(INFO) << "WRITING " << labels.getNElements() << " LABELS ";
+    LOG(info) << "WRITING " << labels.getNElements() << " LABELS ";
 
     o2::dataformats::IOMCTruthContainerView outputcontainer;
     auto ptr = &outputcontainer;
@@ -85,19 +88,19 @@ DataProcessorSpec getDigitWriterSpec(bool mctruth, bool dec, bool calib, o2::hea
                                 MakeRootTreeWriterSpec::TreeAttributes{"o2sim", "Digits tree"},
                                 MakeRootTreeWriterSpec::CustomClose(finishWriting),
                                 // in case of labels we first read them as std::vector<char> and process them correctly in the fillLabels hook
-                                BranchDefinition<std::vector<char>>{InputSpec{"digitsMCTR", detOrig, "DIGITSMCTR", 0},
+                                BranchDefinition<std::vector<char>>{InputSpec{(detStr + "_digitsMCTR").c_str(), detOrig, "DIGITSMCTR", 0},
                                                                     (detStr + "DigitMCTruth").c_str(),
                                                                     (mctruth ? 1 : 0), fillLabels},
-                                BranchDefinition<std::vector<itsmft::MC2ROFRecord>>{InputSpec{"digitsMC2ROF", detOrig, "DIGITSMC2ROF", 0},
+                                BranchDefinition<std::vector<itsmft::MC2ROFRecord>>{InputSpec{(detStr + "_digitsMC2ROF").c_str(), detOrig, "DIGITSMC2ROF", 0},
                                                                                     (detStr + "DigitMC2ROF").c_str(),
                                                                                     (mctruth ? 1 : 0)},
-                                BranchDefinition<std::vector<itsmft::Digit>>{InputSpec{"digits", detOrig, "DIGITS", 0},
+                                BranchDefinition<std::vector<itsmft::Digit>>{InputSpec{(detStr + "digits").c_str(), detOrig, "DIGITS", 0},
                                                                              (detStr + "Digit").c_str(),
                                                                              logger},
-                                BranchDefinition<std::vector<itsmft::GBTCalibData>>{InputSpec{"calib", detOrig, "GBTCALIB", 0},
+                                BranchDefinition<std::vector<itsmft::GBTCalibData>>{InputSpec{(detStr + "calib").c_str(), detOrig, "GBTCALIB", 0},
                                                                                     (detStr + "Calib").c_str(),
                                                                                     (calib ? 1 : 0)},
-                                BranchDefinition<std::vector<itsmft::ROFRecord>>{InputSpec{"digitsROF", detOrig, "DIGITSROF", 0},
+                                BranchDefinition<std::vector<itsmft::ROFRecord>>{InputSpec{(detStr + "digitsROF").c_str(), detOrig, "DIGITSROF", 0},
                                                                                  (detStr + "DigitROF").c_str()})();
 }
 

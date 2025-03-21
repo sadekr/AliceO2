@@ -20,8 +20,13 @@
 #include "DataFormatsITSMFT/TopologyDictionary.h"
 #include "ITSBase/GeometryTGeo.h"
 #include "ITSMFTBase/SegmentationAlpide.h"
+#include "ITStracking/TrackingConfigParam.h"
 
 #include <iostream>
+
+#ifdef WITH_OPENMP
+#include <omp.h>
+#endif
 
 namespace
 {
@@ -31,6 +36,18 @@ struct ClusterHelper {
   int bin;
   int ind;
 };
+
+float MSangle(float mass, float p, float xX0)
+{
+  float beta = p / o2::gpu::CAMath::Hypot(mass, p);
+  return 0.0136f * o2::gpu::CAMath::Sqrt(xX0) * (1.f + 0.038f * o2::gpu::CAMath::Log(xX0)) / (beta * p);
+}
+
+float Sq(float v)
+{
+  return v * v;
+}
+
 } // namespace
 
 namespace o2
@@ -52,19 +69,76 @@ TimeFrame::TimeFrame(int nLayers)
   mTrackingFrameInfo.resize(nLayers);
   mClusterExternalIndices.resize(nLayers);
   mUsedClusters.resize(nLayers);
-  mROframesClusters.resize(nLayers, {0}); ///TBC: if resetting the timeframe is required, then this has to be done
+  mROFramesClusters.resize(nLayers, {0}); /// TBC: if resetting the timeframe is required, then this has to be done
+  mNClustersPerROF.resize(nLayers);
+  mTrackletsIndexROF.resize(2, {0});
 }
 
 void TimeFrame::addPrimaryVertices(const std::vector<Vertex>& vertices)
 {
   for (const auto& vertex : vertices) {
     mPrimaryVertices.emplace_back(vertex);
-    const int w{vertex.getNContributors()};
-    mBeamPos[0] = (mBeamPos[0] * mBeamPosWeight + vertex.getX() * w) / (mBeamPosWeight + w);
-    mBeamPos[1] = (mBeamPos[1] * mBeamPosWeight + vertex.getY() * w) / (mBeamPosWeight + w);
-    mBeamPosWeight += w;
+    if (!isBeamPositionOverridden) {
+      const int w{vertex.getNContributors()};
+      mBeamPos[0] = (mBeamPos[0] * mBeamPosWeight + vertex.getX() * w) / (mBeamPosWeight + w);
+      mBeamPos[1] = (mBeamPos[1] * mBeamPosWeight + vertex.getY() * w) / (mBeamPosWeight + w);
+      mBeamPosWeight += w;
+    }
   }
-  mROframesPV.push_back(mPrimaryVertices.size());
+  mROFramesPV.push_back(mPrimaryVertices.size());
+}
+
+void TimeFrame::addPrimaryVertices(const std::vector<Vertex>& vertices, const int rofId, const int iteration)
+{
+  addPrimaryVertices(gsl::span<const Vertex>(vertices), rofId, iteration);
+}
+
+void TimeFrame::addPrimaryVerticesLabels(std::vector<std::pair<MCCompLabel, float>>& labels)
+{
+  mVerticesMCRecInfo.insert(mVerticesMCRecInfo.end(), labels.begin(), labels.end());
+}
+
+void TimeFrame::addPrimaryVerticesInROF(const std::vector<Vertex>& vertices, const int rofId, const int iteration)
+{
+  mPrimaryVertices.insert(mPrimaryVertices.begin() + mROFramesPV[rofId], vertices.begin(), vertices.end());
+  for (int i = rofId + 1; i < mROFramesPV.size(); ++i) {
+    mROFramesPV[i] += vertices.size();
+  }
+  mTotVertPerIteration[iteration] += vertices.size();
+}
+
+void TimeFrame::addPrimaryVerticesLabelsInROF(const std::vector<std::pair<MCCompLabel, float>>& labels, const int rofId)
+{
+  mVerticesMCRecInfo.insert(mVerticesMCRecInfo.begin() + mROFramesPV[rofId], labels.begin(), labels.end());
+}
+
+void TimeFrame::addPrimaryVertices(const gsl::span<const Vertex>& vertices, const int rofId, const int iteration)
+{
+  std::vector<Vertex> futureVertices;
+  for (const auto& vertex : vertices) {
+    if (vertex.getTimeStamp().getTimeStamp() < rofId) { // put a copy in the past
+      insertPastVertex(vertex, iteration);
+    } else {
+      if (vertex.getTimeStamp().getTimeStamp() > rofId) { // or put a copy in the future
+        futureVertices.emplace_back(vertex);
+      }
+    }
+    mPrimaryVertices.emplace_back(vertex); // put a copy in the present
+    mTotVertPerIteration[iteration]++;
+    if (!isBeamPositionOverridden) { // beam position is updated only at first occurrence of the vertex. A bit sketchy if we have past/future vertices, it should not impact too much.
+      const int w{vertex.getNContributors()};
+      mBeamPos[0] = (mBeamPos[0] * mBeamPosWeight + vertex.getX() * w) / (mBeamPosWeight + w);
+      mBeamPos[1] = (mBeamPos[1] * mBeamPosWeight + vertex.getY() * w) / (mBeamPosWeight + w);
+      mBeamPosWeight += w;
+    }
+  }
+  mROFramesPV.push_back(mPrimaryVertices.size()); // current rof must have number of vertices up to present
+  if (futureVertices.size()) {                    // append future vertices. In the last rofId we cannot have ones from the next, so we are never here.
+    for (auto& vertex : futureVertices) {
+      mPrimaryVertices.emplace_back(vertex);
+      mTotVertPerIteration[iteration]++;
+    }
+  }
 }
 
 int TimeFrame::loadROFrameData(const o2::itsmft::ROFRecord& rof, gsl::span<const itsmft::Cluster> clusters,
@@ -92,7 +166,11 @@ int TimeFrame::loadROFrameData(const o2::itsmft::ROFRecord& rof, gsl::span<const
   }
 
   for (unsigned int iL{0}; iL < mUnsortedClusters.size(); ++iL) {
-    mROframesClusters[iL].push_back(mUnsortedClusters[iL].size());
+    mNClustersPerROF[iL].push_back(mUnsortedClusters[iL].size() - mROFramesClusters[iL].back());
+    mROFramesClusters[iL].push_back(mUnsortedClusters[iL].size());
+    if (iL < 2) {
+      mTrackletsIndexROF[iL].push_back(mUnsortedClusters[1].size()); // Tracklets used in vertexer are always computed starting from L1
+    }
   }
   if (mcLabels) {
     mClusterLabels = mcLabels;
@@ -101,54 +179,87 @@ int TimeFrame::loadROFrameData(const o2::itsmft::ROFRecord& rof, gsl::span<const
   return clusters_in_frame.size();
 }
 
-int TimeFrame::loadROFrameData(gsl::span<o2::itsmft::ROFRecord> rofs, gsl::span<const itsmft::CompClusterExt> clusters, gsl::span<const unsigned char>::iterator& pattIt, const itsmft::TopologyDictionary& dict, const dataformats::MCTruthContainer<MCCompLabel>* mcLabels)
+int TimeFrame::loadROFrameData(gsl::span<o2::itsmft::ROFRecord> rofs,
+                               gsl::span<const itsmft::CompClusterExt> clusters,
+                               gsl::span<const unsigned char>::iterator& pattIt,
+                               const itsmft::TopologyDictionary* dict,
+                               const dataformats::MCTruthContainer<MCCompLabel>* mcLabels)
 {
+  for (int iLayer{0}; iLayer < mUnsortedClusters.size(); ++iLayer) {
+    deepVectorClear(mUnsortedClusters[iLayer]);
+    deepVectorClear(mTrackingFrameInfo[iLayer]);
+    deepVectorClear(mClusterExternalIndices[iLayer]);
+    mROFramesClusters[iLayer].resize(1, 0);
+
+    if (iLayer < 2) {
+      deepVectorClear(mTrackletsIndexROF[iLayer]);
+      deepVectorClear(mNTrackletsPerCluster[iLayer]);
+      deepVectorClear(mNTrackletsPerClusterSum[iLayer]);
+    }
+  }
+
   GeometryTGeo* geom = GeometryTGeo::Instance();
   geom->fillMatrixCache(o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2L, o2::math_utils::TransformType::L2G));
 
   mNrof = 0;
-  for (int clusterId{0}; clusterId < clusters.size() && mNrof < rofs.size(); ++clusterId) {
-    auto& c = clusters[clusterId];
+  deepVectorClear(mClusterSize);
+  mClusterSize.reserve(clusters.size());
+  for (auto& rof : rofs) {
+    for (int clusterId{rof.getFirstEntry()}; clusterId < rof.getFirstEntry() + rof.getNEntries(); ++clusterId) {
+      auto& c = clusters[clusterId];
 
-    int layer = geom->getLayer(c.getSensorID());
+      int layer = geom->getLayer(c.getSensorID());
 
-    auto pattID = c.getPatternID();
-    o2::math_utils::Point3D<float> locXYZ;
-    float sigmaY2 = DefClusError2Row, sigmaZ2 = DefClusError2Col, sigmaYZ = 0; //Dummy COG errors (about half pixel size)
-    if (pattID != itsmft::CompCluster::InvalidPatternID) {
-      sigmaY2 = dict.getErr2X(pattID);
-      sigmaZ2 = dict.getErr2Z(pattID);
-      if (!dict.isGroup(pattID)) {
-        locXYZ = dict.getClusterCoordinates(c);
+      auto pattID = c.getPatternID();
+      o2::math_utils::Point3D<float> locXYZ;
+      float sigmaY2 = DefClusError2Row, sigmaZ2 = DefClusError2Col, sigmaYZ = 0; // Dummy COG errors (about half pixel size)
+      unsigned int clusterSize{0};
+      if (pattID != itsmft::CompCluster::InvalidPatternID) {
+        sigmaY2 = dict->getErr2X(pattID);
+        sigmaZ2 = dict->getErr2Z(pattID);
+        if (!dict->isGroup(pattID)) {
+          locXYZ = dict->getClusterCoordinates(c);
+          clusterSize = dict->getNpixels(pattID);
+        } else {
+          o2::itsmft::ClusterPattern patt(pattIt);
+          locXYZ = dict->getClusterCoordinates(c, patt);
+          clusterSize = patt.getNPixels();
+        }
       } else {
         o2::itsmft::ClusterPattern patt(pattIt);
-        locXYZ = dict.getClusterCoordinates(c, patt);
+        locXYZ = dict->getClusterCoordinates(c, patt, false);
+        clusterSize = patt.getNPixels();
       }
-    } else {
-      o2::itsmft::ClusterPattern patt(pattIt);
-      locXYZ = dict.getClusterCoordinates(c, patt, false);
-    }
-    auto sensorID = c.getSensorID();
-    // Inverse transformation to the local --> tracking
-    auto trkXYZ = geom->getMatrixT2L(sensorID) ^ locXYZ;
-    // Transformation to the local --> global
-    auto gloXYZ = geom->getMatrixL2G(sensorID) * locXYZ;
-
-    addTrackingFrameInfoToLayer(layer, gloXYZ.x(), gloXYZ.y(), gloXYZ.z(), trkXYZ.x(), geom->getSensorRefAlpha(sensorID),
-                                std::array<float, 2>{trkXYZ.y(), trkXYZ.z()},
-                                std::array<float, 3>{sigmaY2, sigmaYZ, sigmaZ2});
-
-    /// Rotate to the global frame
-    addClusterToLayer(layer, gloXYZ.x(), gloXYZ.y(), gloXYZ.z(), mUnsortedClusters[layer].size());
-    addClusterExternalIndexToLayer(layer, clusterId);
-
-    while (mNrof < rofs.size() && clusterId >= rofs[mNrof].getFirstEntry() + rofs[mNrof].getNEntries() - 1) {
-      for (unsigned int iL{0}; iL < mUnsortedClusters.size(); ++iL) {
-        mROframesClusters[iL].push_back(mUnsortedClusters[iL].size());
+      if (clusterSize < 255) {
+        mClusterSize.push_back(clusterSize);
+      } else {
+        mClusterSize.push_back(255);
       }
-      mNrof++;
+      auto sensorID = c.getSensorID();
+      // Inverse transformation to the local --> tracking
+      auto trkXYZ = geom->getMatrixT2L(sensorID) ^ locXYZ;
+      // Transformation to the local --> global
+      auto gloXYZ = geom->getMatrixL2G(sensorID) * locXYZ;
+
+      addTrackingFrameInfoToLayer(layer, gloXYZ.x(), gloXYZ.y(), gloXYZ.z(), trkXYZ.x(), geom->getSensorRefAlpha(sensorID),
+                                  std::array<float, 2>{trkXYZ.y(), trkXYZ.z()},
+                                  std::array<float, 3>{sigmaY2, sigmaYZ, sigmaZ2});
+
+      /// Rotate to the global frame
+      addClusterToLayer(layer, gloXYZ.x(), gloXYZ.y(), gloXYZ.z(), mUnsortedClusters[layer].size());
+      addClusterExternalIndexToLayer(layer, clusterId);
     }
+    for (unsigned int iL{0}; iL < mUnsortedClusters.size(); ++iL) {
+      mROFramesClusters[iL].push_back(mUnsortedClusters[iL].size());
+    }
+    mNrof++;
   }
+
+  for (auto i = 0; i < mNTrackletsPerCluster.size(); ++i) {
+    mNTrackletsPerCluster[i].resize(mUnsortedClusters[1].size());
+    mNTrackletsPerClusterSum[i].resize(mUnsortedClusters[1].size() + 1); // Exc sum "prepends" a 0
+  }
+
   if (mcLabels) {
     mClusterLabels = mcLabels;
   }
@@ -164,110 +275,218 @@ int TimeFrame::getTotalClusters() const
   return int(totalClusters);
 }
 
-void TimeFrame::initialise(const int iteration, const MemoryParameters& memParam, const TrackingParameters& trkParam)
+void TimeFrame::prepareClusters(const TrackingParameters& trkParam, const int maxLayers)
+{
+  std::vector<ClusterHelper> cHelper;
+  std::vector<int> clsPerBin(trkParam.PhiBins * trkParam.ZBins, 0);
+  for (int rof{0}; rof < mNrof; ++rof) {
+    if ((int)mMultiplicityCutMask.size() == mNrof && !mMultiplicityCutMask[rof]) {
+      continue;
+    }
+    for (int iLayer{0}; iLayer < std::min(trkParam.NLayers, maxLayers); ++iLayer) {
+      std::fill(clsPerBin.begin(), clsPerBin.end(), 0);
+      const auto unsortedClusters{getUnsortedClustersOnLayer(rof, iLayer)};
+      const int clustersNum{static_cast<int>(unsortedClusters.size())};
+
+      deepVectorClear(cHelper);
+      cHelper.resize(clustersNum);
+
+      for (int iCluster{0}; iCluster < clustersNum; ++iCluster) {
+
+        const Cluster& c = unsortedClusters[iCluster];
+        ClusterHelper& h = cHelper[iCluster];
+        float x = c.xCoordinate - mBeamPos[0];
+        float y = c.yCoordinate - mBeamPos[1];
+        const float& z = c.zCoordinate;
+        float phi = math_utils::computePhi(x, y);
+        int zBin{mIndexTableUtils.getZBinIndex(iLayer, z)};
+        if (zBin < 0) {
+          zBin = 0;
+          mBogusClusters[iLayer]++;
+        } else if (zBin >= trkParam.ZBins) {
+          zBin = trkParam.ZBins - 1;
+          mBogusClusters[iLayer]++;
+        }
+        int bin = mIndexTableUtils.getBinIndex(zBin, mIndexTableUtils.getPhiBinIndex(phi));
+        h.phi = phi;
+        h.r = math_utils::hypot(x, y);
+        mMinR[iLayer] = o2::gpu::GPUCommonMath::Min(h.r, mMinR[iLayer]);
+        mMaxR[iLayer] = o2::gpu::GPUCommonMath::Max(h.r, mMaxR[iLayer]);
+        h.bin = bin;
+        h.ind = clsPerBin[bin]++;
+      }
+      std::vector<int> lutPerBin(clsPerBin.size());
+      lutPerBin[0] = 0;
+      for (unsigned int iB{1}; iB < lutPerBin.size(); ++iB) {
+        lutPerBin[iB] = lutPerBin[iB - 1] + clsPerBin[iB - 1];
+      }
+
+      auto clusters2beSorted{getClustersOnLayer(rof, iLayer)};
+      for (int iCluster{0}; iCluster < clustersNum; ++iCluster) {
+        const ClusterHelper& h = cHelper[iCluster];
+
+        Cluster& c = clusters2beSorted[lutPerBin[h.bin] + h.ind];
+        c = unsortedClusters[iCluster];
+        c.phi = h.phi;
+        c.radius = h.r;
+        c.indexTableBinIndex = h.bin;
+      }
+
+      for (unsigned int iB{0}; iB < clsPerBin.size(); ++iB) {
+        mIndexTables[iLayer][rof * (trkParam.ZBins * trkParam.PhiBins + 1) + iB] = lutPerBin[iB];
+      }
+      for (auto iB{clsPerBin.size()}; iB < (trkParam.ZBins * trkParam.PhiBins + 1); iB++) {
+        mIndexTables[iLayer][rof * (trkParam.ZBins * trkParam.PhiBins + 1) + iB] = clustersNum;
+      }
+    }
+  }
+}
+
+void TimeFrame::initialise(const int iteration, const TrackingParameters& trkParam, const int maxLayers, bool resetVertices)
 {
   if (iteration == 0) {
-    mTracks.clear();
-    mTracksLabel.clear();
+    if (maxLayers < trkParam.NLayers && resetVertices) {
+      resetRofPV();
+      deepVectorClear(mTotVertPerIteration);
+    }
+    deepVectorClear(mTracks);
+    deepVectorClear(mTracksLabel);
+    deepVectorClear(mLinesLabels);
+    if (resetVertices) {
+      deepVectorClear(mVerticesMCRecInfo);
+    }
     mTracks.resize(mNrof);
     mTracksLabel.resize(mNrof);
+    mLinesLabels.resize(mNrof);
     mCells.resize(trkParam.CellsPerRoad());
     mCellsLookupTable.resize(trkParam.CellsPerRoad() - 1);
     mCellsNeighbours.resize(trkParam.CellsPerRoad() - 1);
+    mCellsNeighboursLUT.resize(trkParam.CellsPerRoad() - 1);
     mCellLabels.resize(trkParam.CellsPerRoad());
-    mTracklets.resize(trkParam.TrackletsPerRoad());
+    mTracklets.resize(std::min(trkParam.TrackletsPerRoad(), maxLayers - 1));
     mTrackletLabels.resize(trkParam.TrackletsPerRoad());
     mTrackletsLookupTable.resize(trkParam.CellsPerRoad());
-    mIndexTables.clear();
     mIndexTableUtils.setTrackingParameters(trkParam);
-
-    for (unsigned int iLayer{0}; iLayer < mClusters.size(); ++iLayer) {
-      if (mClusters[iLayer].size()) {
-        continue;
-      }
-      mClusters[iLayer].clear();
+    mPositionResolution.resize(trkParam.NLayers);
+    mBogusClusters.resize(trkParam.NLayers, 0);
+    deepVectorClear(mLines);
+    deepVectorClear(mTrackletClusters);
+    for (unsigned int iLayer{0}; iLayer < std::min((int)mClusters.size(), maxLayers); ++iLayer) {
+      deepVectorClear(mClusters[iLayer]);
       mClusters[iLayer].resize(mUnsortedClusters[iLayer].size());
-      mUsedClusters[iLayer].clear();
+      deepVectorClear(mUsedClusters[iLayer]);
       mUsedClusters[iLayer].resize(mUnsortedClusters[iLayer].size(), false);
+      mPositionResolution[iLayer] = o2::gpu::CAMath::Sqrt(0.5 * (trkParam.SystErrorZ2[iLayer] + trkParam.SystErrorY2[iLayer]) + trkParam.LayerResolution[iLayer] * trkParam.LayerResolution[iLayer]);
     }
+    deepVectorClear(mIndexTables);
+    mIndexTables.resize(mClusters.size(), std::vector<int>(mNrof * (trkParam.ZBins * trkParam.PhiBins + 1), 0));
+    mLines.resize(mNrof);
+    mTrackletClusters.resize(mNrof);
 
-    mIndexTables.resize(mNrof);
-    std::vector<ClusterHelper> cHelper;
-    std::vector<int> clsPerBin(trkParam.PhiBins * trkParam.ZBins, 0);
-    for (int rof{0}; rof < mNrof; ++rof) {
-      mIndexTables[rof].resize(trkParam.TrackletsPerRoad(), std::vector<int>(trkParam.ZBins * trkParam.PhiBins + 1, 0));
-      if (mMultiplicityCutMask.size() == mNrof && !mMultiplicityCutMask[rof]) {
-        continue;
-      }
-      for (int iLayer{0}; iLayer < trkParam.NLayers; ++iLayer) {
-        std::fill(clsPerBin.begin(), clsPerBin.end(), 0);
-        const auto unsortedClusters{getUnsortedClustersOnLayer(rof, iLayer)};
-        const int clustersNum{static_cast<int>(unsortedClusters.size())};
-
-        cHelper.clear();
-        cHelper.resize(clustersNum);
-
-        for (int iCluster{0}; iCluster < clustersNum; ++iCluster) {
-          const Cluster& c = unsortedClusters[iCluster];
-          ClusterHelper& h = cHelper[iCluster];
-          float x = c.xCoordinate - mBeamPos[0];
-          float y = c.yCoordinate - mBeamPos[1];
-          float phi = math_utils::computePhi(x, y);
-          const int zBin{mIndexTableUtils.getZBinIndex(iLayer, c.zCoordinate)};
-          int bin = mIndexTableUtils.getBinIndex(zBin, mIndexTableUtils.getPhiBinIndex(phi));
-          h.phi = phi;
-          h.r = math_utils::hypot(x, y);
-          mMinR[iLayer] = o2::gpu::GPUCommonMath::Min(h.r, mMinR[iLayer]);
-          mMaxR[iLayer] = o2::gpu::GPUCommonMath::Max(h.r, mMaxR[iLayer]);
-          h.bin = bin;
-          h.ind = clsPerBin[bin]++;
-        }
-        std::vector<int> lutPerBin(clsPerBin.size());
-        lutPerBin[0] = 0;
-        for (unsigned int iB{1}; iB < lutPerBin.size(); ++iB) {
-          lutPerBin[iB] = lutPerBin[iB - 1] + clsPerBin[iB - 1];
-        }
-
-        auto clusters2beSorted{getClustersOnLayer(rof, iLayer)};
-        for (int iCluster{0}; iCluster < clustersNum; ++iCluster) {
-          const ClusterHelper& h = cHelper[iCluster];
-
-          Cluster& c = clusters2beSorted[lutPerBin[h.bin] + h.ind];
-          c = unsortedClusters[iCluster];
-          c.phi = h.phi;
-          c.radius = h.r;
-          c.indexTableBinIndex = h.bin;
-        }
-
-        if (iLayer > 0) {
-          for (unsigned int iB{0}; iB < clsPerBin.size(); ++iB) {
-            mIndexTables[rof][iLayer - 1][iB] = lutPerBin[iB];
-          }
-          for (auto iB{clsPerBin.size()}; iB < (int)mIndexTables[rof][iLayer - 1].size(); iB++) {
-            mIndexTables[rof][iLayer - 1][iB] = clustersNum;
-          }
+    for (int iLayer{0}; iLayer < trkParam.NLayers; ++iLayer) {
+      if (trkParam.SystErrorY2[iLayer] > 0.f || trkParam.SystErrorZ2[iLayer] > 0.f) {
+        for (auto& tfInfo : mTrackingFrameInfo[iLayer]) {
+          /// Account for alignment systematics in the cluster covariance matrix
+          tfInfo.covarianceTrackingFrame[0] += trkParam.SystErrorY2[iLayer];
+          tfInfo.covarianceTrackingFrame[2] += trkParam.SystErrorZ2[iLayer];
         }
       }
     }
   }
+  mNTrackletsPerROF.resize(2);
+  for (auto& v : mNTrackletsPerROF) {
+    v = std::vector<int>(mNrof + 1, 0);
+  }
+  if (iteration == 0 || iteration == 3) {
+    prepareClusters(trkParam, maxLayers);
+  }
+  mTotalTracklets = {0, 0};
+  if (maxLayers < trkParam.NLayers) { // Vertexer only, but in both iterations
+    for (size_t iLayer{0}; iLayer < maxLayers; ++iLayer) {
+      deepVectorClear(mUsedClusters[iLayer]);
+      mUsedClusters[iLayer].resize(mUnsortedClusters[iLayer].size(), false);
+    }
+  }
 
-  mRoads.clear();
-  mRoadLabels.clear();
+  mTotVertPerIteration.resize(1 + iteration);
+  mNoVertexROF = 0;
+  deepVectorClear(mRoads);
+  deepVectorClear(mRoadLabels);
 
-  for (unsigned int iLayer{0}; iLayer < mTracklets.size(); ++iLayer) {
-    mTracklets[iLayer].clear();
-    mTrackletLabels[iLayer].clear();
-    if (iLayer < mCells.size()) {
-      mCells[iLayer].clear();
-      mTrackletsLookupTable[iLayer].clear();
+  mMSangles.resize(trkParam.NLayers);
+  mPhiCuts.resize(mClusters.size() - 1, 0.f);
+
+  float oneOverR{0.001f * 0.3f * std::abs(mBz) / trkParam.TrackletMinPt};
+  for (unsigned int iLayer{0}; iLayer < mClusters.size(); ++iLayer) {
+    mMSangles[iLayer] = MSangle(0.14f, trkParam.TrackletMinPt, trkParam.LayerxX0[iLayer]);
+    mPositionResolution[iLayer] = o2::gpu::CAMath::Sqrt(0.5f * (trkParam.SystErrorZ2[iLayer] + trkParam.SystErrorY2[iLayer]) + trkParam.LayerResolution[iLayer] * trkParam.LayerResolution[iLayer]);
+    if (iLayer < mClusters.size() - 1) {
+      const float& r1 = trkParam.LayerRadii[iLayer];
+      const float& r2 = trkParam.LayerRadii[iLayer + 1];
+      const float res1 = o2::gpu::CAMath::Hypot(trkParam.PVres, mPositionResolution[iLayer]);
+      const float res2 = o2::gpu::CAMath::Hypot(trkParam.PVres, mPositionResolution[iLayer + 1]);
+      const float cosTheta1half = o2::gpu::CAMath::Sqrt(1.f - Sq(0.5f * r1 * oneOverR));
+      const float cosTheta2half = o2::gpu::CAMath::Sqrt(1.f - Sq(0.5f * r2 * oneOverR));
+      float x = r2 * cosTheta1half - r1 * cosTheta2half;
+      float delta = o2::gpu::CAMath::Sqrt(1. / (1.f - 0.25f * Sq(x * oneOverR)) * (Sq(0.25f * r1 * r2 * Sq(oneOverR) / cosTheta2half + cosTheta1half) * Sq(res1) + Sq(0.25f * r1 * r2 * Sq(oneOverR) / cosTheta1half + cosTheta2half) * Sq(res2)));
+      mPhiCuts[iLayer] = std::min(o2::gpu::CAMath::ASin(0.5f * x * oneOverR) + 2.f * mMSangles[iLayer] + delta, constants::math::Pi * 0.5f);
+    }
+  }
+
+  for (int iLayer{0}; iLayer < std::min((int)mTracklets.size(), maxLayers); ++iLayer) {
+    deepVectorClear(mTracklets[iLayer]);
+    deepVectorClear(mTrackletLabels[iLayer]);
+    if (iLayer < (int)mCells.size()) {
+      deepVectorClear(mCells[iLayer]);
+      deepVectorClear(mTrackletsLookupTable[iLayer]);
       mTrackletsLookupTable[iLayer].resize(mClusters[iLayer + 1].size(), 0);
-      mCellLabels[iLayer].clear();
+      deepVectorClear(mCellLabels[iLayer]);
     }
 
-    if (iLayer < mCells.size() - 1) {
-      mCellsLookupTable[iLayer].clear();
-      mCellsNeighbours[iLayer].clear();
+    if (iLayer < (int)mCells.size() - 1) {
+      deepVectorClear(mCellsLookupTable[iLayer]);
+      deepVectorClear(mCellsNeighbours[iLayer]);
+      deepVectorClear(mCellsNeighboursLUT[iLayer]);
     }
+  }
+}
+
+unsigned long TimeFrame::getArtefactsMemory()
+{
+  unsigned long size{0};
+  for (auto& trkl : mTracklets) {
+    size += sizeof(Tracklet) * trkl.size();
+  }
+  for (auto& cells : mCells) {
+    size += sizeof(CellSeed) * cells.size();
+  }
+  for (auto& cellsN : mCellsNeighbours) {
+    size += sizeof(int) * cellsN.size();
+  }
+  return size + sizeof(Road<5>) * mRoads.size();
+}
+
+void TimeFrame::fillPrimaryVerticesXandAlpha()
+{
+  if (mPValphaX.size()) {
+    mPValphaX.clear();
+  }
+  mPValphaX.reserve(mPrimaryVertices.size());
+  for (auto& pv : mPrimaryVertices) {
+    mPValphaX.emplace_back(std::array<float, 2>{o2::gpu::CAMath::Hypot(pv.getX(), pv.getY()), math_utils::computePhi(pv.getX(), pv.getY())});
+  }
+}
+
+void TimeFrame::computeTrackletsPerROFScans()
+{
+  for (ushort iLayer = 0; iLayer < 2; ++iLayer) {
+    for (unsigned int iRof{0}; iRof < mNrof; ++iRof) {
+      if (mMultiplicityCutMask[iRof]) {
+        mTotalTracklets[iLayer] += mNTrackletsPerROF[iLayer][iRof];
+      }
+    }
+    std::exclusive_scan(mNTrackletsPerROF[iLayer].begin(), mNTrackletsPerROF[iLayer].end(), mNTrackletsPerROF[iLayer].begin(), 0);
+    std::exclusive_scan(mNTrackletsPerCluster[iLayer].begin(), mNTrackletsPerCluster[iLayer].end(), mNTrackletsPerClusterSum[iLayer].begin(), 0);
   }
 }
 
@@ -295,12 +514,26 @@ void TimeFrame::checkTrackletLUTs()
       prev = currentId;
       if (iLayer > 0) {
         auto& lut{getTrackletsLookupTable()[iLayer - 1]};
-        if (iTracklet >= lut[currentId + 1] || iTracklet < lut[currentId]) {
+        if (iTracklet >= (uint32_t)(lut[currentId + 1]) || iTracklet < (uint32_t)(lut[currentId])) {
           std::cout << "LUT broken: " << iLayer - 1 << "\t" << currentId << "\t" << iTracklet << std::endl;
         }
       }
     }
   }
+}
+
+void TimeFrame::resizeVectors(int nLayers)
+{
+  mMinR.resize(nLayers, 10000.);
+  mMaxR.resize(nLayers, -1.);
+  mClusters.resize(nLayers);
+  mUnsortedClusters.resize(nLayers);
+  mTrackingFrameInfo.resize(nLayers);
+  mClusterExternalIndices.resize(nLayers);
+  mUsedClusters.resize(nLayers);
+  mROFramesClusters.resize(nLayers, {0});
+  mNClustersPerROF.resize(nLayers);
+  mTrackletsIndexROF.resize(2, {0});
 }
 
 void TimeFrame::printTrackletLUTonLayer(int i)
@@ -341,9 +574,9 @@ void TimeFrame::printCellLUTs()
 
 void TimeFrame::printVertices()
 {
-  std::cout << "Vertices in ROF (nROF = " << mNrof << ", lut size = " << mROframesPV.size() << ")" << std::endl;
-  for (unsigned int iR{0}; iR < mROframesPV.size(); ++iR) {
-    std::cout << mROframesPV[iR] << "\t";
+  std::cout << "Vertices in ROF (nROF = " << mNrof << ", lut size = " << mROFramesPV.size() << ")" << std::endl;
+  for (unsigned int iR{0}; iR < mROFramesPV.size(); ++iR) {
+    std::cout << mROFramesPV[iR] << "\t";
   }
   std::cout << "\n\n Vertices:" << std::endl;
   for (unsigned int iV{0}; iV < mPrimaryVertices.size(); ++iV) {
@@ -355,12 +588,40 @@ void TimeFrame::printVertices()
 void TimeFrame::printROFoffsets()
 {
   std::cout << "--------" << std::endl;
-  for (unsigned int iLayer{0}; iLayer < mROframesClusters.size(); ++iLayer) {
+  for (unsigned int iLayer{0}; iLayer < mROFramesClusters.size(); ++iLayer) {
     std::cout << "Layer " << iLayer << std::endl;
-    for (auto value : mROframesClusters[iLayer]) {
+    for (auto value : mROFramesClusters[iLayer]) {
       std::cout << value << "\t";
     }
     std::cout << std::endl;
+  }
+}
+
+void TimeFrame::printNClsPerROF()
+{
+  std::cout << "--------" << std::endl;
+  for (unsigned int iLayer{0}; iLayer < mNClustersPerROF.size(); ++iLayer) {
+    std::cout << "Layer " << iLayer << std::endl;
+    for (auto& value : mNClustersPerROF[iLayer]) {
+      std::cout << value << "\t";
+    }
+    std::cout << std::endl;
+  }
+}
+
+void TimeFrame::printSliceInfo(const int startROF, const int sliceSize)
+{
+  std::cout << "Dumping slice of " << sliceSize << " rofs:" << std::endl;
+  for (int iROF{startROF}; iROF < startROF + sliceSize; ++iROF) {
+    std::cout << "ROF " << iROF << " dump:" << std::endl;
+    for (unsigned int iLayer{0}; iLayer < mClusters.size(); ++iLayer) {
+      std::cout << "Layer " << iLayer << " has: " << getClustersOnLayer(iROF, iLayer).size() << " clusters." << std::endl;
+    }
+    std::cout << "Number of seeding vertices: " << getPrimaryVertices(iROF).size() << std::endl;
+    int iVertex{0};
+    for (auto& v : getPrimaryVertices(iROF)) {
+      std::cout << "\t vertex " << iVertex++ << ": x=" << v.getX() << " " << " y=" << v.getY() << " z=" << v.getZ() << " has " << v.getNContributors() << " contributors." << std::endl;
+    }
   }
 }
 

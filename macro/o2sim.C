@@ -13,7 +13,8 @@
 #if !defined(__CLING__) || defined(__ROOTCLING__)
 #include <Generators/PrimaryGenerator.h>
 #include <Generators/GeneratorFactory.h>
-#include <Generators/PDG.h>
+#include <Generators/Generator.h>
+#include "SimulationDataFormat/O2DatabasePDG.h"
 #include "SimulationDataFormat/MCEventHeader.h"
 #include <SimConfig/SimConfig.h>
 #include <SimConfig/SimParams.h>
@@ -22,36 +23,74 @@
 #include <TStopwatch.h>
 #include <memory>
 #include "DataFormatsParameters/GRPObject.h"
+#include "DataFormatsParameters/GRPECSObject.h"
+#include "DataFormatsParameters/GRPMagField.h"
+#include "DataFormatsParameters/GRPLHCIFData.h"
 #include "FairParRootFileIo.h"
 #include "FairSystemInfo.h"
 #include <SimSetup/SimSetup.h>
 #include <Steer/O2RunSim.h>
 #include <DetectorsBase/MaterialManager.h>
 #include <CCDB/BasicCCDBManager.h>
-#include <DetectorsCommonDataFormats/NameConf.h>
+#include <CommonUtils/NameConf.h>
 #include "DetectorsBase/Aligner.h"
+#include <FairRootFileSink.h>
+#include <FairField.h>
 #include <unistd.h>
 #include <sstream>
 #endif
 #include "migrateSimFiles.C"
+#include <boost/property_tree/ptree.hpp>
 
-FairRunSim* o2sim_init(bool asservice)
+void check_notransport()
+{
+  // Sometimes we just want to inspect
+  // the generator kinematics and prohibit any transport.
+
+  // We allow users to give the noGeant option. In this case
+  // we set the geometry cuts to almost zero. Other adjustments (disable physics procs) could
+  // be done on top.
+  // This is merely offered for user convenience as it can be done from outside as well.
+  auto& confref = o2::conf::SimConfig::Instance();
+  if (confref.isNoGeant()) {
+    LOG(info) << "Initializing without Geant transport by applying very tight geometry cuts";
+    o2::conf::ConfigurableParam::setValue("SimCutParams", "maxRTracking", 0.0000001);    // 1 nanometer of tracking
+    o2::conf::ConfigurableParam::setValue("SimCutParams", "maxAbsZTracking", 0.0000001); // 1 nanometer of tracking
+  }
+}
+
+FairRunSim* o2sim_init(bool asservice, bool evalmat = false)
 {
   auto& confref = o2::conf::SimConfig::Instance();
+  // set the global information about the number of events to be generated
+  unsigned int nTotalEvents = confref.getNEvents();
+  o2::eventgen::Generator::setTotalNEvents(nTotalEvents);
   // initialize CCDB service
   auto& ccdbmgr = o2::ccdb::BasicCCDBManager::instance();
-  ccdbmgr.setURL(confref.getConfigData().mCCDBUrl);
-  ccdbmgr.setTimestamp(confref.getConfigData().mTimestamp);
-  // try to verify connection
-  if (!ccdbmgr.isHostReachable()) {
-    LOG(ERROR) << "Could not setup CCDB connecting";
-  } else {
-    LOG(INFO) << "Initialized CCDB Manager at URL: " << ccdbmgr.getURL();
-    LOG(INFO) << "Initialized CCDB Manager with timestamp : " << ccdbmgr.getTimestamp();
+  // fix the timestamp early
+  uint64_t timestamp = confref.getTimestamp();
+  // see if we have a run number but not a timestamp
+  auto run_number = confref.getRunNumber();
+  if (run_number != -1) {
+    if (confref.getConfigData().mTimestampMode == o2::conf::TimeStampMode::kNow) {
+      // fix the time by talking to CCDB
+      auto [sor, eor] = ccdbmgr.getRunDuration(run_number);
+      LOG(info) << "Have run number. Fixing timestamp to " << sor;
+      timestamp = sor;
+    }
   }
 
-  // we can read from CCDB (for the moment faking with a TFile)
-  // o2::conf::ConfigurableParam::fromCCDB("params_ccdb.root", runid);
+  ccdbmgr.setTimestamp(timestamp);
+  ccdbmgr.setURL(confref.getConfigData().mCCDBUrl);
+  // try to verify connection
+  if (!ccdbmgr.isHostReachable()) {
+    LOG(error) << "Could not setup CCDB connection";
+  } else {
+    LOG(info) << "Initialized CCDB Manager at URL: " << ccdbmgr.getURL();
+    LOG(info) << "Initialized CCDB Manager with timestamp : " << ccdbmgr.getTimestamp();
+  }
+
+  check_notransport();
 
   // update the parameters from an INI/JSON file, if given (overrides code-based version)
   o2::conf::ConfigurableParam::updateFromFile(confref.getConfigFile());
@@ -62,18 +101,15 @@ FairRunSim* o2sim_init(bool asservice)
   // write the final configuration file
   o2::conf::ConfigurableParam::writeINI(o2::base::NameConf::getMCConfigFileName(confref.getOutPrefix()));
 
-  // we can update the binary CCDB entry something like this ( + timestamp key )
-  // o2::conf::ConfigurableParam::toCCDB("params_ccdb.root");
-
   // set seed
   auto seed = o2::utils::RngHelper::setGRandomSeed(confref.getStartSeed());
-  LOG(INFO) << "RNG INITIAL SEED " << seed;
+  LOG(info) << "RNG INITIAL SEED " << seed;
 
   auto genconfig = confref.getGenerator();
-  FairRunSim* run = new o2::steer::O2RunSim(asservice);
+  FairRunSim* run = new o2::steer::O2RunSim(asservice, evalmat);
   run->SetImportTGeoToVMC(false); // do not import TGeo to VMC since the latter is built together with TGeo
   run->SetSimSetup([confref]() { o2::SimSetup::setup(confref.getMCEngine().c_str()); });
-  run->SetRunId(confref.getConfigData().mTimestamp);
+  run->SetRunId(timestamp);
 
   auto pid = getpid();
   std::stringstream s;
@@ -84,15 +120,18 @@ FairRunSim* o2sim_init(bool asservice)
   s << ".root";
 
   std::string outputfilename = s.str();
-  run->SetOutputFile(outputfilename.c_str());  // Output file
-  run->SetName(confref.getMCEngine().c_str()); // Transport engine
-  run->SetIsMT(confref.getIsMT());             // MT mode
+  run->SetSink(new FairRootFileSink(outputfilename.c_str())); // Output file
+  run->SetName(confref.getMCEngine().c_str());                // Transport engine
+  run->SetIsMT(confref.getIsMT());                            // MT mode
 
   /** set event header **/
   auto header = new o2::dataformats::MCEventHeader();
   run->SetMCEventHeader(header);
 
   // construct geometry / including magnetic field
+  auto flg = TGeoManager::LockDefaultUnits(false);
+  TGeoManager::SetDefaultUnits(TGeoManager::kRootUnits);
+  TGeoManager::LockDefaultUnits(flg);
   build_geometry(run);
 
   // setup generator
@@ -111,13 +150,20 @@ FairRunSim* o2sim_init(bool asservice)
   timer.Start();
 
   o2::detectors::DetID::mask_t detMask{};
+  o2::detectors::DetID::mask_t readoutDetMask{};
   {
-    auto& modulelist = o2::conf::SimConfig::Instance().getActiveDetectors();
+    auto& modulelist = o2::conf::SimConfig::Instance().getActiveModules();
     for (const auto& md : modulelist) {
       int id = o2::detectors::DetID::nameToID(md.c_str());
       if (id >= o2::detectors::DetID::First) {
         detMask |= o2::detectors::DetID::getMask(id);
+        if (isReadout(md)) {
+          readoutDetMask |= o2::detectors::DetID::getMask(id);
+        }
       }
+    }
+    if (readoutDetMask.none()) {
+      LOG(info) << "Hit creation disabled for all detectors";
     }
     // somewhat ugly, but this is the most straighforward way to make sure the detectors to align
     // don't include detectors which are not activated
@@ -126,42 +172,27 @@ FairRunSim* o2sim_init(bool asservice)
     aligner.setValue(fmt::format("{}.mDetectors", aligner.getName()), o2::detectors::DetID::getNames(detMaskAlign, ','));
   }
 
-  // set global density scaling factor
-  auto& matmgr = o2::base::MaterialManager::Instance();
-  matmgr.setDensityScalingFactor(o2::conf::SimMaterialParams::Instance().globalDensityFactor);
-
   // run init
   run->Init();
 
-  std::time_t runStart = std::time(nullptr);
+  // add ALICE particles to TDatabasePDG singleton
+  o2::O2DatabasePDG::addALICEParticles(TDatabasePDG::Instance());
 
-  // runtime database
-  bool kParameterMerged = true;
-  auto rtdb = run->GetRuntimeDb();
-  auto parOut = new FairParRootFileIo(kParameterMerged);
-
-  std::stringstream s2;
-  s2 << confref.getOutPrefix();
-  if (asservice) {
-    s2 << "_" << pid;
-  }
-  s2 << "_par.root";
-  std::string parfilename = s2.str();
-  parOut->open(parfilename.c_str());
-  rtdb->setOutput(parOut);
-  rtdb->saveOutput();
-  rtdb->print();
-  o2::PDG::addParticlesToPdgDataBase(0);
-
+  long runStart = timestamp;
   {
     // store GRPobject
     o2::parameters::GRPObject grp;
-    grp.setRun(run->GetRunId());
+    if (run_number != -1) {
+      grp.setRun(run_number);
+    } else {
+      grp.setRun(run->GetRunId());
+    }
+    uint64_t runStart = timestamp;
     grp.setTimeStart(runStart);
-    grp.setTimeEnd(std::time(nullptr));
-    grp.setDetsReadOut(detMask);
+    grp.setTimeEnd(runStart + 3600000);
+    grp.setDetsReadOut(readoutDetMask);
     // CTP is not a physical detector, just flag in the GRP if requested
-    if (isActivated("CTP")) {
+    if (isReadout("CTP")) {
       grp.addDetReadOut(o2::detectors::DetID::CTP);
     }
 
@@ -178,12 +209,70 @@ FairRunSim* o2sim_init(bool asservice)
     // save
     std::string grpfilename = o2::base::NameConf::getGRPFileName(confref.getOutPrefix());
     TFile grpF(grpfilename.c_str(), "recreate");
-    grpF.WriteObjectAny(&grp, grp.Class(), "GRP");
+    grpF.WriteObjectAny(&grp, grp.Class(), o2::base::NameConf::CCDBOBJECT.data());
+  }
+  // create GRPECS object
+  {
+    o2::parameters::GRPECSObject grp;
+    grp.setRun(run->GetRunId());
+    grp.setTimeStart(runStart);
+    grp.setTimeEnd(runStart + 3600000);
+    grp.setNHBFPerTF(128); // might be overridden later
+    grp.setDetsReadOut(readoutDetMask);
+    if (isReadout("CTP")) {
+      grp.addDetReadOut(o2::detectors::DetID::CTP);
+    }
+    grp.setIsMC(true);
+    grp.setRunType(o2::parameters::GRPECSObject::RunType::PHYSICS);
+    // grp.setDataPeriod("mc"); // decide what to put here
+    std::string grpfilename = o2::base::NameConf::getGRPECSFileName(confref.getOutPrefix());
+    TFile grpF(grpfilename.c_str(), "recreate");
+    grpF.WriteObjectAny(&grp, grp.Class(), o2::base::NameConf::CCDBOBJECT.data());
+  }
+  // create GRPMagField object
+  {
+    o2::parameters::GRPMagField grp;
+    auto field = dynamic_cast<o2::field::MagneticField*>(run->GetField());
+    if (!field) {
+      // this is not the ordinary Run3 MagneticField
+      // Let's see if it is another FairField implementation.
+      LOG(warn) << "No o2::field::MagneticField instance available; Not writing GRP - beware that propagation to other tasks may not work. Checking if it is at least a FairFied...";
+      if (!dynamic_cast<FairField*>(run->GetField())) {
+        LOGP(fatal, "Failed to get magnetic field from the FairRunSim");
+      } else {
+        LOG(warn) << " ... FairField found";
+      }
+    } else {
+      o2::units::Current_t currDip = field->getCurrentDipole();
+      o2::units::Current_t currL3 = field->getCurrentSolenoid();
+      grp.setL3Current(currL3);
+      grp.setDipoleCurrent(currDip);
+      grp.setFieldUniformity(field->IsUniform());
+
+      std::string grpfilename = o2::base::NameConf::getGRPMagFieldFileName(confref.getOutPrefix());
+      TFile grpF(grpfilename.c_str(), "recreate");
+      grpF.WriteObjectAny(&grp, grp.Class(), o2::base::NameConf::CCDBOBJECT.data());
+    }
+  }
+  // create GRPLHCIF object (just a placeholder, bunch filling will be set in digitization)
+  {
+    o2::parameters::GRPLHCIFData grp;
+    // eventually we need to set the beam info from the generator, at the moment put some plausible values
+    grp.setFillNumberWithTime(runStart, 0);         // RS FIXME
+    grp.setInjectionSchemeWithTime(runStart, "");   // RS FIXME
+    grp.setBeamEnergyPerZWithTime(runStart, 6.8e3); // RS FIXME
+    grp.setAtomicNumberB1WithTime(runStart, 1.);    // RS FIXME
+    grp.setAtomicNumberB2WithTime(runStart, 1.);    // RS FIXME
+    grp.setCrossingAngleWithTime(runStart, 0.);     // RS FIXME
+    grp.setBeamAZ();
+
+    std::string grpfilename = o2::base::NameConf::getGRPLHCIFFileName(confref.getOutPrefix());
+    TFile grpF(grpfilename.c_str(), "recreate");
+    grpF.WriteObjectAny(&grp, grp.Class(), o2::base::NameConf::CCDBOBJECT.data());
   }
 
-  // todo: save beam information in the grp
-
   // print summary about cuts and processes used
+  auto& matmgr = o2::base::MaterialManager::Instance();
   std::ofstream cutfile(o2::base::NameConf::getCutProcFileName(confref.getOutPrefix()));
   matmgr.printCuts(cutfile);
   matmgr.printProcesses(cutfile);
@@ -194,8 +283,8 @@ FairRunSim* o2sim_init(bool asservice)
 
   // extract max memory usage for init
   FairSystemInfo sysinfo;
-  LOG(INFO) << "Init: Real time " << rtime << " s, CPU time " << ctime << "s";
-  LOG(INFO) << "Init: Memory used " << sysinfo.GetMaxMemory() << " MB";
+  LOG(info) << "Init: Real time " << rtime << " s, CPU time " << ctime << "s";
+  LOG(info) << "Init: Memory used " << sysinfo.GetMaxMemory() << " MB";
 
   return run;
 }
@@ -221,23 +310,23 @@ void o2sim_run(FairRunSim* run, bool asservice)
   // extract max memory usage
   FairSystemInfo sysinfo;
 
-  LOG(INFO) << "Macro finished succesfully.";
-  LOG(INFO) << "Real time " << rtime << " s, CPU time " << ctime << "s";
-  LOG(INFO) << "Memory used " << sysinfo.GetMaxMemory() << " MB";
+  LOG(info) << "Macro finished succesfully.";
+  LOG(info) << "Real time " << rtime << " s, CPU time " << ctime << "s";
+  LOG(info) << "Memory used " << sysinfo.GetMaxMemory() << " MB";
 
   // migrate to file format where hits sit in separate files
   // (Note: The parallel version is doing this intrinsically;
   //  The serial version uses FairRootManager IO which handles a common file IO for all outputs)
   if (!asservice) {
-    LOG(INFO) << "Migrating simulation output to separate hit file format";
+    LOG(info) << "Migrating simulation output to separate hit file format";
     migrateSimFiles(confref.getOutPrefix().c_str());
   }
 }
 
 // asservice: in a parallel device-based context?
-void o2sim(bool asservice = false)
+void o2sim(bool asservice = false, bool evalmat = false)
 {
-  auto run = o2sim_init(asservice);
+  auto run = o2sim_init(asservice, evalmat);
   o2sim_run(run, asservice);
   delete run;
 }

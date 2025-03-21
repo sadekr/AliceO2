@@ -36,93 +36,22 @@ void CTFCoder::readFromTree(TTree& tree, int entry,
   ec.readFromTree(tree, mDet.getName(), entry);
   decode(ec, digitVec, channelVec);
 }
-
-///________________________________
-void CTFCoder::compress(CompressedDigits& cd, const gsl::span<const Digit>& digitVec, const gsl::span<const ChannelData>& channelVec)
+///___________________________________________________________________________________
+void CTFCoder::assignDictVersion(o2::ctf::CTFDictHeader& h) const
 {
-  // convert digits/channel to their compressed version
-  cd.clear();
-  if (!digitVec.size()) {
-    return;
-  }
-  const auto& dig0 = digitVec[0];
-  cd.header.nTriggers = digitVec.size();
-  cd.header.firstOrbit = dig0.mIntRecord.orbit;
-  cd.header.firstBC = dig0.mIntRecord.bc;
-
-  cd.trigger.resize(cd.header.nTriggers);
-  cd.bcInc.resize(cd.header.nTriggers);
-  cd.orbitInc.resize(cd.header.nTriggers);
-  cd.nChan.resize(cd.header.nTriggers);
-
-  cd.idChan.resize(channelVec.size());
-  cd.time.resize(channelVec.size());
-  cd.charge.resize(channelVec.size());
-  cd.feeBits.resize(channelVec.size());
-
-  uint16_t prevBC = cd.header.firstBC;
-  uint32_t prevOrbit = cd.header.firstOrbit;
-  uint32_t ccount = 0;
-  for (uint32_t idig = 0; idig < cd.header.nTriggers; idig++) {
-    const auto& digit = digitVec[idig];
-    const auto chanels = digit.getBunchChannelData(channelVec); // we assume the channels are sorted
-
-    // fill trigger info
-    cd.trigger[idig] = digit.mTriggers.triggersignals;
-    if (prevOrbit == digit.mIntRecord.orbit) {
-      cd.bcInc[idig] = digit.mIntRecord.bc - prevBC;
-      cd.orbitInc[idig] = 0;
-    } else {
-      cd.bcInc[idig] = digit.mIntRecord.bc;
-      cd.orbitInc[idig] = digit.mIntRecord.orbit - prevOrbit;
-    }
-    prevBC = digit.mIntRecord.bc;
-    prevOrbit = digit.mIntRecord.orbit;
-    // fill channels info
-    cd.nChan[idig] = chanels.size();
-    if (!cd.nChan[idig]) {
-      LOG(debug) << "Digits with no channels";
-      continue;
-    }
-    uint8_t prevChan = 0;
-    for (uint8_t ic = 0; ic < cd.nChan[idig]; ic++) {
-      assert(prevChan <= chanels[ic].mPMNumber);
-      cd.idChan[ccount] = chanels[ic].mPMNumber - prevChan;
-      cd.time[ccount] = chanels[ic].mTime;        // make sure it fits to short!!!
-      cd.charge[ccount] = chanels[ic].mChargeADC; // make sure we really need short!!!
-      cd.feeBits[ccount] = chanels[ic].mFEEBits;
-      prevChan = chanels[ic].mPMNumber;
-      ccount++;
-    }
+  if (mExtHeader.isValidDictTimeStamp()) {
+    h = mExtHeader;
+  } else {
+    h.majorVersion = 1;
+    h.minorVersion = 1;
   }
 }
-
 ///________________________________
-void CTFCoder::createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::OpType op)
+void CTFCoder::createCoders(const std::vector<char>& bufVec, o2::ctf::CTFCoderBase::OpType op)
 {
-  bool mayFail = true; // RS FIXME if the dictionary file is not there, do not produce exception
-  auto buff = readDictionaryFromFile<CTF>(dictPath, mayFail);
-  if (!buff.size()) {
-    if (mayFail) {
-      return;
-    }
-    throw std::runtime_error("Failed to create CTF dictionaty");
-  }
-  const auto* ctf = CTF::get(buff.data());
-
-  auto getFreq = [ctf](CTF::Slots slot) -> o2::rans::FrequencyTable {
-    o2::rans::FrequencyTable ft;
-    auto bl = ctf->getBlock(slot);
-    auto md = ctf->getMetadata(slot);
-    ft.addFrequencies(bl.getDict(), bl.getDict() + bl.getNDict(), md.min, md.max);
-    return std::move(ft);
-  };
-  auto getProbBits = [ctf](CTF::Slots slot) -> int {
-    return ctf->getMetadata(slot).probabilityBits;
-  };
-
+  const auto ctf = CTF::getImage(bufVec.data());
   CompressedDigits cd; // just to get member types
-#define MAKECODER(part, slot) createCoder<decltype(part)::value_type>(op, getFreq(slot), getProbBits(slot), int(slot))
+#define MAKECODER(part, slot) createCoder(op, std::get<rans::RenormedDenseHistogram<typename decltype(part)::value_type>>(ctf.getDictionary<decltype(part)::value_type>(slot, mANSVersion)), int(slot))
   // clang-format off
   MAKECODER(cd.trigger,   CTF::BLC_trigger);
   MAKECODER(cd.bcInc,     CTF::BLC_bcInc);
@@ -140,22 +69,17 @@ void CTFCoder::createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::
 size_t CTFCoder::estimateCompressedSize(const CompressedDigits& cd)
 {
   size_t sz = 0;
-  // clang-format off
   // RS FIXME this is very crude estimate, instead, an empirical values should be used
-#define VTP(vec) typename std::remove_reference<decltype(vec)>::type::value_type
-#define ESTSIZE(vec, slot) mCoders[int(slot)] ?                         \
-  rans::calculateMaxBufferSize(vec.size(), reinterpret_cast<const o2::rans::LiteralEncoder64<VTP(vec)>*>(mCoders[int(slot)].get())->getAlphabetRangeBits(), sizeof(VTP(vec)) ) : vec.size()*sizeof(VTP(vec))
-  sz += ESTSIZE(cd.trigger,   CTF::BLC_trigger);
-  sz += ESTSIZE(cd.bcInc,     CTF::BLC_bcInc);
-  sz += ESTSIZE(cd.orbitInc,  CTF::BLC_orbitInc);
-  sz += ESTSIZE(cd.nChan,     CTF::BLC_nChan);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_trigger), cd.trigger);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_bcInc), cd.bcInc);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_orbitInc), cd.orbitInc);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_nChan), cd.nChan);
 
-  sz += ESTSIZE(cd.idChan,    CTF::BLC_idChan);
-  sz += ESTSIZE(cd.time,      CTF::BLC_time);
-  sz += ESTSIZE(cd.charge,    CTF::BLC_charge);
-  sz += ESTSIZE(cd.feeBits,   CTF::BLC_feeBits);
-  // clang-format on
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_idChan), cd.idChan);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_time), cd.time);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_charge), cd.charge);
+  sz += estimateBufferSize(static_cast<int>(CTF::BLC_feeBits), cd.feeBits);
 
-  LOG(INFO) << "Estimated output size is " << sz << " bytes";
+  LOG(debug) << "Estimated output size is " << sz << " bytes";
   return sz;
 }

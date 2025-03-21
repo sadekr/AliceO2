@@ -13,34 +13,53 @@ o2_add_library(ITStracking
                TARGETVARNAME targetName
                SOURCES src/ClusterLines.cxx
                        src/Cluster.cxx
+                       src/Configuration.cxx
                        src/ROframe.cxx
                        src/TimeFrame.cxx
                        src/IOUtils.cxx
                        src/Label.cxx
-                       src/PrimaryVertexContext.cxx
                        src/Road.cxx
-                       src/StandaloneDebugger.cxx
                        src/Tracker.cxx
-                       src/TrackerTraitsCPU.cxx
+                       src/TrackerTraits.cxx
                        src/TrackingConfigParam.cxx
                        src/ClusterLines.cxx
                        src/Vertexer.cxx
                        src/VertexerTraits.cxx
                        src/Smoother.cxx
-               PUBLIC_LINK_LIBRARIES O2::GPUCommon
-                                     Microsoft.GSL::GSL
-                                     O2::CommonConstants
-                                     O2::DataFormatsITSMFT
-                                     O2::SimulationDataFormat
-                                     O2::ITSBase
-                                     O2::DataFormatsITS)
+               PUBLIC_LINK_LIBRARIES
+                       O2::GPUCommon
+                       Microsoft.GSL::GSL
+                       O2::CommonConstants
+                       O2::DataFormatsITSMFT
+                       O2::SimulationDataFormat
+                       O2::ITSBase
+                       O2::ITSReconstruction
+                       O2::ITSMFTReconstruction
+                       O2::DataFormatsITS)
+
+if (OpenMP_CXX_FOUND)
+        target_compile_definitions(${targetName} PRIVATE WITH_OPENMP)
+        target_link_libraries(${targetName} PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
+o2_add_library(ITSTrackingInterface
+               TARGETVARNAME targetName
+               SOURCES src/TrackingInterface.cxx
+               PRIVATE_LINK_LIBRARIES
+                       O2::ITStracking
+                       O2::Framework
+                       O2::GPUTracking)
+
+if (OpenMP_CXX_FOUND)
+        target_compile_definitions(${targetName} PRIVATE WITH_OPENMP)
+        target_link_libraries(${targetName} PRIVATE OpenMP::OpenMP_CXX)
+endif()
 
 o2_target_root_dictionary(ITStracking
                           HEADERS include/ITStracking/ClusterLines.h
                                   include/ITStracking/Tracklet.h
                                   include/ITStracking/Cluster.h
                                   include/ITStracking/TrackingConfigParam.h
-                                  include/ITStracking/StandaloneDebugger.h
                           LINKDEF src/TrackingLinkDef.h)
 
 if(CUDA_ENABLED OR HIP_ENABLED)

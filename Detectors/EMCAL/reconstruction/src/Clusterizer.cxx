@@ -13,29 +13,23 @@
 /// \brief Implementation of the EMCAL clusterizer
 #include <cstring>
 #include <gsl/span>
-#include "FairLogger.h" // for LOG
+#include <fairlogger/Logger.h> // for LOG
 #include "EMCALReconstruction/Clusterizer.h"
 
 using namespace o2::emcal;
 
-///
-/// Constructor
 //____________________________________________________________________________
 template <class InputType>
 Clusterizer<InputType>::Clusterizer(double timeCut, double timeMin, double timeMax, double gradientCut, bool doEnergyGradientCut, double thresholdSeedE, double thresholdCellE) : mSeedList(), mInputMap(), mCellMask(), mTimeCut(timeCut), mTimeMin(timeMin), mTimeMax(timeMax), mGradientCut(gradientCut), mDoEnergyGradientCut(doEnergyGradientCut), mThresholdSeedEnergy(thresholdSeedE), mThresholdCellEnergy(thresholdCellE)
 {
 }
 
-///
-/// Default constructor
 //____________________________________________________________________________
 template <class InputType>
 Clusterizer<InputType>::Clusterizer() : mSeedList(), mInputMap(), mCellMask(), mTimeCut(0), mTimeMin(0), mTimeMax(0), mGradientCut(0), mDoEnergyGradientCut(false), mThresholdSeedEnergy(0), mThresholdCellEnergy(0)
 {
 }
 
-///
-/// Initialize class member vars if not done in constructor
 //____________________________________________________________________________
 template <class InputType>
 void Clusterizer<InputType>::initialize(double timeCut, double timeMin, double timeMax, double gradientCut, bool doEnergyGradientCut, double thresholdSeedE, double thresholdCellE)
@@ -49,8 +43,6 @@ void Clusterizer<InputType>::initialize(double timeCut, double timeMin, double t
   mThresholdCellEnergy = thresholdCellE;
 }
 
-///
-/// Recursively search for neighbours (EMCAL)
 //____________________________________________________________________________
 template <class InputType>
 void Clusterizer<InputType>::getClusterFromNeighbours(std::vector<InputwithIndex>& clusterInputs, int row, int column)
@@ -76,21 +68,19 @@ void Clusterizer<InputType>::getClusterFromNeighbours(std::vector<InputwithIndex
 
     if (mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]].mInput) {
       if (!mCellMask[row + rowDiffs[dir]][column + colDiffs[dir]]) {
-        if (mDoEnergyGradientCut && not(mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]].mInput->getEnergy() > mInputMap[row][column].mInput->getEnergy() + mGradientCut)) {
-          if (not(TMath::Abs(mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]].mInput->getTimeStamp() - mInputMap[row][column].mInput->getTimeStamp()) > mTimeCut)) {
-            getClusterFromNeighbours(clusterInputs, row + rowDiffs[dir], column + colDiffs[dir]);
-            // Add the cell/digit to the current cluster -- if we end up here, the selected cluster fulfills the condition
-            clusterInputs.emplace_back(mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]]);
-          }
+        if (mDoEnergyGradientCut && (mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]].mInput->getEnergy() > mInputMap[row][column].mInput->getEnergy() + mGradientCut)) {
+          continue;
+        }
+        if (not(TMath::Abs(mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]].mInput->getTimeStamp() - mInputMap[row][column].mInput->getTimeStamp()) > mTimeCut)) {
+          getClusterFromNeighbours(clusterInputs, row + rowDiffs[dir], column + colDiffs[dir]);
+          // Add the cell/digit to the current cluster -- if we end up here, the selected cluster fulfills the condition
+          clusterInputs.emplace_back(mInputMap[row + rowDiffs[dir]][column + colDiffs[dir]]);
         }
       }
     }
   }
 }
 
-///
-/// Get row (phi) and column (eta) of a cell/digit, values corresponding to topology
-///
 //____________________________________________________________________________
 template <class InputType>
 void Clusterizer<InputType>::getTopologicalRowColumn(const InputType& input, int& row, int& column)
@@ -119,8 +109,6 @@ void Clusterizer<InputType>::getTopologicalRowColumn(const InputType& input, int
   }
 }
 
-///
-/// Return number of found clusters. Start clustering from highest energy cell.
 //____________________________________________________________________________
 template <class InputType>
 void Clusterizer<InputType>::findClusters(const gsl::span<InputType const>& inputArray)
@@ -152,7 +140,7 @@ void Clusterizer<InputType>::findClusters(const gsl::span<InputType const>& inpu
   //for (auto dig : inputArray) {
   for (int iIndex = 0; iIndex < inputArray.size(); iIndex++) {
 
-    auto dig = inputArray[iIndex];
+    auto& dig = inputArray[iIndex];
 
     Float_t inputEnergy = dig.getEnergy();
     Float_t time = dig.getTimeStamp();
@@ -168,8 +156,9 @@ void Clusterizer<InputType>::findClusters(const gsl::span<InputType const>& inpu
     // Put cell/digit to 2D map
     int row = 0, column = 0;
     getTopologicalRowColumn(dig, row, column);
-    mInputMap[row][column].mInput = &dig;   // mInputMap saves pointers to cells/digits, therefore use addr operator here
-    mInputMap[row][column].mIndex = iIndex; // mInputMap saves the position of cells/digits in the input array
+    // not referencing dig here to get proper reference and not local copy
+    mInputMap[row][column].mInput = inputArray.data() + iIndex; //
+    mInputMap[row][column].mIndex = iIndex;                     // mInputMap saves the position of cells/digits in the input array
     mSeedList[nCells].energy = inputEnergy;
     mSeedList[nCells].row = row;
     mSeedList[nCells].column = column;
@@ -180,7 +169,7 @@ void Clusterizer<InputType>::findClusters(const gsl::span<InputType const>& inpu
   std::sort(mSeedList.begin(), std::next(std::begin(mSeedList), nCells));
 
   // Take next valid cell/digit in calorimeter as seed (in descending energy order)
-  for (int i = nCells; i--;) {
+  for (int i = nCells - 1; i >= 0; i--) {
     int row = mSeedList[i].row, column = mSeedList[i].column;
     // Continue if the cell is already masked (i.e. was already clustered)
     if (mCellMask[row][column]) {
@@ -205,7 +194,7 @@ void Clusterizer<InputType>::findClusters(const gsl::span<InputType const>& inpu
     // Now form cluster object from cells/digits
     mFoundClusters.emplace_back(mInputMap[row][column].mInput->getTimeStamp(), inputIndexStart, inputIndexSize); // Cluster object initialized w/ time of seed cell, start + size of associated cells
   }
-  LOG(DEBUG) << mFoundClusters.size() << "clusters found from " << nCells << " cells/digits (total=" << inputArray.size() << ")-> ehs " << ehs << " (minE " << mThresholdCellEnergy << ")";
+  LOG(debug) << mFoundClusters.size() << "clusters found from " << nCells << " cells/digits (total=" << inputArray.size() << ")-> ehs " << ehs << " (minE " << mThresholdCellEnergy << ")";
 }
 
 template class o2::emcal::Clusterizer<o2::emcal::Cell>;

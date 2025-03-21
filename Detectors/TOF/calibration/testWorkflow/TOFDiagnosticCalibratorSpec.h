@@ -24,6 +24,8 @@
 #include "Framework/WorkflowSpec.h"
 #include "CCDB/CcdbApi.h"
 #include "CCDB/CcdbObjectInfo.h"
+#include "DetectorsRaw/HBFUtils.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 
 using namespace o2::framework;
 
@@ -35,34 +37,44 @@ namespace calibration
 class TOFDiagnosticCalibDevice : public o2::framework::Task
 {
  public:
+  TOFDiagnosticCalibDevice(std::shared_ptr<o2::base::GRPGeomRequest> req, int runnumber = -1) : mCCDBRequest(req), mRunNumber(runnumber) {}
   void init(o2::framework::InitContext& ic) final
   {
-    int slotL = ic.options().get<int>("tf-per-slot");
-    int delay = ic.options().get<int>("max-delay");
+    o2::base::GRPGeomHelper::instance().setRequest(mCCDBRequest);
+    auto slotL = ic.options().get<uint32_t>("tf-per-slot");
+    auto delay = ic.options().get<uint32_t>("max-delay");
     mCalibrator = std::make_unique<o2::tof::TOFDiagnosticCalibrator>();
     mCalibrator->setSlotLength(slotL);
     mCalibrator->setMaxSlotsDelay(delay);
+    mCalibrator->setRunNumber(mRunNumber);
+  }
+
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final
+  {
+    o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj);
   }
 
   void run(o2::framework::ProcessingContext& pc) final
   {
-    auto tfcounter = o2::header::get<o2::framework::DataProcessingHeader*>(pc.inputs().get("input").header)->startTime;
+    o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+    o2::base::TFIDInfoHelper::fillTFIDInfo(pc, mCalibrator->getCurrentTFInfo());
     auto const data = pc.inputs().get<o2::tof::Diagnostic*>("input");
-    LOG(INFO) << "Processing TF " << tfcounter;
-    mCalibrator->process<o2::tof::Diagnostic>(tfcounter, *data);
+    LOG(debug) << "Processing TF " << mCalibrator->getCurrentTFInfo().tfCounter;
+    mCalibrator->process<o2::tof::Diagnostic>(*data);
     sendOutput(pc.outputs());
   }
 
   void endOfStream(o2::framework::EndOfStreamContext& ec) final
   {
-    LOG(INFO) << "Finalizing calibration";
-    constexpr uint64_t INFINITE_TF = 0xffffffffffffffff;
-    mCalibrator->checkSlotsToFinalize(INFINITE_TF);
+    LOG(info) << "Finalizing calibration";
+    mCalibrator->checkSlotsToFinalize(o2::calibration::INFINITE_TF);
     sendOutput(ec.outputs());
   }
 
  private:
   std::unique_ptr<o2::tof::TOFDiagnosticCalibrator> mCalibrator;
+  std::shared_ptr<o2::base::GRPGeomRequest> mCCDBRequest;
+  int mRunNumber = -1;
 
   //________________________________________________________________
   void sendOutput(DataAllocator& output)
@@ -76,7 +88,7 @@ class TOFDiagnosticCalibDevice : public o2::framework::Task
     for (uint32_t i = 0; i < payloadVec.size(); i++) {
       auto& w = infoVec[i];
       auto image = o2::ccdb::CcdbApi::createObjectImage(&payloadVec[i], &w);
-      LOG(INFO) << "Sending object " << w.getPath() << "/" << w.getFileName() << " of size " << image->size()
+      LOG(info) << "Sending object " << w.getPath() << "/" << w.getFileName() << " of size " << image->size()
                 << " bytes, valid for " << w.getStartValidityTimestamp() << " : " << w.getEndValidityTimestamp();
       output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBPayload, "TOF_Diagnostic", i}, *image.get()); // vector<char>
       output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBWrapper, "TOF_Diagnostic", i}, w);            // root-serialized
@@ -92,22 +104,31 @@ class TOFDiagnosticCalibDevice : public o2::framework::Task
 namespace framework
 {
 
-DataProcessorSpec getTOFDiagnosticCalibDeviceSpec()
+DataProcessorSpec getTOFDiagnosticCalibDeviceSpec(int runnumber)
 {
   using device = o2::calibration::TOFDiagnosticCalibDevice;
   using clbUtils = o2::calibration::Utils;
 
   std::vector<OutputSpec> outputs;
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "TOF_Diagnostic"});
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "TOF_Diagnostic"});
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "TOF_Diagnostic"}, Lifetime::Sporadic);
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "TOF_Diagnostic"}, Lifetime::Sporadic);
+  std::vector<InputSpec> inputs{{"input", "TOF", "DIAFREQ"}};
+
+  auto ccdbRequest = std::make_shared<o2::base::GRPGeomRequest>(true,                           // orbitResetTime
+                                                                true,                           // GRPECS=true
+                                                                false,                          // GRPLHCIF
+                                                                false,                          // GRPMagField
+                                                                false,                          // askMatLUT
+                                                                o2::base::GRPGeomRequest::None, // geometry
+                                                                inputs);
   return DataProcessorSpec{
     "tof-diagnostic-calibration",
-    Inputs{{"input", "TOF", "DIAFREQ"}},
+    inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<device>()},
+    AlgorithmSpec{adaptFromTask<device>(ccdbRequest, runnumber)},
     Options{
-      {"tf-per-slot", VariantType::Int, 5, {"number of TFs per calibration time slot"}},
-      {"max-delay", VariantType::Int, 3, {"number of slots in past to consider"}}}};
+      {"tf-per-slot", VariantType::UInt32, 5u, {"number of TFs per calibration time slot"}},
+      {"max-delay", VariantType::UInt32, 3u, {"number of slots in past to consider"}}}};
 }
 
 } // namespace framework

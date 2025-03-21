@@ -33,6 +33,23 @@ enum AcceptanceType_t { EMCAL_ACCEPTANCE = 1,
 
 const std::string DEFAULT_GEOMETRY = "EMCAL_COMPLETE12SMV1_DCAL_8SM";
 
+/// \class GeometryNotInitializedException
+/// \brief Error handling access to non-initialized geometry
+/// \ingroup EMCALbase
+class GeometryNotInitializedException final : public std::exception
+{
+ public:
+  /// \brief Constructor
+  GeometryNotInitializedException() = default;
+
+  /// \brief Destructor
+  ~GeometryNotInitializedException() noexcept final = default;
+
+  /// \brief Access to error message
+  /// \return Error message
+  const char* what() const noexcept { return "Geometry not initialized"; }
+};
+
 /// \class InvalidModuleException
 /// \brief Error Handling when an invalid module ID (outside the limits) is called
 /// \ingroup EMCALbase
@@ -42,10 +59,10 @@ class InvalidModuleException final : public std::exception
   /// \brief Constructor
   /// \param nModule Module number raising the exception
   /// \param nMax Maximum amount of modules in setup
-  InvalidModuleException(Int_t nModule, Int_t nMax) : std::exception(),
-                                                      mModule(nModule),
-                                                      mMax(nMax),
-                                                      mMessage("Invalid Module [ " + std::to_string(mModule) + "|" + std::to_string(mMax) + "]")
+  InvalidModuleException(int nModule, int nMax) : std::exception(),
+                                                  mModule(nModule),
+                                                  mMax(nMax),
+                                                  mMessage("Invalid Module [ " + std::to_string(mModule) + "|" + std::to_string(mMax) + "]")
   {
   }
 
@@ -65,8 +82,8 @@ class InvalidModuleException final : public std::exception
   const char* what() const noexcept final { return mMessage.c_str(); }
 
  private:
-  Int_t mModule;        ///< Module ID raising the exception
-  Int_t mMax;           ///< Max. Number of modules
+  int mModule;          ///< Module ID raising the exception
+  int mMax;             ///< Max. Number of modules
   std::string mMessage; ///< Error message
 };
 
@@ -115,9 +132,9 @@ class InvalidCellIDException final : public std::exception
  public:
   /// \brief Constructor, setting cell ID raising the exception
   /// \param cellID Cell ID raising the exception
-  InvalidCellIDException(Int_t cellID) : std::exception(),
-                                         mCellID(cellID),
-                                         mMessage("Cell ID " + std::to_string(mCellID) + " outside limits.")
+  InvalidCellIDException(int cellID) : std::exception(),
+                                       mCellID(cellID),
+                                       mMessage("Cell ID " + std::to_string(mCellID) + " outside limits.")
   {
   }
 
@@ -126,14 +143,14 @@ class InvalidCellIDException final : public std::exception
 
   /// \brief Access to cell ID raising the exception
   /// \return Cell ID
-  Int_t getCellID() const noexcept { return mCellID; }
+  int getCellID() const noexcept { return mCellID; }
 
   /// \brief Access to error message of the exception
   /// \return Error message
   const char* what() const noexcept final { return mMessage.data(); }
 
  private:
-  Int_t mCellID;        ///< Cell ID raising the exception
+  int mCellID;          ///< Cell ID raising the exception
   std::string mMessage; ///< error Message
 };
 

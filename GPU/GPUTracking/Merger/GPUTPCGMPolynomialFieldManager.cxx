@@ -12,13 +12,14 @@
 /// \file GPUTPCGMPolynomialFieldManager.cxx
 /// \author Sergey Gorbunov, David Rohr
 
+#include "GPUCommonConstants.h"
 #include "GPUTPCGMPolynomialFieldManager.h"
 #include "GPUTPCGMPolynomialField.h"
 #include <cmath>
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
-int GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, float nominalFieldkG, GPUTPCGMPolynomialField& field)
+int32_t GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, float nominalFieldkG, GPUTPCGMPolynomialField& field)
 {
   //
   // get pre-calculated polynomial field approximation of the TPC region
@@ -26,15 +27,15 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, 
   // returns -2 if number of coefficients in GPUTPCGMPolynomialField is not 10
   //
 
-  const int kTpcM = GPUTPCGMPolynomialField::NTPCM;
-  const int kTrdM = GPUTPCGMPolynomialField::NTRDM;
-  const int kItsM = GPUTPCGMPolynomialField::NITSM;
+  const int32_t kTpcM = GPUTPCGMPolynomialField::NTPCM;
+  const int32_t kTrdM = GPUTPCGMPolynomialField::NTRDM;
+  const int32_t kItsM = GPUTPCGMPolynomialField::NITSM;
 
   //
   // polynomial coefficients for the Uniform Bz field
   //
   float kSolUBx[100], kSolUBy[100], kSolUBz[100];
-  for (int i = 0; i < 100; i++) {
+  for (int32_t i = 0; i < 100; i++) {
     kSolUBx[i] = 0;
     kSolUBy[i] = 0;
     kSolUBz[i] = 0;
@@ -105,8 +106,6 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, 
 
   const float kItsSol5Bz[kItsM] = {1.00001418591e+00, -3.69126610167e-06, 7.76097112976e-06, -3.11396547659e-06, 1.64195810726e-07, 2.47078468796e-10, 2.39289423831e-08, 1.61199579907e-07, -3.16838866254e-09, -3.23542707292e-07};
 
-  const double kCLight = 0.000299792458;
-
   field.Reset();
 
   // check if GPUTPCGMPolynomialField class is ok
@@ -119,7 +118,7 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, 
 
   const float *cTpcBx, *cTpcBy, *cTpcBz, *cTrdBx, *cTrdBy, *cTrdBz, *cItsBx, *cItsBy, *cItsBz;
 
-  double nominalBz = nominalFieldkG * kCLight;
+  double nominalBz = nominalFieldkG * gpu_common_constants::kCLight;
 
   if (fieldType == GPUTPCGMPolynomialFieldManager::kUniform) {
     cTpcBx = kSolUBx;
@@ -156,21 +155,21 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, 
   }
 
   float TpcBx[kTpcM], TpcBy[kTpcM], TpcBz[kTpcM];
-  for (int i = 0; i < kTpcM; i++) {
+  for (int32_t i = 0; i < kTpcM; i++) {
     TpcBx[i] = nominalBz * cTpcBx[i];
     TpcBy[i] = nominalBz * cTpcBy[i];
     TpcBz[i] = nominalBz * cTpcBz[i];
   }
 
   float TrdBx[kTrdM], TrdBy[kTrdM], TrdBz[kTrdM];
-  for (int i = 0; i < kTrdM; i++) {
+  for (int32_t i = 0; i < kTrdM; i++) {
     TrdBx[i] = nominalBz * cTrdBx[i];
     TrdBy[i] = nominalBz * cTrdBy[i];
     TrdBz[i] = nominalBz * cTrdBz[i];
   }
 
   float ItsBx[kItsM], ItsBy[kItsM], ItsBz[kItsM];
-  for (int i = 0; i < kItsM; i++) {
+  for (int32_t i = 0; i < kItsM; i++) {
     ItsBx[i] = nominalBz * cItsBx[i];
     ItsBy[i] = nominalBz * cItsBy[i];
     ItsBz[i] = nominalBz * cItsBz[i];
@@ -184,7 +183,7 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(StoredField_t fieldType, 
   return 0;
 }
 
-int GPUTPCGMPolynomialFieldManager::GetPolynomialField(float nominalFieldkG, GPUTPCGMPolynomialField& field)
+int32_t GPUTPCGMPolynomialFieldManager::GetPolynomialField(float nominalFieldkG, GPUTPCGMPolynomialField& field)
 {
   //
   // get closest pre-calculated polynomial field approximation of the TPC region  for the given field value nominalFieldkG
@@ -196,7 +195,10 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(float nominalFieldkG, GPU
 
   StoredField_t type = kUnknown;
 
-  if (fabsf(fabsf(nominalFieldkG) - 5.00668f) <= fabsf(fabsf(nominalFieldkG) - 2.f)) {
+  if (fabsf(nominalFieldkG) < 0.01f) {
+    type = kUniform;
+    nominalFieldkG = 0;
+  } else if (fabsf(fabsf(nominalFieldkG) - 5.00668f) <= fabsf(fabsf(nominalFieldkG) - 2.f)) {
     type = k5kG;
   } else {
     type = k2kG;
@@ -204,608 +206,3 @@ int GPUTPCGMPolynomialFieldManager::GetPolynomialField(float nominalFieldkG, GPU
 
   return GetPolynomialField(type, nominalFieldkG, field);
 }
-
-/******************************************************************************************
- *
- *  the following code only works inside AliRoot framework with initialised magnetic field
- *
- *******************************************************************************************/
-
-#if defined(GPUCA_ALIROOT_LIB) & !defined(GPUCA_GPUCODE)
-
-#include "AliHLTTPCPolynomFit.h"
-
-#include <cmath>
-
-#include "AliTracker.h"
-#include "AliHLTTPCGeometry.h"
-#include "AliTRDgeometry.h"
-#include "TGeoGlobalMagField.h"
-#include "AliMagF.h"
-
-#include "TFile.h"
-#include "TMath.h"
-#include "TNtuple.h"
-#include "Riostream.h"
-
-#include "TMatrixD.h"
-#include "TH1F.h"
-#include "TStyle.h"
-
-int GPUTPCGMPolynomialFieldManager::GetPolynomialField(GPUTPCGMPolynomialField& field)
-{
-  //
-  // get pre-calculated polynomial field approximation of the TPC region appropriate for the current AliTracker field map (if exists)
-  // returns !=0 error when the polynomial field is not exist
-  //
-
-  // check which field map is in use
-
-  field.Reset();
-
-  AliMagF* fld = (AliMagF*)TGeoGlobalMagField::Instance()->GetField();
-
-  if (!fld) {
-    return -1;
-  }
-
-  AliMagF::BMap_t mapType = fld->GetMapType();
-
-  StoredField_t type = kUnknown;
-
-  if (fld->IsUniform()) {
-    type = kUniform;
-  } else if (mapType == AliMagF::k2kG) {
-    type = k2kG;
-  } else if (mapType == AliMagF::k5kG) {
-    type = k5kG;
-  }
-
-  return GetPolynomialField(type, AliTracker::GetBz(), field);
-}
-
-int GPUTPCGMPolynomialFieldManager::FitFieldTpc(AliMagF* inputFld, GPUTPCGMPolynomialField& polyField, double step)
-{
-  //
-  // Fit magnetic field with polynoms
-  //
-
-  const double kCLight = 0.000299792458;
-  const double kAlmost0Field = 1.e-13;
-
-  AliMagF* fld = inputFld;
-
-  if (!fld) {
-    // fld = new AliMagF("Fit", "Fit", 1., 1., AliMagF::k2kG);
-    fld = (AliMagF*)TGeoGlobalMagField::Instance()->GetField();
-  }
-  if (!fld) {
-    return -1;
-  }
-
-  const double sectorAngleShift = 10. / 180. * TMath::Pi();
-  const double sectorAngle = 20. / 180. * TMath::Pi();
-  const int nRows = AliHLTTPCGeometry::GetNRows();
-
-  double xMin = AliHLTTPCGeometry::Row2X(0);
-  double xMax = AliHLTTPCGeometry::Row2X(nRows - 1);
-  double rMin = xMin;
-  double rMax = xMax / TMath::Cos(sectorAngle / 2.);
-
-  double dA = 1. / rMax; // angular step == 1 cm at outer radius
-  dA *= step;
-  int nSectorParticles = (int)(sectorAngle / dA);
-  if (nSectorParticles < 1) {
-    nSectorParticles = 1;
-  }
-  dA = sectorAngle / nSectorParticles;
-
-  double dZ = 1. * step; // step in z == 1 cm
-
-  double zMin = -AliHLTTPCGeometry::GetZLength();
-  double zMax = AliHLTTPCGeometry::GetZLength();
-
-  double alMin = -sectorAngle / 2.;
-  double alMax = sectorAngle / 2. - 0.5 * dA;
-
-  Double_t solenoidBzkG = fld->SolenoidField();
-  Double_t solenoidBzkGInv = (TMath::Abs(solenoidBzkG) > kAlmost0Field) ? 1. / solenoidBzkG : 0.;
-
-  std::cout << "solenoidBz = " << solenoidBzkG << " kG" << std::endl;
-
-  const int M = GPUTPCGMPolynomialField::NTPCM;
-  AliHLTTPCPolynomFit fitBx(M);
-  AliHLTTPCPolynomFit fitBy(M);
-  AliHLTTPCPolynomFit fitBz(M);
-
-  for (int sector = 0; sector < 18; sector++) {
-    std::cout << "sector = " << sector << std::endl;
-    double asec = sectorAngleShift + sector * sectorAngle;
-    double cs = TMath::Cos(asec);
-    double ss = TMath::Sin(asec);
-    for (double al = alMin; al < alMax; al += dA) {
-      std::cout << "angle " << al / TMath::Pi() * 180. << " grad " << std::endl;
-      double tg = TMath::Tan(al);
-      for (int row = 0; row < AliHLTTPCGeometry::GetNRows(); row++) {
-        double xl = AliHLTTPCGeometry::Row2X(row);
-        double yl = xl * tg;
-        double x = xl * cs - yl * ss;
-        double y = xl * ss + yl * cs;
-        // std::cout<<"sector = "<<sector<<" al = "<<al/TMath::Pi()*180.<<" xl "<<xl<<" yl "<<yl<<std::endl;
-
-        for (double z = zMin; z <= zMax; z += dZ) { // 1 cm step in Z
-          Double_t xyz[3] = {x, y, z};
-          Double_t B[3] = {0., 0., 0.};
-          if (fld->IsUniform()) {
-            B[0] = B[1] = 0.;
-            B[2] = fld->SolenoidField();
-          } else {
-            fld->Field(xyz, B);
-          }
-          B[0] *= solenoidBzkGInv;
-          B[1] *= solenoidBzkGInv;
-          B[2] *= solenoidBzkGInv;
-
-          float f[M];
-          GPUTPCGMPolynomialField::GetPolynomsTpc(x, y, z, f);
-          fitBx.AddMeasurement(f, B[0]);
-          fitBy.AddMeasurement(f, B[1]);
-          fitBz.AddMeasurement(f, B[2]);
-        }
-      }
-    }
-  }
-
-  // field coefficients
-  float cX[M];
-  float cY[M];
-  float cZ[M];
-
-  int errX = fitBx.Fit(cX);
-  int errY = fitBy.Fit(cY);
-  int errZ = fitBz.Fit(cZ);
-
-  if (errX != 0 || errY != 0 || errZ != 0) {
-    std::cout << "Fit of polynamial field failed!!!:  errX " << errX << " errY " << errY << " errZ " << errZ << std::endl;
-    if (fld != inputFld) {
-      delete fld;
-    }
-    return -1;
-  }
-
-  GPUTPCGMPolynomialField fittedField;
-  fittedField.SetFieldTpc(cX, cY, cZ);
-
-  // scale result
-  double nominalBz = solenoidBzkG * kCLight;
-
-  for (int i = 0; i < M; i++) {
-    cX[i] = nominalBz * cX[i];
-    cY[i] = nominalBz * cY[i];
-    cZ[i] = nominalBz * cZ[i];
-  }
-  polyField.SetFieldNominal(nominalBz);
-  polyField.SetFieldTpc(cX, cY, cZ);
-
-  gStyle->SetOptStat(1111111);
-
-  TH1F histBx("Performance B_x", "Error B_x", 1000, -0.005, 0.005);
-  TH1F histBy("Performance B_y", "Error B_y", 1000, -0.005, 0.005);
-  TH1F histBz("Performance B_z", "Error B_z", 1000, -0.005, 0.005);
-
-  for (int sector = 0; sector < 18; sector++) {
-    std::cout << "check quality: sector = " << sector << std::endl;
-    double asec = sectorAngleShift + sector * sectorAngle;
-    double cs = TMath::Cos(asec);
-    double ss = TMath::Sin(asec);
-    for (double al = alMin; al < alMax; al += dA) {
-      std::cout << "check quality: angle " << al / TMath::Pi() * 180. << " grad " << std::endl;
-      double tg = TMath::Tan(al);
-      for (int row = 0; row < AliHLTTPCGeometry::GetNRows(); row++) {
-        double xl = AliHLTTPCGeometry::Row2X(row);
-        double yl = xl * tg;
-        double x = xl * cs - yl * ss;
-        double y = xl * ss + yl * cs;
-        for (double z = zMin; z <= zMax; z += dZ) {
-          Double_t xyz[3] = {x, y, z};
-          Double_t B[3];
-          if (fld->IsUniform()) {
-            B[0] = B[1] = 0.;
-            B[2] = fld->SolenoidField();
-          } else {
-            fld->Field(xyz, B);
-          }
-          B[0] *= solenoidBzkGInv;
-          B[1] *= solenoidBzkGInv;
-          B[2] *= solenoidBzkGInv;
-          float approxB[3];
-          fittedField.GetField(x, y, z, approxB);
-
-          histBx.Fill(approxB[0] - B[0]);
-          histBy.Fill(approxB[1] - B[1]);
-          histBz.Fill(approxB[2] - B[2]);
-        }
-      }
-    }
-  }
-
-  TFile file("FieldTpcFitQA.root", "RECREATE");
-  file.cd();
-
-  histBx.Write();
-  histBy.Write();
-  histBz.Write();
-
-  file.Write();
-  file.Close();
-
-  std::cout << "Fitted polynomial field: " << std::endl;
-  fittedField.Print();
-
-  return 0;
-}
-
-int GPUTPCGMPolynomialFieldManager::FitFieldTrd(AliMagF* inputFld, GPUTPCGMPolynomialField& polyField, double step)
-{
-  //
-  // Fit magnetic field with polynoms
-  //
-
-  const double kCLight = 0.000299792458;
-  const double kAlmost0Field = 1.e-13;
-
-  AliMagF* fld = inputFld;
-
-  if (!fld) {
-    // fld = new AliMagF("Fit", "Fit", 1., 1., AliMagF::k2kG);
-    fld = (AliMagF*)TGeoGlobalMagField::Instance()->GetField();
-  }
-  if (!fld) {
-    return -1;
-  }
-
-  const double sectorAngle = AliTRDgeometry::GetAlpha();
-  const double sectorAngleShift = sectorAngle / 2;
-
-  double zMax = 751.0 / 2.;
-  double zMin = -zMax;
-  double xMin = AliHLTTPCGeometry::Row2X(AliHLTTPCGeometry::GetNRows() - 1);
-  double xMax = AliTRDgeometry::GetXtrdEnd();
-  double rMin = xMin;
-  double rMax = xMax / TMath::Cos(sectorAngle / 2.);
-
-  double dA = 1. / rMax; // angular step == 1 cm at outer radius
-  dA *= step;
-  int nSectorParticles = (int)(sectorAngle / dA);
-  if (nSectorParticles < 1) {
-    nSectorParticles = 1;
-  }
-  dA = sectorAngle / nSectorParticles;
-
-  double dZ = 1. * step; // step in z == 1 cm
-
-  double alMin = -sectorAngle / 2.;
-  double alMax = sectorAngle / 2. - 0.5 * dA;
-
-  Double_t solenoidBzkG = fld->SolenoidField();
-  Double_t solenoidBzkGInv = (TMath::Abs(solenoidBzkG) > kAlmost0Field) ? 1. / solenoidBzkG : 0.;
-
-  std::cout << "solenoidBz = " << solenoidBzkG << " kG" << std::endl;
-
-  const int M = GPUTPCGMPolynomialField::NTRDM;
-  AliHLTTPCPolynomFit fitBx(M);
-  AliHLTTPCPolynomFit fitBy(M);
-  AliHLTTPCPolynomFit fitBz(M);
-
-  for (int sector = 0; sector < AliTRDgeometry::Nsector(); sector++) {
-    std::cout << "sector = " << sector << std::endl;
-    double asec = sectorAngleShift + sector * sectorAngle;
-    double cs = TMath::Cos(asec);
-    double ss = TMath::Sin(asec);
-    for (double al = alMin; al < alMax; al += dA) {
-      std::cout << "angle " << al / TMath::Pi() * 180. << " grad " << std::endl;
-      double tg = TMath::Tan(al);
-      for (double xl = xMin; xl <= xMax; xl += step) {
-        double yl = xl * tg;
-        double x = xl * cs - yl * ss;
-        double y = xl * ss + yl * cs;
-        // std::cout<<"sector = "<<sector<<" al = "<<al/TMath::Pi()*180.<<" xl "<<xl<<" yl "<<yl<<std::endl;
-        for (double z = zMin; z <= zMax; z += dZ) { // 1 cm step in Z
-          Double_t xyz[3] = {x, y, z};
-          Double_t B[3] = {0., 0., 0.};
-          if (fld->IsUniform()) {
-            B[0] = B[1] = 0.;
-            B[2] = fld->SolenoidField();
-          } else {
-            fld->Field(xyz, B);
-          }
-          B[0] *= solenoidBzkGInv;
-          B[1] *= solenoidBzkGInv;
-          B[2] *= solenoidBzkGInv;
-
-          float f[M];
-          GPUTPCGMPolynomialField::GetPolynomsTrd(x, y, z, f);
-          fitBx.AddMeasurement(f, B[0]);
-          fitBy.AddMeasurement(f, B[1]);
-          fitBz.AddMeasurement(f, B[2]);
-        }
-      }
-    }
-  }
-
-  // field coefficients
-  float cX[M];
-  float cY[M];
-  float cZ[M];
-
-  int errX = fitBx.Fit(cX);
-  int errY = fitBy.Fit(cY);
-  int errZ = fitBz.Fit(cZ);
-
-  if (errX != 0 || errY != 0 || errZ != 0) {
-    std::cout << "Fit of polynamial field failed!!!" << std::endl;
-    if (fld != inputFld) {
-      delete fld;
-    }
-    return -1;
-  }
-
-  GPUTPCGMPolynomialField fittedField;
-  fittedField.SetFieldTrd(cX, cY, cZ);
-
-  // scale result
-  double nominalBz = solenoidBzkG * kCLight;
-
-  for (int i = 0; i < M; i++) {
-    cX[i] = nominalBz * cX[i];
-    cY[i] = nominalBz * cY[i];
-    cZ[i] = nominalBz * cZ[i];
-  }
-  polyField.SetFieldNominal(nominalBz);
-  polyField.SetFieldTrd(cX, cY, cZ);
-
-  gStyle->SetOptStat(1111111);
-
-  TH1F histBx("Performance B_x", "Error B_x", 1000, -0.005, 0.005);
-  TH1F histBy("Performance B_y", "Error B_y", 1000, -0.005, 0.005);
-  TH1F histBz("Performance B_z", "Error B_z", 1000, -0.005, 0.005);
-
-  for (int sector = 0; sector < AliTRDgeometry::Nsector(); sector++) {
-    std::cout << "check quality: sector = " << sector << std::endl;
-    double asec = sectorAngleShift + sector * sectorAngle;
-    double cs = TMath::Cos(asec);
-    double ss = TMath::Sin(asec);
-    for (double al = alMin; al < alMax; al += dA) {
-      std::cout << "check quality: angle " << al / TMath::Pi() * 180. << " grad " << std::endl;
-      double tg = TMath::Tan(al);
-      for (double xl = xMin; xl <= xMax; xl += step) {
-        double yl = xl * tg;
-        double x = xl * cs - yl * ss;
-        double y = xl * ss + yl * cs;
-        for (double z = zMin; z <= zMax; z += dZ) {
-          Double_t xyz[3] = {x, y, z};
-          Double_t B[3];
-          if (fld->IsUniform()) {
-            B[0] = B[1] = 0.;
-            B[2] = fld->SolenoidField();
-          } else {
-            fld->Field(xyz, B);
-          }
-          B[0] *= solenoidBzkGInv;
-          B[1] *= solenoidBzkGInv;
-          B[2] *= solenoidBzkGInv;
-          float approxB[3];
-          fittedField.GetFieldTrd(x, y, z, approxB);
-
-          histBx.Fill(approxB[0] - B[0]);
-          histBy.Fill(approxB[1] - B[1]);
-          histBz.Fill(approxB[2] - B[2]);
-        }
-      }
-    }
-  }
-
-  TFile file("FieldTrdFitQA.root", "RECREATE");
-  file.cd();
-
-  histBx.Write();
-  histBy.Write();
-  histBz.Write();
-
-  file.Write();
-  file.Close();
-
-  std::cout << "Fitted polynomial field: " << std::endl;
-  fittedField.Print();
-
-  return 0;
-}
-
-int GPUTPCGMPolynomialFieldManager::FitFieldIts(AliMagF* inputFld, GPUTPCGMPolynomialField& polyField, double step)
-{
-  //
-  // Fit magnetic field with polynoms
-  //
-
-  const double kCLight = 0.000299792458;
-  const double kAlmost0Field = 1.e-13;
-
-  AliMagF* fld = inputFld;
-
-  if (!fld) {
-    // fld = new AliMagF("Fit", "Fit", 1., 1., AliMagF::k2kG);
-    fld = (AliMagF*)TGeoGlobalMagField::Instance()->GetField();
-  }
-  if (!fld) {
-    return -1;
-  }
-
-  const double sectorAngleShift = 10. / 180. * TMath::Pi();
-  const double sectorAngle = 20. / 180. * TMath::Pi();
-
-  const double xITS = 3.9;
-  const double zITS = 24.5;
-
-  double xMin = 0.5;
-  double xMax = AliHLTTPCGeometry::Row2X(0);
-  double rMin = xMin;
-  double rMax = xMax / TMath::Cos(sectorAngle / 2.);
-
-  double dA = .1 / rMax; // angular step == 0.1 cm at the outer radius
-  dA *= step;
-  int nSectorParticles = (int)(sectorAngle / dA);
-  if (nSectorParticles < 1) {
-    nSectorParticles = 1;
-  }
-  dA = sectorAngle / nSectorParticles;
-
-  double dX = .5 * step; // step in local x == 0.1 cm
-  double dZ = 1. * step; // step in z == 1 cm
-
-  double zMin = -AliHLTTPCGeometry::GetZLength();
-  double zMax = AliHLTTPCGeometry::GetZLength();
-
-  double alMin = -sectorAngle / 2.;
-  double alMax = sectorAngle / 2. - 0.5 * dA;
-
-  Double_t solenoidBzkG = fld->SolenoidField();
-  Double_t solenoidBzkGInv = (TMath::Abs(solenoidBzkG) > kAlmost0Field) ? 1. / solenoidBzkG : 0.;
-
-  std::cout << "solenoidBz = " << solenoidBzkG << " kG" << std::endl;
-
-  const int M = GPUTPCGMPolynomialField::NITSM;
-  AliHLTTPCPolynomFit fitBx(M);
-  AliHLTTPCPolynomFit fitBy(M);
-  AliHLTTPCPolynomFit fitBz(M);
-
-  double coneSlope = (zMax - zITS) / (xMax - xITS);
-
-  for (int sector = 0; sector < 18; sector++) {
-    std::cout << "sector = " << sector << std::endl;
-    double asec = sectorAngleShift + sector * sectorAngle;
-    double cs = TMath::Cos(asec);
-    double ss = TMath::Sin(asec);
-    for (double al = alMin; al < alMax; al += dA) {
-      std::cout << "angle " << al / TMath::Pi() * 180. << " grad " << std::endl;
-      double tg = TMath::Tan(al);
-      for (double xl = xMin; xl <= xMax; xl += dX) {
-        double yl = xl * tg;
-        double x = xl * cs - yl * ss;
-        double y = xl * ss + yl * cs;
-        // std::cout<<"sector = "<<sector<<" al = "<<al/TMath::Pi()*180.<<" xl "<<xl<<" yl "<<yl<<std::endl;
-
-        double zCone = zITS + (xl - xITS) * coneSlope;
-
-        for (double z = -zCone; z <= zCone; z += dZ) { // 1 cm step in Z at TPC radius
-          Double_t xyz[3] = {x, y, z};
-          Double_t B[3] = {0., 0., 0.};
-          if (fld->IsUniform()) {
-            B[0] = B[1] = 0.;
-            B[2] = fld->SolenoidField();
-          } else {
-            fld->Field(xyz, B);
-          }
-          B[0] *= solenoidBzkGInv;
-          B[1] *= solenoidBzkGInv;
-          B[2] *= solenoidBzkGInv;
-
-          float f[M];
-          GPUTPCGMPolynomialField::GetPolynomsIts(x, y, z, f);
-          fitBx.AddMeasurement(f, B[0]);
-          fitBy.AddMeasurement(f, B[1]);
-          fitBz.AddMeasurement(f, B[2]);
-        }
-      }
-    }
-  }
-
-  // field coefficients
-  float cX[M];
-  float cY[M];
-  float cZ[M];
-
-  int errX = fitBx.Fit(cX);
-  int errY = fitBy.Fit(cY);
-  int errZ = fitBz.Fit(cZ);
-
-  if (errX != 0 || errY != 0 || errZ != 0) {
-    std::cout << "Fit of polynamial field failed!!!:  errX " << errX << " errY " << errY << " errZ " << errZ << std::endl;
-    if (fld != inputFld) {
-      delete fld;
-    }
-    return -1;
-  }
-
-  GPUTPCGMPolynomialField fittedField;
-  fittedField.SetFieldIts(cX, cY, cZ);
-
-  // scale result
-  double nominalBz = solenoidBzkG * kCLight;
-
-  for (int i = 0; i < M; i++) {
-    cX[i] = nominalBz * cX[i];
-    cY[i] = nominalBz * cY[i];
-    cZ[i] = nominalBz * cZ[i];
-  }
-  polyField.SetFieldNominal(nominalBz);
-  polyField.SetFieldIts(cX, cY, cZ);
-
-  gStyle->SetOptStat(1111111);
-
-  TH1F histBx("Performance B_x", "Error B_x", 1000, -0.005, 0.005);
-  TH1F histBy("Performance B_y", "Error B_y", 1000, -0.005, 0.005);
-  TH1F histBz("Performance B_z", "Error B_z", 1000, -0.005, 0.005);
-
-  for (int sector = 0; sector < 18; sector++) {
-    std::cout << "check quality: sector = " << sector << std::endl;
-    double asec = sectorAngleShift + sector * sectorAngle;
-    double cs = TMath::Cos(asec);
-    double ss = TMath::Sin(asec);
-    for (double al = alMin; al < alMax; al += dA) {
-      std::cout << "check quality: angle " << al / TMath::Pi() * 180. << " grad " << std::endl;
-      double tg = TMath::Tan(al);
-      for (double xl = xMin; xl <= xMax; xl += dX) {
-        double yl = xl * tg;
-        double x = xl * cs - yl * ss;
-        double y = xl * ss + yl * cs;
-        double zCone = zITS + (xl - xITS) * coneSlope;
-        for (double z = -zCone; z <= zCone; z += dZ) {
-          Double_t xyz[3] = {x, y, z};
-          Double_t B[3];
-          if (fld->IsUniform()) {
-            B[0] = B[1] = 0.;
-            B[2] = fld->SolenoidField();
-          } else {
-            fld->Field(xyz, B);
-          }
-          B[0] *= solenoidBzkGInv;
-          B[1] *= solenoidBzkGInv;
-          B[2] *= solenoidBzkGInv;
-          float approxB[3];
-          fittedField.GetFieldIts(x, y, z, approxB);
-
-          histBx.Fill(approxB[0] - B[0]);
-          histBy.Fill(approxB[1] - B[1]);
-          histBz.Fill(approxB[2] - B[2]);
-        }
-      }
-    }
-  }
-
-  TFile file("FieldItsFitQA.root", "RECREATE");
-  file.cd();
-
-  histBx.Write();
-  histBy.Write();
-  histBz.Write();
-
-  file.Write();
-  file.Close();
-
-  std::cout << "Fitted polynomial field: " << std::endl;
-  fittedField.Print();
-
-  return 0;
-}
-
-#endif

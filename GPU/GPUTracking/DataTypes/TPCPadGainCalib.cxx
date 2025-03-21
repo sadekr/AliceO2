@@ -16,26 +16,41 @@
 
 #include "GPUTPCGeometry.h"
 #include "DataFormatsTPC/Constants.h"
-#include "TPCBase/CalDet.h"
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 TPCPadGainCalib::TPCPadGainCalib()
 {
-  GPUTPCGeometry geo{};
-  int offset = 0;
-  for (int r = 0; r < GPUCA_ROW_COUNT; r++) {
+  constexpr GPUTPCGeometry geo{};
+  int32_t offset = 0;
+  for (int32_t r = 0; r < GPUCA_ROW_COUNT; r++) {
     mPadOffsetPerRow[r] = offset;
     offset += geo.NPads(r);
   }
 }
 
+#ifndef GPUCA_STANDALONE
+#include "TPCBase/CalDet.h"
+
 TPCPadGainCalib::TPCPadGainCalib(const o2::tpc::CalDet<float>& gainMap) : TPCPadGainCalib()
 {
-  for (int sector = 0; sector < o2::tpc::constants::MAXSECTOR; sector++) {
-    for (int p = 0; p < TPC_PADS_IN_SECTOR; p++) {
+  setFromMap(gainMap);
+}
+
+TPCPadGainCalib::TPCPadGainCalib(const o2::tpc::CalDet<float>& gainMap, const float minValue, const float maxValue, const bool inv) : TPCPadGainCalib()
+{
+  setMinCorrectionFactor(minValue);
+  setMaxCorrectionFactor(maxValue);
+  setFromMap(gainMap, inv);
+}
+
+void TPCPadGainCalib::setFromMap(const o2::tpc::CalDet<float>& gainMap, const bool inv)
+{
+  for (int32_t sector = 0; sector < o2::tpc::constants::MAXSECTOR; sector++) {
+    for (int32_t p = 0; p < TPC_PADS_IN_SECTOR; p++) {
       const float gainVal = gainMap.getValue(sector, p);
-      mGainCorrection[sector].set(p, (gainVal > 1.e-5f) ? 1.f / gainVal : 1.f);
+      inv ? mGainCorrection[sector].set(p, (gainVal > 1.e-5f) ? 1.f / gainVal : 1.f) : mGainCorrection[sector].set(p, gainVal);
     }
   }
 }
+#endif

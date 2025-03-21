@@ -22,7 +22,7 @@ o2_add_library(TPCSimulation
                        src/SAMPAProcessing.cxx
                        src/IDCSim.cxx
                PUBLIC_LINK_LIBRARIES O2::DetectorsBase O2::SimulationDataFormat
-                                     O2::TPCBase O2::TPCSpaceCharge
+                                     O2::TPCBase O2::TPCSpaceCharge O2::TPCCalibration
                                      ROOT::Physics)
 
 o2_target_root_dictionary(TPCSimulation
@@ -53,4 +53,10 @@ if(BUILD_TESTING)
                          PUBLIC_LINK_LIBRARIES FairRoot::Base
                                                O2::DataFormatsTPC
                          LABELS tpc)
+
+  o2_add_test_root_macro(macro/toyCluster.C
+                         PUBLIC_LINK_LIBRARIES O2::TPCBase
+                                               O2::DataFormatsTPC
+                         LABELS tpc)
+
 endif()

@@ -15,11 +15,13 @@
 #define COMMON_SIMCONFIG_INCLUDE_SIMCONFIG_CONFIGURABLEPARAM_H_
 
 #include <vector>
+#include <cassert>
 #include <map>
 #include <unordered_map>
-#include <boost/property_tree/ptree.hpp>
+#include <boost/property_tree/ptree_fwd.hpp>
 #include <typeinfo>
 #include <iostream>
+#include <array>
 
 class TFile;
 class TRootIOCtor;
@@ -160,7 +162,11 @@ class ConfigurableParam
   virtual std::string getName() const = 0;
 
   // print the current keys and values to screen (optionally with provenance information)
-  virtual void printKeyValues(bool showprov = true) const = 0;
+  virtual void printKeyValues(bool showprov = true, bool useLogger = false) const = 0;
+
+  // get a single size_t hash_value of this parameter (can be used as a checksum to see
+  // if object changed or different)
+  virtual size_t getHash() const = 0;
 
   // return the provenance of the member key
   virtual EParamProvenance getMemberProvenance(const std::string& key) const = 0;
@@ -168,17 +174,13 @@ class ConfigurableParam
   static EParamProvenance getProvenance(const std::string& key);
 
   static void printAllRegisteredParamNames();
-  static void printAllKeyValuePairs();
+  static void printAllKeyValuePairs(bool useLogger = false);
 
-  static const std::string& getInputDir() { return sInputDir; }
   static const std::string& getOutputDir() { return sOutputDir; }
 
-  static void setInputDir(const std::string& d) { sInputDir = d; }
   static void setOutputDir(const std::string& d) { sOutputDir = d; }
 
-  static boost::property_tree::ptree readINI(std::string const& filepath);
-  static boost::property_tree::ptree readJSON(std::string const& filepath);
-  static boost::property_tree::ptree readConfigFile(std::string const& filepath);
+  static bool configFileExists(std::string const& filepath);
 
   // writes a human readable JSON file of all parameters
   static void writeJSON(std::string const& filename, std::string const& keyOnly = "");
@@ -189,10 +191,12 @@ class ConfigurableParam
   template <typename T>
   static T getValueAs(std::string key)
   {
-    if (!sIsFullyInitialized) {
-      initialize();
-    }
-    return sPtree->get<T>(key);
+    return [](auto* tree, const std::string& key) -> T {
+      if (!sIsFullyInitialized) {
+        initialize();
+      }
+      return tree->template get<T>(key);
+    }(sPtree, key);
   }
 
   template <typename T>
@@ -201,42 +205,43 @@ class ConfigurableParam
     if (!sIsFullyInitialized) {
       initialize();
     }
-    assert(sPtree);
+    return [&subkey, &x, &mainkey](auto* tree) -> void {
+      assert(tree);
+      try {
+        auto key = mainkey + "." + subkey;
+        if (tree->template get_optional<std::string>(key).is_initialized()) {
+          tree->put(key, x);
+          auto changed = updateThroughStorageMap(mainkey, subkey, typeid(T), (void*)&x);
+          if (changed != EParamUpdateStatus::Failed) {
+            sValueProvenanceMap->find(key)->second = kRT; // set to runtime
+          }
+        }
+      } catch (std::exception const& e) {
+        std::cerr << "Error in setValue (T) " << e.what() << "\n";
+      }
+    }(sPtree);
+  }
+
+  static void setProvenance(std::string const& mainkey, std::string const& subkey, EParamProvenance p)
+  {
+    if (!sIsFullyInitialized) {
+      std::cerr << "setProvenance was called on non-initialized ConfigurableParam\n";
+      return;
+    }
     try {
       auto key = mainkey + "." + subkey;
-      if (sPtree->get_optional<std::string>(key).is_initialized()) {
-        sPtree->put(key, x);
-        auto changed = updateThroughStorageMap(mainkey, subkey, typeid(T), (void*)&x);
-        if (changed != EParamUpdateStatus::Failed) {
-          sValueProvenanceMap->find(key)->second = kRT; // set to runtime
-        }
+      auto keyProv = sValueProvenanceMap->find(key);
+      if (keyProv != sValueProvenanceMap->end()) {
+        keyProv->second = p;
       }
     } catch (std::exception const& e) {
-      std::cerr << "Error in setValue (T) " << e.what() << "\n";
+      std::cerr << "Error in setProvenance (T) " << e.what() << "\n";
     }
   }
 
   // specialized for std::string
   // which means that the type will be converted internally
-  static void setValue(std::string const& key, std::string const& valuestring)
-  {
-    if (!sIsFullyInitialized) {
-      initialize();
-    }
-    assert(sPtree);
-    try {
-      if (sPtree->get_optional<std::string>(key).is_initialized()) {
-        sPtree->put(key, valuestring);
-        auto changed = updateThroughStorageMapWithConversion(key, valuestring);
-        if (changed != EParamUpdateStatus::Failed) {
-          sValueProvenanceMap->find(key)->second = kRT; // set to runtime
-        }
-      }
-    } catch (std::exception const& e) {
-      std::cerr << "Error in setValue (string) " << e.what() << "\n";
-    }
-  }
-
+  static void setValue(std::string const& key, std::string const& valuestring);
   static void setEnumValue(const std::string&, const std::string&);
   static void setArrayValue(const std::string&, const std::string&);
 
@@ -297,7 +302,6 @@ class ConfigurableParam
   // (stored as a vector of pairs <enumValueLabel, enumValueInt>)
   static EnumRegistry* sEnumRegistry;
 
-  static std::string sInputDir;
   static std::string sOutputDir;
 
   void setRegisterMode(bool b) { sRegisterMode = b; }
@@ -317,17 +321,19 @@ class ConfigurableParam
 } // end namespace o2
 
 // a helper macro for boilerplate code in parameter classes
-#define O2ParamDef(classname, key)               \
- public:                                         \
-  classname(TRootIOCtor*) {}                     \
-  classname(classname const&) = delete;          \
-                                                 \
- private:                                        \
-  static constexpr char const* const sKey = key; \
-  static classname sInstance;                    \
-  classname() = default;                         \
-  template <typename T>                          \
-  friend class o2::conf::ConfigurableParamHelper;
+#define O2ParamDef(classname, key)                \
+ public:                                          \
+  classname(TRootIOCtor*) {}                      \
+  classname(classname const&) = delete;           \
+                                                  \
+ private:                                         \
+  static constexpr char const* const sKey = key;  \
+  static classname sInstance;                     \
+  classname() = default;                          \
+  template <typename T>                           \
+  friend class o2::conf::ConfigurableParamHelper; \
+  template <typename T, typename P>               \
+  friend class o2::conf::ConfigurableParamPromoter;
 
 // a helper macro to implement necessary symbols in source
 #define O2ParamImpl(classname) classname classname::sInstance;

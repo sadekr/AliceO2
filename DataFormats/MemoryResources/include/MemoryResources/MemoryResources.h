@@ -37,23 +37,20 @@
 #include <utility>
 #include <vector>
 #include <unordered_map>
-#include <FairMQMessage.h>
-#include <FairMQTransportFactory.h>
+#include <fairmq/Message.h>
+#include <fairmq/TransportFactory.h>
 #include <fairmq/MemoryResources.h>
 #include <fairmq/MemoryResourceTools.h>
 
-namespace o2
+namespace o2::pmr
 {
 
-namespace pmr
-{
-
-using FairMQMemoryResource = fair::mq::FairMQMemoryResource;
+using FairMQMemoryResource = fair::mq::MemoryResource;
 using ChannelResource = fair::mq::ChannelResource;
 using namespace fair::mq::pmr;
 
 template <typename ContainerT>
-FairMQMessagePtr getMessage(ContainerT&& container, FairMQMemoryResource* targetResource = nullptr)
+fair::mq::MessagePtr getMessage(ContainerT&& container, FairMQMemoryResource* targetResource = nullptr)
 {
   return fair::mq::getMessage(std::forward<ContainerT>(container), targetResource);
 }
@@ -72,16 +69,16 @@ class MessageResource : public FairMQMemoryResource
   MessageResource(MessageResource&&) noexcept = default;
   MessageResource& operator=(const MessageResource&) = default;
   MessageResource& operator=(MessageResource&&) = default;
-  MessageResource(FairMQMessagePtr message)
+  MessageResource(fair::mq::MessagePtr message)
     : mUpstream{message->GetTransport()->GetMemoryResource()},
       mMessageSize{message->GetSize()},
       mMessageData{mUpstream ? mUpstream->setMessage(std::move(message))
                              : throw std::runtime_error("MessageResource::MessageResource upstream is nullptr")}
   {
   }
-  FairMQMessagePtr getMessage(void* p) override { return mUpstream->getMessage(p); }
-  void* setMessage(FairMQMessagePtr message) override { return mUpstream->setMessage(std::move(message)); }
-  FairMQTransportFactory* getTransportFactory() noexcept override { return nullptr; }
+  fair::mq::MessagePtr getMessage(void* p) override { return mUpstream->getMessage(p); }
+  void* setMessage(fair::mq::MessagePtr message) override { return mUpstream->setMessage(std::move(message)); }
+  fair::mq::TransportFactory* getTransportFactory() noexcept override { return nullptr; }
   size_t getNumberOfMessages() const noexcept override { return mMessageData ? 1 : 0; }
 
  protected:
@@ -107,7 +104,7 @@ class MessageResource : public FairMQMemoryResource
     mUpstream->deallocate(p, bytes, alignment < 64 ? 64 : alignment);
     return;
   }
-  bool do_is_equal(const memory_resource& other) const noexcept override
+  bool do_is_equal(const memory_resource& /*other*/) const noexcept override
   {
     // since this uniquely owns the message it can never be equal to anybody else
     return false;
@@ -146,7 +143,7 @@ class SpectatorMemoryResource : public boost::container::pmr::memory_resource
 
   // TODO: the underlying resource can be directly the vector or the read only buffer
  protected:
-  void* do_allocate(std::size_t bytes, std::size_t alignment) override
+  void* do_allocate(std::size_t bytes, std::size_t /*alignment*/) override
   {
     if (mSize > 0) {
       if (bytes > mSize) {
@@ -158,7 +155,7 @@ class SpectatorMemoryResource : public boost::container::pmr::memory_resource
     throw std::runtime_error("Can not allocate: this memory resource is only supposed to provide spectator access to external buffer");
   }
 
-  void do_deallocate(void* p, std::size_t bytes, std::size_t alignment) override
+  void do_deallocate(void* p, std::size_t /*bytes*/, std::size_t /*alignment*/) override
   {
     if (p == mPointer) {
       mBuffer.reset();
@@ -170,7 +167,7 @@ class SpectatorMemoryResource : public boost::container::pmr::memory_resource
       throw std::logic_error("this resource can only deallocate the controlled resource pointer");
     }
   }
-  bool do_is_equal(const memory_resource& other) const noexcept override
+  bool do_is_equal(const memory_resource& /*other*/) const noexcept override
   {
     // uniquely owns the underlying resource, can never be equal to any other instance
     return false;
@@ -312,7 +309,7 @@ using vector = std::vector<T, o2::pmr::polymorphic_allocator<T>>;
 //__________________________________________________________________________________________________
 /// Return a std::vector spanned over the contents of the message, takes ownership of the message
 template <typename ElemT>
-auto adoptVector(size_t nelem, FairMQMessagePtr message)
+auto adoptVector(size_t nelem, fair::mq::MessagePtr message)
 {
   static_assert(std::is_trivially_destructible<ElemT>::value);
   return std::vector<ElemT, OwningMessageSpectatorAllocator<ElemT>>(
@@ -321,16 +318,11 @@ auto adoptVector(size_t nelem, FairMQMessagePtr message)
 
 //__________________________________________________________________________________________________
 /// Get the allocator associated to a transport factory
-inline static FairMQMemoryResource* getTransportAllocator(FairMQTransportFactory* factory)
+inline static FairMQMemoryResource* getTransportAllocator(fair::mq::TransportFactory* factory)
 {
   return *factory;
 }
 
-}; //namespace pmr
-
-template <class T>
-using vector = std::vector<T, o2::pmr::polymorphic_allocator<T>>;
-
-}; //namespace o2
+} // namespace o2::pmr
 
 #endif

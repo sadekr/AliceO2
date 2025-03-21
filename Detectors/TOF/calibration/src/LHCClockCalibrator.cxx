@@ -15,6 +15,7 @@
 #include "CommonUtils/MemFileHelper.h"
 #include "CCDB/CcdbApi.h"
 #include "DetectorsCalibration/Utils.h"
+#include "TOFBase/Utils.h"
 
 namespace o2
 {
@@ -29,7 +30,7 @@ using clbUtils = o2::calibration::Utils;
 //_____________________________________________
 LHCClockDataHisto::LHCClockDataHisto()
 {
-  LOG(INFO) << "Default c-tor, not to be used";
+  LOG(info) << "Default c-tor, not to be used";
 }
 
 //_____________________________________________
@@ -37,10 +38,30 @@ void LHCClockDataHisto::fill(const gsl::span<const o2::dataformats::CalibInfoTOF
 {
   // fill container
   for (int i = data.size(); i--;) {
+    auto flags = data[i].getFlags();
+    if (flags & o2::dataformats::CalibInfoTOF::kMultiHit) { // skip multi-hit clusters
+      continue;
+    }
+    if (flags & o2::dataformats::CalibInfoTOF::kNoBC) { // skip events far from Int BC
+      continue;
+    }
+
+    auto ch = data[i].getTOFChIndex();
     auto dt = data[i].getDeltaTimePi();
-    dt += range;
-    if (dt > 0 && dt < 2 * range) {
-      histo[int(dt * v2Bin)]++;
+    auto tot = data[i].getTot();
+    int used = o2::tof::Utils::addMaskBC(data[i].getMask(), data[i].getTOFChIndex()); // fill the current BC candidate mask and return the one used
+    dt -= used * o2::tof::Geo::BC_TIME_INPS;                                          // report the time using the current 0 deltaBC as reference (the right one will be added later)
+    auto corr = calibApi->getTimeCalibration(ch, tot, 0.);                            // we take into offsets and time slewing but not lhc phase
+    dt -= corr;
+
+    //    printf("ch=%d - tot=%f - corr=%f -> dtcorr = %f (range=%f, bin=%d)\n",ch,tot,corr,dt,range,int((dt+range)*v2Bin));
+
+    float dtRange = dt + range;
+    if (dtRange > 0 && dtRange < 2 * range) {
+      histo[int(dtRange * v2Bin)]++;
+#ifdef DEBUGGING
+      mTimeHist->Fill(mSlot, dt);
+#endif
       entries++;
     }
   }
@@ -59,7 +80,7 @@ void LHCClockDataHisto::merge(const LHCClockDataHisto* prev)
 //_____________________________________________
 void LHCClockDataHisto::print() const
 {
-  LOG(INFO) << entries << " entries";
+  LOG(info) << entries << " entries";
 }
 
 //===================================================================
@@ -77,30 +98,75 @@ void LHCClockCalibrator::initOutput()
 void LHCClockCalibrator::finalizeSlot(Slot& slot)
 {
   // Extract results for the single slot
+
+  // marging in milliseconds for the end validity of the object to be uploaded
+  static long endValidityMarging = long((5 + getMaxSlotsDelay()) * getSlotLength() * o2::base::GRPGeomHelper::getNHBFPerTF() * o2::constants::lhc::LHCOrbitMUS * 1e-3);
+
   o2::tof::LHCClockDataHisto* c = slot.getContainer();
-  LOG(INFO) << "Finalize slot " << slot.getTFStart() << " <= TF <= " << slot.getTFEnd() << " with "
+  LOG(info) << "Finalize slot " << slot.getTFStart() << " <= TF <= " << slot.getTFEnd() << " with "
             << c->getEntries() << " entries";
-  std::vector<float> fitValues;
-  float* array = &c->histo[0];
-  double fitres = fitGaus(c->nbins, array, -(c->range), c->range, fitValues);
-  if (fitres >= 0) {
-    LOG(INFO) << "Fit result " << fitres << " Mean = " << fitValues[1] << " Sigma = " << fitValues[2];
-  } else {
-    LOG(ERROR) << "Fit failed with result = " << fitres;
+  std::array<double, 3> fitValues;
+  std::vector<float> histoValues;
+  int imax = c->nbins / 2;
+  double maxval = 0;
+  for (unsigned i = 0; i < c->nbins; ++i) { // find peak
+    const auto& v = c->histo.at(i);
+    if (v > maxval) {
+      maxval = v;
+      imax = i;
+    }
   }
 
-  // TODO: the timestamp is now given with the TF index, but it will have
-  // to become an absolute time. This is true both for the lhc phase object itself
-  // and the CCDB entry
+  float renorm = 1.; // to avoid fit problem when stats is too large (bad chi2)
+  if (maxval > 10) {
+    renorm = 10. / maxval;
+  }
+
+  int nbinsUsed = 0;
+  double binwidth = 2 * c->range / c->nbins;
+  int binrange = int(1500 / binwidth) + 1;
+  for (unsigned i = 0; i < c->nbins; ++i) {
+    const auto& v = c->histo.at(i);
+    if (i >= imax - binrange && i < imax + binrange) {
+      histoValues.push_back(v * renorm);
+      nbinsUsed++;
+    }
+  }
+
+  float minRange = (imax - c->nbins / 2 - binrange) * binwidth;
+  float maxRange = (imax - c->nbins / 2 + binrange) * binwidth;
+
+  double fitres = fitGaus(nbinsUsed, histoValues.data(), minRange, maxRange, fitValues, nullptr, 2., false);
+  if (fitres >= 0) {
+    LOG(info) << "Fit result " << fitres << " Mean = " << fitValues[1] << " Sigma = " << fitValues[2];
+  } else {
+    LOG(warning) << "Fit failed with result = " << fitres;
+  }
+
   std::map<std::string, std::string> md;
   LHCphase l;
-  l.addLHCphase(slot.getTFStart(), fitValues[1]);
+  int tobeused = o2::tof::Utils::getMaxUsed();
+  fitValues[1] += tobeused * o2::tof::Geo::BC_TIME_INPS; // adjust by adding the right BC
+  l.addLHCphase(0, fitValues[1]);
+  l.addLHCphase(o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP_SECONDS, fitValues[1]);
   auto clName = o2::utils::MemFileHelper::getClassName(l);
   auto flName = o2::ccdb::CcdbApi::generateFileName(clName);
-  mInfoVector.emplace_back("TOF/Calib/LHCphase", clName, flName, md, slot.getTFStart(), 99999999999999);
+
+  auto starting = slot.getStartTimeMS() - o2::ccdb::CcdbObjectInfo::SECOND * 10; // adding a marging, in case some TFs were not processed
+  auto stopping = slot.getEndTimeMS() + endValidityMarging;
+  LOG(info) << "starting = " << starting << " - stopping = " << stopping << " -> phase = " << fitValues[1] << " ps (added BC = " << tobeused << ")";
+  l.setStartValidity(starting);
+  l.setEndValidity(stopping);
+
+  mInfoVector.emplace_back("TOF/Calib/LHCphase", clName, flName, md, starting, stopping);
   mLHCphaseVector.emplace_back(l);
 
   slot.print();
+#ifdef DEBUGGING
+  TFile fout("debug_tof_phase.root", "RECREATE");
+  mTimeHist->Write();
+  fout.Close();
+#endif
 }
 
 //_____________________________________________
@@ -108,7 +174,12 @@ Slot& LHCClockCalibrator::emplaceNewSlot(bool front, TFType tstart, TFType tend)
 {
   auto& cont = getSlots();
   auto& slot = front ? cont.emplace_front(tstart, tend) : cont.emplace_back(tstart, tend);
-  slot.setContainer(std::make_unique<LHCClockDataHisto>(mNBins, mRange));
+#ifndef DEBUGGING
+  slot.setContainer(std::make_unique<LHCClockDataHisto>(mNBins, mRange, mCalibTOFapi));
+#else
+  slot.setContainer(std::make_unique<LHCClockDataHisto>(mNBins, mRange, mCalibTOFapi, mNslot, mTimeHist));
+  mNslot++;
+#endif
   return slot;
 }
 

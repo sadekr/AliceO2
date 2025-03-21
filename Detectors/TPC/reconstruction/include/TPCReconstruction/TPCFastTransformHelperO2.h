@@ -54,35 +54,30 @@ class TPCFastTransformHelperO2
 
   /// _______________  Main functionality  ________________________
 
-  /// set an external space charge correction in the global coordinates
-  template <typename F>
-  void setSpaceChargeCorrection(F&& spaceChargeCorrection)
-  {
-    mSpaceChargeCorrection = spaceChargeCorrection;
-  };
-
   /// creates TPCFastTransform object
   std::unique_ptr<TPCFastTransform> create(Long_t TimeStamp);
 
+  /// creates TPCFastTransform object
+  std::unique_ptr<TPCFastTransform> create(Long_t TimeStamp, const TPCFastSpaceChargeCorrection& correction);
+
   /// Updates the transformation with the new time stamp
-  int updateCalibration(TPCFastTransform& transform, Long_t TimeStamp);
+  int updateCalibration(TPCFastTransform& transform, Long_t TimeStamp, float vDriftFactor = 1.f, float vDriftRef = 0.f, float driftTimeOffset = 0.f);
 
   /// _______________  Utilities   ________________________
+
+  const TPCFastTransformGeo& getGeometry() { return mGeo; }
 
   void testGeometry(const TPCFastTransformGeo& fastTransform) const;
 
  private:
   /// initialization
   void init();
-  /// get space charge correction in internal TPCFastTransform coordinates su,sv->dx,du,dv
-  int getSpaceChargeCorrection(int slice, int row, double su, double sv, double& dx, double& du, double& dv);
 
-  static TPCFastTransformHelperO2* sInstance;                                                  ///< singleton instance
-  bool mIsInitialized = 0;                                                                     ///< initialization flag
-  std::function<void(int roc, const double XYZ[3], double dXdYdZ[3])> mSpaceChargeCorrection = nullptr; ///< pointer to an external correction method
-  TPCFastTransformGeo mGeo;                                                                    ///< geometry parameters
+  static TPCFastTransformHelperO2* sInstance; ///< singleton instance
+  bool mIsInitialized = 0;                    ///< initialization flag
+  TPCFastTransformGeo mGeo;                   ///< geometry parameters
 
-  ClassDefNV(TPCFastTransformHelperO2, 2);
+  ClassDefNV(TPCFastTransformHelperO2, 3);
 };
 } // namespace tpc
 } // namespace o2

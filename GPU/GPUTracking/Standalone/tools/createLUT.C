@@ -5,11 +5,11 @@
 #include "GPUReconstruction.h"
 #include "GPUChainTracking.h"
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 void createLUT()
 {
-  o2::base::MatLayerCylSet* lut = o2::base::MatLayerCylSet::loadFromFile("matbud.root", "MatBud");
+  o2::base::MatLayerCylSet* lut = o2::base::MatLayerCylSet::loadFromFile("matbud.root");
   gSystem->Load("libO2GPUTracking");
   GPUReconstruction* rec = GPUReconstruction::CreateInstance(GPUReconstruction::DeviceType::CPU);
   GPUChainTracking* chain = rec->AddChain<GPUChainTracking>();

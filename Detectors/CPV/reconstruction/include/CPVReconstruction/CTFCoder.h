@@ -23,7 +23,6 @@
 #include "DataFormatsCPV/CTF.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "DetectorsBase/CTFCoderBase.h"
-#include "rANS/rans.h"
 #include "CPVReconstruction/CTFHelper.h"
 
 class TTree;
@@ -36,38 +35,63 @@ namespace cpv
 class CTFCoder : public o2::ctf::CTFCoderBase
 {
  public:
-  CTFCoder() : o2::ctf::CTFCoderBase(CTF::getNBlocks(), o2::detectors::DetID::CPV) {}
-  ~CTFCoder() = default;
+  CTFCoder(o2::ctf::CTFCoderBase::OpType op) : o2::ctf::CTFCoderBase(op, CTF::getNBlocks(), o2::detectors::DetID::CPV) {}
+  ~CTFCoder() final = default;
 
   /// entropy-encode data to buffer with CTF
   template <typename VEC>
-  void encode(VEC& buff, const gsl::span<const TriggerRecord>& trigData, const gsl::span<const Cluster>& cluData);
+  o2::ctf::CTFIOSize encode(VEC& buff, const gsl::span<const TriggerRecord>& trigData, const gsl::span<const Cluster>& cluData);
 
   /// entropy decode data from buffer with CTF
   template <typename VTRG, typename VCLUSTER>
-  void decode(const CTF::base& ec, VTRG& trigVec, VCLUSTER& cluVec);
+  o2::ctf::CTFIOSize decode(const CTF::base& ec, VTRG& trigVec, VCLUSTER& cluVec);
 
-  void createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::OpType op);
+  void createCoders(const std::vector<char>& bufVec, ctf::CTFCoderBase::OpType op) final;
 
  private:
+  template <typename VEC>
+  o2::ctf::CTFIOSize encode_impl(VEC& buff, const gsl::span<const TriggerRecord>& trigData, const gsl::span<const Cluster>& cluData);
+
   void appendToTree(TTree& tree, CTF& ec);
   void readFromTree(TTree& tree, int entry, std::vector<TriggerRecord>& trigVec, std::vector<Cluster>& cluVec);
+  std::vector<TriggerRecord> mTrgDataFilt;
+  std::vector<Cluster> mClusDataFilt;
 };
 
 /// entropy-encode clusters to buffer with CTF
 template <typename VEC>
-void CTFCoder::encode(VEC& buff, const gsl::span<const TriggerRecord>& trigData, const gsl::span<const Cluster>& cluData)
+o2::ctf::CTFIOSize CTFCoder::encode(VEC& buff, const gsl::span<const TriggerRecord>& trigData, const gsl::span<const Cluster>& cluData)
+{
+  if (mIRFrameSelector.isSet()) { // preselect data
+    mTrgDataFilt.clear();
+    mClusDataFilt.clear();
+    for (const auto& trig : trigData) {
+      if (mIRFrameSelector.check(trig.getBCData()) >= 0) {
+        mTrgDataFilt.push_back(trig);
+        auto clusIt = cluData.begin() + trig.getFirstEntry();
+        auto& trigC = mTrgDataFilt.back();
+        trigC.setDataRange((int)mClusDataFilt.size(), trig.getNumberOfObjects());
+        std::copy(clusIt, clusIt + trig.getNumberOfObjects(), std::back_inserter(mClusDataFilt));
+      }
+    }
+    return encode_impl(buff, mTrgDataFilt, mClusDataFilt);
+  }
+  return encode_impl(buff, trigData, cluData);
+}
+
+template <typename VEC>
+o2::ctf::CTFIOSize CTFCoder::encode_impl(VEC& buff, const gsl::span<const TriggerRecord>& trigData, const gsl::span<const Cluster>& cluData)
 {
   using MD = o2::ctf::Metadata::OptStore;
   // what to do which each field: see o2::ctd::Metadata explanation
   constexpr MD optField[CTF::getNBlocks()] = {
-    MD::EENCODE, // BLC_bcIncTrig
-    MD::EENCODE, // BLC_orbitIncTrig
-    MD::EENCODE, // BLC_entriesTrig
-    MD::EENCODE, // BLC_posX
-    MD::EENCODE, // BLC_posZ
-    MD::EENCODE, // BLC_energy
-    MD::EENCODE  // BLC_status
+    MD::EENCODE_OR_PACK, // BLC_bcIncTrig
+    MD::EENCODE_OR_PACK, // BLC_orbitIncTrig
+    MD::EENCODE_OR_PACK, // BLC_entriesTrig
+    MD::EENCODE_OR_PACK, // BLC_posX
+    MD::EENCODE_OR_PACK, // BLC_posZ
+    MD::EENCODE_OR_PACK, // BLC_energy
+    MD::EENCODE_OR_PACK  // BLC_status
   };
 
   CTFHelper helper(trigData, cluData);
@@ -81,43 +105,48 @@ void CTFCoder::encode(VEC& buff, const gsl::span<const TriggerRecord>& trigData,
 
   ec->setHeader(helper.createHeader());
   assignDictVersion(static_cast<o2::ctf::CTFDictHeader&>(ec->getHeader()));
-  ec->getANSHeader().majorVersion = 0;
-  ec->getANSHeader().minorVersion = 1;
+  ec->setANSHeader(mANSVersion);
   // at every encoding the buffer might be autoexpanded, so we don't work with fixed pointer ec
-#define ENCODECPV(beg, end, slot, bits) CTF::get(buff.data())->encode(beg, end, int(slot), bits, optField[int(slot)], &buff, mCoders[int(slot)].get(), getMemMarginFactor());
+  o2::ctf::CTFIOSize iosize;
+#define ENCODECPV(beg, end, slot, bits) CTF::get(buff.data())->encode(beg, end, int(slot), bits, optField[int(slot)], &buff, mCoders[int(slot)], getMemMarginFactor());
   // clang-format off
-  ENCODECPV(helper.begin_bcIncTrig(),    helper.end_bcIncTrig(),     CTF::BLC_bcIncTrig,    0);
-  ENCODECPV(helper.begin_orbitIncTrig(), helper.end_orbitIncTrig(),  CTF::BLC_orbitIncTrig, 0);
-  ENCODECPV(helper.begin_entriesTrig(),  helper.end_entriesTrig(),   CTF::BLC_entriesTrig,  0);
+  iosize += ENCODECPV(helper.begin_bcIncTrig(),    helper.end_bcIncTrig(),     CTF::BLC_bcIncTrig,    0);
+  iosize += ENCODECPV(helper.begin_orbitIncTrig(), helper.end_orbitIncTrig(),  CTF::BLC_orbitIncTrig, 0);
+  iosize += ENCODECPV(helper.begin_entriesTrig(),  helper.end_entriesTrig(),   CTF::BLC_entriesTrig,  0);
 
-  ENCODECPV(helper.begin_posX(),        helper.end_posX(),           CTF::BLC_posX,         0);
-  ENCODECPV(helper.begin_posZ(),        helper.end_posZ(),           CTF::BLC_posZ,         0);
-  ENCODECPV(helper.begin_energy(),      helper.end_energy(),         CTF::BLC_energy,       0);
-  ENCODECPV(helper.begin_status(),      helper.end_status(),         CTF::BLC_status,       0);
+  iosize += ENCODECPV(helper.begin_posX(),        helper.end_posX(),           CTF::BLC_posX,         0);
+  iosize += ENCODECPV(helper.begin_posZ(),        helper.end_posZ(),           CTF::BLC_posZ,         0);
+  iosize += ENCODECPV(helper.begin_energy(),      helper.end_energy(),         CTF::BLC_energy,       0);
+  iosize += ENCODECPV(helper.begin_status(),      helper.end_status(),         CTF::BLC_status,       0);
   // clang-format on
-  CTF::get(buff.data())->print(getPrefix());
+  CTF::get(buff.data())->print(getPrefix(), mVerbosity);
+  finaliseCTFOutput<CTF>(buff);
+  iosize.rawIn = trigData.size() * sizeof(TriggerRecord) + cluData.size() * sizeof(Cluster);
+  return iosize;
 }
 
 /// decode entropy-encoded clusters to standard compact clusters
 template <typename VTRG, typename VCLUSTER>
-void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCLUSTER& cluVec)
+o2::ctf::CTFIOSize CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCLUSTER& cluVec)
 {
   auto header = ec.getHeader();
   checkDictVersion(static_cast<const o2::ctf::CTFDictHeader&>(header));
-  ec.print(getPrefix());
-  std::vector<uint16_t> bcInc, entries, posX, posZ;
-  std::vector<uint32_t> orbitInc;
+  ec.print(getPrefix(), mVerbosity);
+  std::vector<int16_t> bcInc;
+  std::vector<int32_t> orbitInc;
+  std::vector<uint16_t> entries, posX, posZ;
   std::vector<uint8_t> energy, status;
 
-#define DECODECPV(part, slot) ec.decode(part, int(slot), mCoders[int(slot)].get())
+  o2::ctf::CTFIOSize iosize;
+#define DECODECPV(part, slot) ec.decode(part, int(slot), mCoders[int(slot)])
   // clang-format off
-  DECODECPV(bcInc,       CTF::BLC_bcIncTrig);
-  DECODECPV(orbitInc,    CTF::BLC_orbitIncTrig);
-  DECODECPV(entries,     CTF::BLC_entriesTrig);
-  DECODECPV(posX,        CTF::BLC_posX);
-  DECODECPV(posZ,        CTF::BLC_posZ);
-  DECODECPV(energy,      CTF::BLC_energy);
-  DECODECPV(status,      CTF::BLC_status);
+  iosize += DECODECPV(bcInc,       CTF::BLC_bcIncTrig);
+  iosize += DECODECPV(orbitInc,    CTF::BLC_orbitIncTrig);
+  iosize += DECODECPV(entries,     CTF::BLC_entriesTrig);
+  iosize += DECODECPV(posX,        CTF::BLC_posX);
+  iosize += DECODECPV(posZ,        CTF::BLC_posZ);
+  iosize += DECODECPV(energy,      CTF::BLC_energy);
+  iosize += DECODECPV(status,      CTF::BLC_status);
   // clang-format on
   //
   trigVec.clear();
@@ -127,7 +156,7 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCLUSTER& cluVec)
 
   uint32_t firstEntry = 0, cluCount = 0;
   o2::InteractionRecord ir(header.firstBC, header.firstOrbit);
-
+  bool checkIROK = (mBCShift == 0); // need to check if CTP offset correction does not make the local time negative ?
   Cluster clu;
   for (uint32_t itrig = 0; itrig < header.nTriggers; itrig++) {
     // restore TrigRecord
@@ -137,16 +166,23 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCLUSTER& cluVec)
     } else {
       ir.bc += bcInc[itrig];
     }
-
+    if (checkIROK || canApplyBCShift(ir)) { // correction will be ok
+      checkIROK = true;
+    } else { // correction would make IR prior to mFirstTFOrbit, skip
+      cluCount += entries[itrig];
+      continue;
+    }
     firstEntry = cluVec.size();
     for (uint16_t ic = 0; ic < entries[itrig]; ic++) {
       clu.setPacked(posX[cluCount], posZ[cluCount], energy[cluCount], status[cluCount]);
       cluVec.emplace_back(clu);
       cluCount++;
     }
-    trigVec.emplace_back(ir, firstEntry, entries[itrig]);
+    trigVec.emplace_back(ir - mBCShift, firstEntry, entries[itrig]);
   }
   assert(cluCount == header.nClusters);
+  iosize.rawIn = trigVec.size() * sizeof(TriggerRecord) + cluVec.size() * sizeof(Cluster);
+  return iosize;
 }
 
 } // namespace cpv

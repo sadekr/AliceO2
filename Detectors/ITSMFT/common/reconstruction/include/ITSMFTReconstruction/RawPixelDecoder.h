@@ -28,13 +28,16 @@
 #include "ITSMFTReconstruction/PixelReader.h"
 #include "DataFormatsITSMFT/ROFRecord.h"
 #include "ITSMFTReconstruction/PixelData.h"
+#include "ITSMFTReconstruction/GBTWord.h"
+#include <unordered_map>
 
 namespace o2
 {
 namespace framework
 {
 class InputRecord;
-}
+class TimingInfo;
+} // namespace framework
 
 namespace itsmft
 {
@@ -48,24 +51,26 @@ class RawPixelDecoder final : public PixelReader
  public:
   RawPixelDecoder();
   ~RawPixelDecoder() final = default;
-
-  GBTLink::Format getFormat() const { return mFormat; }
-  void setFormat(GBTLink::Format f);
-
+  void setFormat(GBTLink::Format f) {}
   void init() final {}
   bool getNextChipData(ChipPixelData& chipData) final;
   ChipPixelData* getNextChipData(std::vector<ChipPixelData>& chipDataVec) final;
   void ensureChipOrdering() {}
   void startNewTF(o2::framework::InputRecord& inputs);
-
+  void collectROFCableData(int iru);
   int decodeNextTrigger() final;
-  int decodeNextTrigger(int il);
 
   template <class DigitContainer, class ROFContainer>
   int fillDecodedDigits(DigitContainer& digits, ROFContainer& rofs);
 
+  template <class STATVEC>
+  void fillChipsStatus(STATVEC& chipStatus);
+
   template <class CalibContainer>
   void fillCalibData(CalibContainer& calib);
+
+  template <class LinkErrors, class DecErrors, class ErrMsgs>
+  void collectDecodingErrors(LinkErrors& linkErrors, DecErrors& decErrors, ErrMsgs& errInfos);
 
   const RUDecodeData* getRUDecode(int ruSW) const { return mRUEntry[ruSW] < 0 ? nullptr : &mRUDecodeVec[mRUEntry[ruSW]]; }
   const GBTLink* getGBTLink(int i) const { return i < 0 ? nullptr : &mGBTLinks[i]; }
@@ -86,9 +91,13 @@ class RawPixelDecoder final : public PixelReader
   void setVerbosity(int v);
   int getVerbosity() const { return mVerbosity; }
 
-  void printReport(bool decstat = true, bool skipNoErr = true) const;
+  void setAlwaysParseTrigger(bool v) { mAlwaysParseTrigger = v; }
+  bool getAlwaysParseTrigger() const { return mAlwaysParseTrigger; }
 
-  void clearStat();
+  void printReport(bool decstat = true, bool skipNoErr = true) const;
+  size_t produceRawDataDumps(int dump, const o2::framework::TimingInfo& tinfo);
+
+  void clearStat(bool resetRaw = false);
 
   TStopwatch& getTimerTFStart() { return mTimerTFStart; }
   TStopwatch& getTimerDecode() { return mTimerDecode; }
@@ -98,14 +107,35 @@ class RawPixelDecoder final : public PixelReader
   size_t getNChipsFired() const { return mNChipsFired; }
   size_t getNPixelsFired() const { return mNPixelsFired; }
 
+  void setAllowEmptyROFs(bool v) { mAlloEmptyROFs = v; }
+  bool getAllowEmptyROFs() const { return mAlloEmptyROFs; }
+
+  void setVerifyDecoder(bool v) { mVerifyDecoder = v; }
+  bool getVerifyDecoder() const { return mVerifyDecoder; }
+
   void setInstanceID(size_t i) { mInstanceID = i; }
   void setNInstances(size_t n) { mNInstances = n; }
   auto getInstanceID() const { return mInstanceID; }
   auto getNInstances() const { return mNInstances; }
 
+  void setRawDumpDirectory(const std::string& s) { mRawDumpDirectory = s; }
+  auto getRawDumpDirectory() const { return mRawDumpDirectory; }
+
+  std::vector<PhysTrigger>& getExternalTriggers() { return mExtTriggers; }
+  const std::vector<PhysTrigger>& getExternalTriggers() const { return mExtTriggers; }
+
+  void setSkipRampUpData(bool v = true) { mSkipRampUpData = v; }
+  bool getSkipRampUpData() const { return mSkipRampUpData; }
+  auto getNROFsProcessed() const { return mROFCounter; }
+
   struct LinkEntry {
     int entry = -1;
   };
+
+  uint16_t getSquashingDepth() { return 0; }
+  bool doIRMajorityPoll();
+  bool isRampUpStage() const { return mROFRampUpStage; }
+  void reset();
 
  private:
   void setupLinks(o2::framework::InputRecord& inputs);
@@ -116,21 +146,30 @@ class RawPixelDecoder final : public PixelReader
 
   static constexpr uint16_t NORUDECODED = 0xffff; // this must be > than max N RUs
 
-  std::vector<GBTLink> mGBTLinks;                           // active links pool
-  std::unordered_map<uint32_t, LinkEntry> mSubsSpec2LinkID; // link subspec to link entry in the pool mapping
-  std::vector<RUDecodeData> mRUDecodeVec;                   // set of active RUs
-  std::array<short, Mapping::getNRUs()> mRUEntry;           // entry of the RU with given SW ID in the mRUDecodeVec
-  std::vector<ChipPixelData*> mOrderedChipsPtr;             // special ordering helper used for the MFT (its chipID is not contiguous in RU)
-  std::string mSelfName;                        // self name
-  header::DataOrigin mUserDataOrigin = o2::header::gDataOriginInvalid; // alternative user-provided data origin to pick
+  std::vector<GBTLink> mGBTLinks;                                                     // active links pool
+  std::unordered_map<uint32_t, LinkEntry> mSubsSpec2LinkID;                           // link subspec to link entry in the pool mapping
+  std::vector<RUDecodeData> mRUDecodeVec;                                             // set of active RUs
+  std::array<short, Mapping::getNRUs()> mRUEntry;                                     // entry of the RU with given SW ID in the mRUDecodeVec
+  std::vector<ChipPixelData*> mOrderedChipsPtr;                                       // special ordering helper used for the MFT (its chipID is not contiguous in RU)
+  std::vector<PhysTrigger> mExtTriggers;                                              // external triggers
+  GBTLink* mLinkForTriggers = nullptr;                                                // link assigned to collect the triggers
+  std::string mSelfName{};                                                            // self name
+  std::string mRawDumpDirectory;                                                      // destination directory for dumps
+  header::DataOrigin mUserDataOrigin = o2::header::gDataOriginInvalid;                // alternative user-provided data origin to pick
   header::DataDescription mUserDataDescription = o2::header::gDataDescriptionInvalid; // alternative user-provided description to pick
-  uint16_t mCurRUDecodeID = NORUDECODED;        // index of currently processed RUDecode container
-  int mLastReadChipID = -1;                     // chip ID returned by previous getNextChipData call, used for ordering checks
-  Mapping mMAP;                                 // chip mapping
-  bool mFillCalibData = false;                  // request to fill calib data from GBT
+  uint16_t mCurRUDecodeID = NORUDECODED;                                              // index of currently processed RUDecode container
+  int mLastReadChipID = -1;                                                           // chip ID returned by previous getNextChipData call, used for ordering checks
+  int mNLinksInTF = 0;                                                                // number of links seen in the TF
+  Mapping mMAP;                                                                       // chip mapping
+  std::unordered_map<o2::InteractionRecord, int> mIRPoll;                             // poll for links IR used for synchronization
+  bool mFillCalibData = false;                                                        // request to fill calib data from GBT
+  bool mAlloEmptyROFs = false;                                                        // do not skip empty ROFs
+  bool mROFRampUpStage = false;                                                       // are we still in the ROF ramp up stage?
+  bool mSkipRampUpData = false;
+  bool mVerifyDecoder = false;
+  bool mAlwaysParseTrigger = false;
   int mVerbosity = 0;
   int mNThreads = 1; // number of decoding threads
-  GBTLink::Format mFormat = GBTLink::NewFormat; // ITS Data Format (old: 1 ROF per CRU page)
   // statistics
   o2::itsmft::ROFRecord::ROFtype mROFCounter = 0; // RSTODO is this needed? eliminate from ROFRecord ?
   uint32_t mNChipsFiredROF = 0;                   // counter within the ROF
@@ -138,6 +177,7 @@ class RawPixelDecoder final : public PixelReader
   uint32_t mNLinksDone = 0;                       // number of links reached end of data
   size_t mNChipsFired = 0;                        // global counter
   size_t mNPixelsFired = 0;                       // global counter
+  size_t mNExtTriggers = 0;                       // global counter
   size_t mInstanceID = 0;                         // pipeline instance
   size_t mNInstances = 1;                         // total number of pipelines
   TStopwatch mTimerTFStart;
@@ -181,19 +221,33 @@ int RawPixelDecoder<ChipMappingMFT>::fillDecodedDigits(DigitContainer& digits, R
   }
   mTimerFetchData.Start(false);
   int ref = digits.size();
-  while (!mOrderedChipsPtr.empty()) {
-    const auto& chipData = *mOrderedChipsPtr.back();
-    assert(mLastReadChipID < chipData.getChipID());
-    mLastReadChipID = chipData.getChipID();
-    for (const auto& hit : chipData.getData()) {
+  for (auto chipData = mOrderedChipsPtr.rbegin(); chipData != mOrderedChipsPtr.rend(); ++chipData) {
+    assert(mLastReadChipID < (*chipData)->getChipID());
+    mLastReadChipID = (*chipData)->getChipID();
+    for (const auto& hit : (*chipData)->getData()) {
       digits.emplace_back(mLastReadChipID, hit.getRow(), hit.getCol());
     }
-    mOrderedChipsPtr.pop_back();
   }
   int nFilled = digits.size() - ref;
   rofs.emplace_back(mInteractionRecord, mROFCounter, ref, nFilled);
   mTimerFetchData.Stop();
   return nFilled;
+}
+
+///______________________________________________________________
+/// update status for every active chip
+template <class Mapping>
+template <class STATVEC>
+void RawPixelDecoder<Mapping>::fillChipsStatus(STATVEC& chipStatus)
+{
+  if (mInteractionRecord.isDummy() || mROFRampUpStage) {
+    return; // nothing was decoded
+  }
+  for (unsigned int iru = 0; iru < mRUDecodeVec.size(); iru++) {
+    for (auto chID : mRUDecodeVec[iru].seenChipIDs) {
+      chipStatus[chID] = 1;
+    }
+  }
 }
 
 ///______________________________________________________________
@@ -207,6 +261,38 @@ void RawPixelDecoder<Mapping>::fillCalibData(CalibContainer& calib)
     calib.resize(curSize + Mapping::getNRUs());
     for (unsigned int iru = 0; iru < mRUDecodeVec.size(); iru++) {
       calib[curSize + mRUDecodeVec[iru].ruSWID] = mRUDecodeVec[iru].calibData;
+    }
+  }
+}
+
+///______________________________________________________________________
+template <class Mapping>
+template <class LinkErrors, class DecErrors, class ErrMsgs>
+void RawPixelDecoder<Mapping>::collectDecodingErrors(LinkErrors& linkErrors, DecErrors& decErrors, ErrMsgs& errInfos)
+{
+  for (auto& lnk : mGBTLinks) {
+    if (lnk.gbtErrStatUpadated) {
+      linkErrors.push_back(lnk.statistics);
+      lnk.gbtErrStatUpadated = false;
+    }
+  }
+  size_t nerr = 0, nerrMsg = 0;
+  for (auto& ru : mRUDecodeVec) {
+    nerr += ru.chipErrorsTF.size();
+    nerrMsg += ru.errMsgVecTF.size();
+  }
+  if (nerr || nerrMsg) {
+    decErrors.reserve(nerr);
+    errInfos.reserve(nerrMsg);
+    for (auto& ru : mRUDecodeVec) {
+      for (const auto& err : ru.chipErrorsTF) {
+        decErrors.emplace_back(ChipError{err.first, err.second.first, err.second.second}); // id, nerrors, errorFlags
+      }
+      for (auto& err : ru.errMsgVecTF) {
+        errInfos.push_back(err);
+      }
+      ru.chipErrorsTF.clear();
+      ru.errMsgVecTF.clear();
     }
   }
 }

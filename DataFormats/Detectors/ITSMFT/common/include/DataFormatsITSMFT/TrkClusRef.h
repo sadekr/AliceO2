@@ -25,12 +25,33 @@ namespace itsmft
 // can refer to max 15 indices in the vector of total length <268435456, i.e. 17895697 tracks in worst case
 struct TrkClusRef : public o2::dataformats::RangeRefComp<4> {
   using o2::dataformats::RangeRefComp<4>::RangeRefComp;
+  uint32_t clsizes = 0; ///< cluster sizes for each layer
   uint16_t pattern = 0; ///< layers pattern
 
   GPUd() int getNClusters() const { return getEntries(); }
-  bool hasHitOnLayer(int i) { return pattern & (0x1 << i); }
+  bool hasHitOnLayer(int i) const { return pattern & (0x1 << i); }
 
-  ClassDefNV(TrkClusRef, 1);
+  void setClusterSize(int l, int size)
+  {
+    if (l >= 8)
+      return;
+    if (size > 15)
+      size = 15;
+    clsizes &= ~(0xf << (l * 4));
+    clsizes |= (size << (l * 4));
+  }
+
+  int getClusterSize(int l) const
+  {
+    return (l >= 8) ? 0 : (clsizes >> (l * 4)) & 0xf;
+  }
+
+  int getClusterSizes() const
+  {
+    return clsizes;
+  }
+
+  ClassDefNV(TrkClusRef, 2);
 };
 
 } // namespace itsmft

@@ -30,12 +30,14 @@ o2_add_library(TPCReconstruction
                        src/TPCFastTransformHelperO2.cxx
                        src/CTFCoder.cxx
                        src/RawProcessingHelpers.cxx
+                       src/IonTailCorrection.cxx
                PUBLIC_LINK_LIBRARIES FairRoot::Base
                                      O2::SimulationDataFormat
                                      O2::TPCBase
                                      O2::GPUO2Interface
                                      O2::TPCFastTransformation
-                                     O2::DetectorsRaw)
+                                     O2::DetectorsRaw
+                                     O2::DetectorsBase)
 
 o2_target_root_dictionary(
   TPCReconstruction
@@ -57,8 +59,8 @@ o2_target_root_dictionary(
           include/TPCReconstruction/HardwareClusterDecoder.h
           include/TPCReconstruction/DigitalCurrentClusterIntegrator.h
           include/TPCReconstruction/TPCFastTransformHelperO2.h
-          include/TPCReconstruction/CTFCoder.h
-          include/TPCReconstruction/RawProcessingHelpers.h)
+          include/TPCReconstruction/RawProcessingHelpers.h
+          include/TPCReconstruction/IonTailCorrection.h)
 
 o2_add_executable(read-gbtframes
                   COMPONENT_NAME tpc
@@ -90,7 +92,7 @@ o2_add_test(AdcClockMonitor
 o2_add_test(GPUCATracking
             COMPONENT_NAME tpc
             LABELS tpc
-            PUBLIC_LINK_LIBRARIES O2::TPCReconstruction
+            PUBLIC_LINK_LIBRARIES O2::TPCReconstruction O2::GPUO2Interface
             SOURCES test/testGPUCATracking.cxx
             ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage)
 
@@ -110,7 +112,7 @@ o2_add_test(FastTransform
             PUBLIC_LINK_LIBRARIES O2::TPCReconstruction
             SOURCES test/testTPCFastTransform.cxx
             ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
-            CONFIGURATIONS RelWithDebInfo Release MinRelSize)
+            CONFIGURATIONS RelWithDebInfo Release MinSizeRel)
 
 # FIXME: should be moved to TPCCalibration as it requires O2::TPCCalibration
 # which is built after TPCReconstruction
@@ -129,12 +131,19 @@ o2_add_test_root_macro(macro/testRawRead.C
 o2_add_test_root_macro(macro/createTPCSpaceChargeCorrection.C
                        COMPILE_ONLY
                        PUBLIC_LINK_LIBRARIES O2::TPCReconstruction
+                                             O2::TPCCalibration
                                              O2::CommonConstants
                                              O2::CommonUtils
                                              O2::TPCSpaceCharge
                        LABELS tpc)
 
 o2_add_test_root_macro(macro/findKrBoxCluster.C
+                      COMPILE_ONLY
+                      PUBLIC_LINK_LIBRARIES O2::TPCReconstruction
+                      LABELS tpc)
+
+o2_add_test_root_macro(macro/makeIonTail.C
+                      COMPILE_ONLY
                       PUBLIC_LINK_LIBRARIES O2::TPCReconstruction
                       LABELS tpc)
 

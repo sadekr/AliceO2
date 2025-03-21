@@ -39,7 +39,7 @@ namespace dcs
      * DataPointIdentifier object is responsible for storing the alias and type
      * information of a data point.
      */
-class alignas(64) DataPointIdentifier final
+class DataPointIdentifier final
 {
   const uint64_t pt1;
   const uint64_t pt2;
@@ -83,8 +83,8 @@ class alignas(64) DataPointIdentifier final
   }
 
   /**
-         * A copy constructor for DataPointIdentifier. 
-         */
+   * A copy constructor for DataPointIdentifier.
+   */
   DataPointIdentifier(const DataPointIdentifier& src) noexcept : DataPointIdentifier(src.pt1, src.pt2, src.pt3, src.pt4, src.pt5, src.pt6, src.pt7, src.pt8) {}
 
   DataPointIdentifier& operator=(const DataPointIdentifier& src) noexcept
@@ -137,7 +137,10 @@ class alignas(64) DataPointIdentifier final
          */
   inline bool operator==(const DataPointIdentifier& other) const
   {
-    return memcmp((char*)this, (char*)&other, 64) == 0;
+    constexpr char mask = 0x7F;
+
+    return (memcmp((char*)this, (char*)&other, 63) == 0) &&
+           (((DeliveryType)this->get_type() & mask) == ((DeliveryType)other.get_type() & mask));
   }
 
   /**

@@ -16,14 +16,17 @@
 
 #include <string>
 
+#include "CCDB/CcdbApi.h"
+
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/Task.h"
 
 #include "MFTCalibration/NoiseCalibrator.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 using CALIBRATOR = o2::mft::NoiseCalibrator;
 
 //#include "MFTCalibration/NoiseSlotCalibrator.h" //For TimeSlot calibration
-//using CALIBRATOR = o2::mft::NoiseSlotCalibrator;
+// using CALIBRATOR = o2::mft::NoiseSlotCalibrator;
 
 #include "DataFormatsITSMFT/NoiseMap.h"
 
@@ -38,23 +41,39 @@ namespace mft
 class NoiseCalibratorSpec : public Task
 {
  public:
-  NoiseCalibratorSpec(bool digits = false);
+  NoiseCalibratorSpec(bool digits = false, std::shared_ptr<o2::base::GRPGeomRequest> req = {});
   ~NoiseCalibratorSpec() override = default;
 
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
   void endOfStream(EndOfStreamContext& ec) final;
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
-  void sendOutput(DataAllocator& output);
+  o2::ccdb::CcdbApi api;
+  void updateTimeDependentParams(ProcessingContext& pc);
+  void sendOutputCcdb(DataAllocator& output);
+  void sendOutputCcdbMerge(DataAllocator& output);
+  void sendOutputCcdbDcs(DataAllocator& output);
+  void sendOutputDcs(DataAllocator& output);
+  void setOutputDcs(const o2::itsmft::NoiseMap& payload);
   o2::itsmft::NoiseMap mNoiseMap{936};
   std::unique_ptr<CALIBRATOR> mCalibrator = nullptr;
+  std::shared_ptr<o2::base::GRPGeomRequest> mCCDBRequest;
   std::string mPath;
+  std::string mPathMerge;
   std::string mMeta;
+
+  std::vector<std::array<int, 3>> mNoiseMapForDcs;
+  std::string mPathDcs;
+  std::string mPathDcsMerge;
+  std::string mOutputType;
+
   double mThresh;
   int64_t mStart;
   int64_t mEnd;
   bool mDigits = false;
+  bool mStopMeOnly = false; // send QuitRequest::Me instead of QuitRequest::All
 };
 
 /// create a processor spec

@@ -14,6 +14,7 @@
 /// \author Barthelemy von Haller
 ///
 
+#define BOOST_BIND_GLOBAL_PLACEHOLDERS
 #define BOOST_TEST_MODULE CCDB
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
@@ -24,22 +25,14 @@
 #include "CCDB/CCDBTimeStampUtils.h"
 #include <boost/test/unit_test.hpp>
 #include <filesystem>
-#include <cstdio>
-#include <cassert>
 #include <iostream>
-#include <cstdio>
-#include <curl/curl.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <TH1F.h>
 #include <chrono>
 #include <CommonUtils/StringUtils.h>
-#include <TMessage.h>
 #include <TStreamerInfo.h>
 #include <TGraph.h>
 #include <TTree.h>
 #include <TString.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #include <boost/property_tree/json_parser.hpp>
@@ -68,7 +61,11 @@ struct Fixture {
     cout << "ccdb url: " << ccdbUrl << endl;
     hostReachable = api.isHostReachable();
     cout << "Is host reachable ? --> " << hostReachable << endl;
-    basePath = string("Test/pid") + getpid() + "/";
+    char hostname[_POSIX_HOST_NAME_MAX];
+    gethostname(hostname, _POSIX_HOST_NAME_MAX);
+    basePath = string("Test/TestCcdbApi/") + hostname + "/pid" + getpid() + "/";
+    // Replace dashes by underscores to avoid problems in the creation of local directories
+    std::replace(basePath.begin(), basePath.end(), '-','_');
     cout << "Path we will use in this test suite : " + basePath << endl;
   }
   ~Fixture()
@@ -184,6 +181,7 @@ BOOST_AUTO_TEST_CASE(store_retrieve_TMemFile_templated_test, *utf::precondition(
   // std::filesystem does not yet provide boost::filesystem::unique_path() equivalent, and usin tmpnam generate a warning
   auto ph = o2::utils::Str::create_unique_path(std::filesystem::temp_directory_path().native());
   std::filesystem::create_directories(ph);
+  std::cout << "Creating snapshot at " << ph << "\n";
   f.api.snapshot(basePath, ph, o2::ccdb::getCurrentTimestamp());
   std::cout << "Creating snapshot at " << ph << "\n";
 
@@ -205,6 +203,21 @@ BOOST_AUTO_TEST_CASE(store_retrieve_TMemFile_templated_test, *utf::precondition(
   if (std::filesystem::exists(ph)) {
     std::filesystem::remove_all(ph);
   }
+}
+
+BOOST_AUTO_TEST_CASE(store_max_size_test, *utf::precondition(if_reachable()))
+{
+  test_fixture f;
+
+  // try to store a user defined class
+  // since we don't depend on anything, we are putting an object known to CCDB
+  o2::ccdb::IdPath path;
+  path.setPath("HelloWorld");
+
+  int result = f.api.storeAsTFileAny(&path, basePath + "CCDBPath", f.metadata); // ok
+  BOOST_CHECK_EQUAL(result, 0);
+  result = f.api.storeAsTFileAny(&path, basePath + "CCDBPath", f.metadata, -1, -1, 1 /* bytes */); // we know this will fail
+  BOOST_CHECK_EQUAL(result, -1);
 }
 
 /// A test verifying that the DB responds the correct result for given timestamps
@@ -369,8 +382,6 @@ BOOST_AUTO_TEST_CASE(list_test, *utf::precondition(if_reachable()))
 
   // more complex tree
   TH1F h1("object1", "object1", 100, 0, 99);
-  cout << "storing object 1 in Test" << endl;
-  f.api.storeAsTFile(&h1, "Test", f.metadata);
   cout << "storing object 2 in Test/Detector" << endl;
   f.api.storeAsTFile(&h1, basePath + "Detector", f.metadata);
   cout << "storing object 3 in Test/Detector" << endl;
@@ -478,4 +489,104 @@ BOOST_AUTO_TEST_CASE(TestRetrieveHeaders, *utf::precondition(if_reachable()))
     cout << i++ << " : " << h.first << " -> " << h.second << endl;
   }
   BOOST_CHECK_EQUAL(headers.size(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(TestUpdateMetadata, *utf::precondition(if_reachable()))
+{
+  test_fixture f;
+
+  // upload an object
+  TH1F h1("object1", "object1", 100, 0, 99);
+  cout << "storing object 1 in " << basePath << "Test" << endl;
+  map<string, string> metadata;
+  metadata["custom"] = "whatever";
+  metadata["id"] = "first";
+  f.api.storeAsTFile(&h1, basePath + "Test", metadata);
+
+  // retrieve the headers just to be sure
+  std::map<std::string, std::string> headers = f.api.retrieveHeaders(basePath + "Test", metadata);
+  BOOST_CHECK(headers.count("custom") > 0);
+  BOOST_CHECK(headers.at("custom") == "whatever");
+  string firstID = headers.at("ETag");
+  firstID.erase(std::remove(firstID.begin(), firstID.end(), '"'), firstID.end());
+
+  map<string, string> newMetadata;
+  newMetadata["custom"] = "somethingelse";
+
+  // update the metadata and check
+  f.api.updateMetadata(basePath + "Test", newMetadata, o2::ccdb::getCurrentTimestamp());
+  headers = f.api.retrieveHeaders(basePath + "Test", newMetadata);
+  BOOST_CHECK(headers.count("custom") > 0);
+  BOOST_CHECK(headers.at("custom") == "somethingelse");
+
+  // add a second object
+  cout << "storing object 2 in " << basePath << "Test" << endl;
+  metadata.clear();
+  metadata["custom"] = "whatever";
+  metadata["id"] = "second";
+  f.api.storeAsTFile(&h1, basePath + "Test", metadata);
+
+  // get id
+  cout << "get id" << endl;
+  headers = f.api.retrieveHeaders(basePath + "Test", metadata);
+  string secondID = headers.at("ETag");
+  secondID.erase(std::remove(secondID.begin(), secondID.end(), '"'), secondID.end());
+
+  // update the metadata by id
+  cout << "update the metadata by id" << endl;
+  newMetadata.clear();
+  newMetadata["custom"] = "first";
+  f.api.updateMetadata(basePath + "Test", newMetadata, o2::ccdb::getCurrentTimestamp(), firstID);
+  newMetadata.clear();
+  newMetadata["custom"] = "second";
+  f.api.updateMetadata(basePath + "Test", newMetadata, o2::ccdb::getCurrentTimestamp(), secondID);
+
+  // check
+  metadata.clear();
+  metadata["id"] = "first";
+  headers = f.api.retrieveHeaders(basePath + "Test", metadata);
+  BOOST_CHECK(headers.count("custom") > 0);
+  BOOST_CHECK(headers.at("custom") == "first");
+  metadata.clear();
+  metadata["id"] = "second";
+  headers = f.api.retrieveHeaders(basePath + "Test", metadata);
+  BOOST_CHECK(headers.count("custom") > 0);
+  BOOST_CHECK(headers.at("custom") == "second");
+}
+
+BOOST_AUTO_TEST_CASE(multi_host_test)
+{
+  CcdbApi api;
+  api.init("http://bogus-host.cern.ch,http://ccdb-test.cern.ch:8080");
+  std::map<std::string, std::string> metadata;
+  std::map<std::string, std::string> headers;
+  o2::pmr::vector<char> dst;
+  std::string url = "Analysis/ALICE3/Centrality";
+  api.loadFileToMemory(dst, url, metadata, 1645780010602, &headers, "", "", "", true);
+  BOOST_CHECK(dst.size() != 0);
+}
+
+BOOST_AUTO_TEST_CASE(vectored)
+{
+  CcdbApi api;
+  api.init("http://ccdb-test.cern.ch:8080");
+
+  int TEST_SAMPLE_SIZE = 5;
+  std::vector<o2::pmr::vector<char>> dests(TEST_SAMPLE_SIZE);
+  std::vector<std::map<std::string, std::string>> metadatas(TEST_SAMPLE_SIZE);
+  std::vector<std::map<std::string, std::string>> headers(TEST_SAMPLE_SIZE);
+
+  std::vector<CcdbApi::RequestContext> contexts;
+  for (int i = 0; i < TEST_SAMPLE_SIZE; i++) {
+    contexts.push_back(CcdbApi::RequestContext(dests.at(i), metadatas.at(i), headers.at(i)));
+    contexts.at(i).path = "Analysis/ALICE3/Centrality";
+    contexts.at(i).timestamp = 1645780010602;
+    contexts.at(i).considerSnapshot = true;
+  }
+
+  api.vectoredLoadFileToMemory(contexts);
+
+  for (auto context : contexts) {
+    BOOST_CHECK(context.dest.size() != 0);
+  }
 }

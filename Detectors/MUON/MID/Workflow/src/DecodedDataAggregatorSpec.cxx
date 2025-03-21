@@ -38,11 +38,10 @@ class DecodedDataAggregatorDeviceDPL
   void init(of::InitContext& ic)
   {
     auto stop = [this]() {
-      LOG(INFO) << "Capacities: ROFRecords: " << mAggregator.getROFRecords().capacity() << "  Data: " << mAggregator.getData().capacity();
-      double scaleFactor = 1.e6 / mNROFs;
-      LOG(INFO) << "Processing time / " << mNROFs << " ROFs: full: " << mTimer.count() * scaleFactor << "  aggregating: " << mTimerAlgo.count() * scaleFactor << " us";
+      double scaleFactor = (mNROFs == 0) ? 0. : 1.e6 / mNROFs;
+      LOG(info) << "Processing time / " << mNROFs << " ROFs: full: " << mTimer.count() * scaleFactor << "  aggregating: " << mTimerAlgo.count() * scaleFactor << " us";
     };
-    ic.services().get<of::CallbackService>().set(of::CallbackService::Id::Stop, stop);
+    ic.services().get<of::CallbackService>().set<of::CallbackService::Id::Stop>(stop);
   }
 
   void run(of::ProcessingContext& pc)
@@ -61,8 +60,8 @@ class DecodedDataAggregatorDeviceDPL
 
     for (o2::header::DataHeader::SubSpecificationType subSpec = 0; subSpec < 3; ++subSpec) {
       EventType evtType = static_cast<EventType>(subSpec);
-      pc.outputs().snapshot(of::Output{o2::header::gDataOriginMID, "DATA", subSpec, of::Lifetime::Timeframe}, mAggregator.getData(evtType));
-      pc.outputs().snapshot(of::Output{o2::header::gDataOriginMID, "DATAROF", subSpec, of::Lifetime::Timeframe}, mAggregator.getROFRecords(evtType));
+      pc.outputs().snapshot(of::Output{o2::header::gDataOriginMID, "DATA", subSpec}, mAggregator.getData(evtType));
+      pc.outputs().snapshot(of::Output{o2::header::gDataOriginMID, "DATAROF", subSpec}, mAggregator.getROFRecords(evtType));
     }
 
     mTimer += std::chrono::high_resolution_clock::now() - tStart;

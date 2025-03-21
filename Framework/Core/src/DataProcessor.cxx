@@ -9,24 +9,25 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 #include "Framework/DataProcessor.h"
+#include "Framework/DataSender.h"
+#include "Framework/DataProcessingStats.h"
 #include "Framework/MessageContext.h"
 #include "Framework/StringContext.h"
 #include "Framework/ArrowContext.h"
-#include "Framework/RawBufferContext.h"
 #include "Framework/TMessageSerializer.h"
 #include "Framework/ServiceRegistry.h"
-#include "FairMQResizableBuffer.h"
-#include "CommonUtils/BoostSerializer.h"
+#include "Framework/FairMQResizableBuffer.h"
+#include "Framework/FairMQDeviceProxy.h"
+#include "Framework/DeviceState.h"
 #include "Headers/DataHeader.h"
 #include "Headers/DataHeaderHelpers.h"
 
 #include <Monitoring/Monitoring.h>
-#include <fairmq/FairMQParts.h>
-#include <fairmq/FairMQDevice.h>
+#include <fairmq/Parts.h>
+#include <fairmq/Device.h>
 #include <arrow/io/memory.h>
 #include <arrow/ipc/writer.h>
 #include <cstddef>
-#include <unordered_map>
 
 using namespace o2::framework;
 using DataHeader = o2::header::DataHeader;
@@ -34,77 +35,91 @@ using DataHeader = o2::header::DataHeader;
 namespace o2::framework
 {
 
-void DataProcessor::doSend(FairMQDevice& device, FairMQParts&& parts, const char* channel, unsigned int index)
+void DataProcessor::doSend(DataSender& sender, MessageContext& context, ServiceRegistryRef services)
 {
-  device.Send(parts, channel, index);
-}
-
-void DataProcessor::doSend(FairMQDevice& device, MessageContext& context, ServiceRegistry&)
-{
-  std::unordered_map<std::string const*, FairMQParts> outputs;
+  auto& proxy = services.get<FairMQDeviceProxy>();
+  std::vector<fair::mq::Parts> outputsPerChannel;
+  outputsPerChannel.resize(proxy.getNumOutputChannels());
   auto contextMessages = context.getMessagesForSending();
   for (auto& message : contextMessages) {
     //     monitoringService.send({ message->parts.Size(), "outputs/total" });
-    FairMQParts parts = std::move(message->finalize());
+    fair::mq::Parts parts = message->finalize();
     assert(message->empty());
     assert(parts.Size() == 2);
     for (auto& part : parts) {
-      outputs[&(message->channel())].AddPart(std::move(part));
+      outputsPerChannel[proxy.getOutputChannelIndex((message->route())).value].AddPart(std::move(part));
     }
   }
-  for (auto& [channel, parts] : outputs) {
-    device.Send(parts, *channel, 0);
+  for (int ci = 0; ci < outputsPerChannel.size(); ++ci) {
+    auto& parts = outputsPerChannel[ci];
+    if (parts.Size() == 0) {
+      continue;
+    }
+    sender.send(parts, {ci});
   }
 }
 
-void DataProcessor::doSend(FairMQDevice& device, StringContext& context, ServiceRegistry&)
+void DataProcessor::doSend(DataSender& sender, StringContext& context, ServiceRegistryRef services)
 {
+  auto& proxy = services.get<FairMQDeviceProxy>();
   for (auto& messageRef : context) {
-    FairMQParts parts;
-    FairMQMessagePtr payload(device.NewMessage());
+    fair::mq::Parts parts;
+    fair::mq::MessagePtr payload(sender.create(messageRef.routeIndex));
     auto a = messageRef.payload.get();
     // Rebuild the message using the string as input. For now it involves a copy.
     payload->Rebuild(reinterpret_cast<void*>(const_cast<char*>(strdup(a->data()))), a->size(), nullptr, nullptr);
     const DataHeader* cdh = o2::header::get<DataHeader*>(messageRef.header->GetData());
     // sigh... See if we can avoid having it const by not
     // exposing it to the user in the first place.
-    DataHeader* dh = const_cast<DataHeader*>(cdh);
+    auto* dh = const_cast<DataHeader*>(cdh);
     dh->payloadSize = payload->GetSize();
     parts.AddPart(std::move(messageRef.header));
     parts.AddPart(std::move(payload));
-    device.Send(parts, messageRef.channel, 0);
+    sender.send(parts, proxy.getOutputChannelIndex(messageRef.routeIndex));
   }
 }
 
-void DataProcessor::doSend(FairMQDevice& device, ArrowContext& context, ServiceRegistry& registry)
+void DataProcessor::doSend(DataSender& sender, ArrowContext& context, ServiceRegistryRef registry)
 {
   using o2::monitoring::Metric;
   using o2::monitoring::Monitoring;
   using o2::monitoring::tags::Key;
   using o2::monitoring::tags::Value;
   auto& monitoring = registry.get<Monitoring>();
+  auto& stats = registry.get<DataProcessingStats>();
 
+  static const std::regex invalid_metric(" ");
+  auto& proxy = registry.get<FairMQDeviceProxy>();
   for (auto& messageRef : context) {
-    FairMQParts parts;
+    fair::mq::Parts parts;
     // Depending on how the arrow table is constructed, we finalize
     // the writing here.
     messageRef.finalize(messageRef.buffer);
 
-    std::unique_ptr<FairMQMessage> payload = messageRef.buffer->Finalise();
+    std::unique_ptr<fair::mq::Message> payload = messageRef.buffer->Finalise();
     // FIXME: for the moment we simply send empty bodies.
     const DataHeader* cdh = o2::header::get<DataHeader*>(messageRef.header->GetData());
     // sigh... See if we can avoid having it const by not
     // exposing it to the user in the first place.
-    DataHeader* dh = const_cast<DataHeader*>(cdh);
+    auto* dh = const_cast<DataHeader*>(cdh);
     dh->payloadSize = payload->GetSize();
     dh->serialization = o2::header::gSerializationMethodArrow;
-    monitoring.send(Metric{(uint64_t)payload->GetSize(), fmt::format("table-bytes-{}-{}-created", dh->dataOrigin.as<std::string>(), dh->dataDescription.as<std::string>())}.addTag(Key::Subsystem, Value::DPL));
-    LOGP(INFO, "Creating {}MB for table {}/{}.", payload->GetSize() / 1000000., dh->dataOrigin, dh->dataDescription);
+
+    auto origin = std::regex_replace(dh->dataOrigin.as<std::string>(), invalid_metric, "_");
+    auto description = std::regex_replace(dh->dataDescription.as<std::string>(), invalid_metric, "_");
+    uint64_t version = dh->subSpecification;
+    monitoring.send(Metric{(uint64_t)payload->GetSize(),
+                           fmt::format("table-bytes-{}-{}-{}-created",
+                                       origin,
+                                       description,
+                                       version)}
+                      .addTag(Key::Subsystem, Value::DPL));
+    LOGP(detail, "Creating {}MB for table {}/{}/{}.", payload->GetSize() / 1000000., dh->dataOrigin, dh->dataDescription, version);
     context.updateBytesSent(payload->GetSize());
     context.updateMessagesSent(1);
     parts.AddPart(std::move(messageRef.header));
     parts.AddPart(std::move(payload));
-    device.Send(parts, messageRef.channel, 0);
+    sender.send(parts, proxy.getOutputChannelIndex(messageRef.routeIndex));
   }
   static int64_t previousBytesSent = 0;
   auto disposeResources = [bs = context.bytesSent() - previousBytesSent](int taskId,
@@ -114,8 +129,7 @@ void DataProcessor::doSend(FairMQDevice& device, ArrowContext& context, ServiceR
     ComputingQuotaOffer disposed;
     disposed.sharedMemory = 0;
     int64_t bytesSent = bs;
-    for (size_t oi = 0; oi < offers.size(); oi++) {
-      auto& offer = offers[oi];
+    for (auto& offer : offers) {
       if (offer.user != taskId) {
         continue;
       }
@@ -129,32 +143,11 @@ void DataProcessor::doSend(FairMQDevice& device, ArrowContext& context, ServiceR
     }
     return accountDisposed(disposed, stats);
   };
-  registry.get<DeviceState>().offerConsumers.push_back(disposeResources);
+  registry.get<DeviceState>().offerConsumers.emplace_back(disposeResources);
   previousBytesSent = context.bytesSent();
-  monitoring.send(Metric{(uint64_t)context.bytesSent(), "arrow-bytes-created"}.addTag(Key::Subsystem, Value::DPL));
-  monitoring.send(Metric{(uint64_t)context.messagesCreated(), "arrow-messages-created"}.addTag(Key::Subsystem, Value::DPL));
-  monitoring.flushBuffer();
-}
-
-void DataProcessor::doSend(FairMQDevice& device, RawBufferContext& context, ServiceRegistry& registry)
-{
-  for (auto& messageRef : context) {
-    FairMQParts parts;
-    FairMQMessagePtr payload(device.NewMessage());
-    auto buffer = messageRef.serializeMsg().str();
-    // Rebuild the message using the serialized ostringstream as input. For now it involves a copy.
-    size_t size = buffer.length();
-    payload->Rebuild(size);
-    std::memcpy(payload->GetData(), buffer.c_str(), size);
-    const DataHeader* cdh = o2::header::get<DataHeader*>(messageRef.header->GetData());
-    // sigh... See if we can avoid having it const by not
-    // exposing it to the user in the first place.
-    DataHeader* dh = const_cast<DataHeader*>(cdh);
-    dh->payloadSize = size;
-    parts.AddPart(std::move(messageRef.header));
-    parts.AddPart(std::move(payload));
-    device.Send(parts, messageRef.channel, 0);
-  }
+  stats.updateStats({static_cast<short>(ProcessingStatsId::ARROW_BYTES_CREATED), DataProcessingStats::Op::Set, static_cast<int64_t>(context.bytesSent())});
+  stats.updateStats({static_cast<short>(ProcessingStatsId::ARROW_MESSAGES_CREATED), DataProcessingStats::Op::Set, static_cast<int64_t>(context.messagesCreated())});
+  stats.processCommandQueue();
 }
 
 } // namespace o2::framework

@@ -9,12 +9,12 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 //
-//file RawReaderFIT.h class  for RAW data reading
+// file RawReaderFIT.h class  for RAW data reading
 //
 // Artur.Furs
 // afurs@cern.ch
 //
-//Main purpuse is to decode FIT data blocks and push them to DigitBlockFIT for proccess
+// Main purpuse is to decode FIT data blocks and push them to DigitBlockFIT for proccess
 #ifndef ALICEO2_FIT_RAWREADERFIT_H_
 #define ALICEO2_FIT_RAWREADERFIT_H_
 #include <iostream>
@@ -44,6 +44,7 @@ class RawReaderFIT : public RawReaderType
   ~RawReaderFIT() = default;
   typedef RawReaderType RawReader_t;
   typedef typename RawReader_t::DigitBlockFIT_t DigitBlockFIT_t;
+  typedef typename RawReader_t::RawDataMetric_t RawDataMetric_t;
   typedef typename DigitBlockFIT_t::LookupTable_t LookupTable_t;
   typedef typename DigitBlockFIT_t::Digit_t Digit_t;
   typedef typename DigitBlockFIT_t::SubDigit_t SubDigitTmp_t;
@@ -54,16 +55,24 @@ class RawReaderFIT : public RawReaderType
   typedef std::make_index_sequence<std::tuple_size_v<typename DigitBlockFIT_t::TupleVecDigitObjs_t>> IndexesAllDigits;
   static constexpr bool sSubDigitExists = !std::is_same<SubDigitTmp_t, std::tuple<>>::value;
   static constexpr bool sSingleSubDigitExists = !std::is_same<SingleSubDigitTmp_t, std::tuple<>>::value;
-  //Wrapping by std::tuple
+  // Wrapping by std::tuple
   typedef typename std::conditional<DigitBlockFIT_t::sNSubDigits != 1, SubDigitTmp_t, std::tuple<SubDigitTmp_t>>::type SubDigit_t;
   typedef typename std::conditional<DigitBlockFIT_t::sNSingleSubDigits != 1, SingleSubDigitTmp_t, std::tuple<SingleSubDigitTmp_t>>::type SingleSubDigit_t;
   static constexpr bool sUseTrgInput = useTrgInput;
   o2::header::DataOrigin mDataOrigin;
   std::vector<Digit_t> mVecDigit;
   std::vector<DetTrigInput_t> mVecTrgInput;
-  SubDigit_t mVecSubDigit;             //tuple of vectors
-  SingleSubDigit_t mVecSingleSubDigit; //tuple of vectors
+  std::vector<RawDataMetric> mVecRawDataMetric;
+  SubDigit_t mVecSubDigit;             // tuple of vectors
+  SingleSubDigit_t mVecSingleSubDigit; // tuple of vectors
+  bool mEnableEmptyTFprotection{false};
   bool mDumpData;
+  void dumpRawDataMetrics() const
+  {
+    for (const auto& entry : mVecRawDataMetric) {
+      entry.print();
+    }
+  }
   void reserveVecDPL(std::size_t nDigits, std::size_t nSubDigits)
   {
     mVecDigit.reserve(nDigits);
@@ -77,7 +86,7 @@ class RawReaderFIT : public RawReaderType
   template <typename T>
   auto reserveSubDigits1(std::size_t nElements) -> std::enable_if_t<(T::sNSubDigits < 1)>
   {
-  } //empty
+  } // empty
   void clear()
   {
     mVecDigit.clear();
@@ -96,6 +105,7 @@ class RawReaderFIT : public RawReaderType
       },
                  mVecSingleSubDigit);
     }
+    mVecRawDataMetric.clear();
   }
   template <std::size_t... IsubDigits, std::size_t... IsingleSubDigits>
   auto callGetDigit(std::index_sequence<IsubDigits...>, std::index_sequence<IsingleSubDigits...>)
@@ -127,10 +137,11 @@ class RawReaderFIT : public RawReaderType
   void accumulateDigits()
   {
     callGetDigit(IndexesSubDigit{}, IndexesSingleSubDigit{});
-    LOG(DEBUG) << "Number of Digits: " << mVecDigit.size();
+    LOG(debug) << "Number of Digits: " << mVecDigit.size();
     if (mDumpData) {
       callPrint(IndexesSubDigit{}, IndexesSingleSubDigit{});
     }
+    RawReader_t::getMetrics(mVecRawDataMetric);
   }
   void configureOutputSpec(std::vector<o2::framework::OutputSpec>& outputSpec) const
   {
@@ -150,31 +161,43 @@ class RawReaderFIT : public RawReaderType
     if constexpr (sUseTrgInput) {
       outputSpec.emplace_back(mDataOrigin, DetTrigInput_t::sChannelNameDPL, 0, o2::framework::Lifetime::Timeframe);
     }
+    outputSpec.emplace_back(mDataOrigin, "RawDataMetric", 0, o2::framework::Lifetime::Timeframe);
   }
   void makeSnapshot(o2::framework::ProcessingContext& pc) const
   {
-    pc.outputs().snapshot(o2::framework::Output{mDataOrigin, Digit_t::sChannelNameDPL, 0, o2::framework::Lifetime::Timeframe}, mVecDigit);
+    pc.outputs().snapshot(o2::framework::Output{mDataOrigin, Digit_t::sChannelNameDPL, 0}, mVecDigit);
     if constexpr (sSubDigitExists) {
       std::apply([&](const auto&... subDigit) {
-        ((pc.outputs().snapshot(o2::framework::Output{mDataOrigin, (std::decay<decltype(subDigit)>::type::value_type::sChannelNameDPL), 0, o2::framework::Lifetime::Timeframe}, subDigit)), ...);
+        ((pc.outputs().snapshot(o2::framework::Output{mDataOrigin, (std::decay<decltype(subDigit)>::type::value_type::sChannelNameDPL), 0}, subDigit)), ...);
       },
                  mVecSubDigit);
     }
     if constexpr (sSingleSubDigitExists) {
       std::apply([&](const auto&... singleSubDigit) {
-        ((pc.outputs().snapshot(o2::framework::Output{mDataOrigin, (std::decay<decltype(singleSubDigit)>::type::value_type::sChannelNameDPL), 0, o2::framework::Lifetime::Timeframe}, singleSubDigit)), ...);
+        ((pc.outputs().snapshot(o2::framework::Output{mDataOrigin, (std::decay<decltype(singleSubDigit)>::type::value_type::sChannelNameDPL), 0}, singleSubDigit)), ...);
       },
                  mVecSingleSubDigit);
     }
     if constexpr (sUseTrgInput) {
-      pc.outputs().snapshot(o2::framework::Output{mDataOrigin, DetTrigInput_t::sChannelNameDPL, 0, o2::framework::Lifetime::Timeframe}, mVecTrgInput);
+      pc.outputs().snapshot(o2::framework::Output{mDataOrigin, DetTrigInput_t::sChannelNameDPL, 0}, mVecTrgInput);
     }
+    pc.outputs().snapshot(o2::framework::Output{mDataOrigin, "RawDataMetric", 0}, mVecRawDataMetric);
   }
   template <typename VecDigitType>
   auto& getRefVec(o2::framework::ProcessingContext& pc)
   {
-    auto& refVec = pc.outputs().make<VecDigitType>(o2::framework::Output{mDataOrigin, VecDigitType::value_type::sChannelNameDPL, 0, o2::framework::Lifetime::Timeframe});
+    auto& refVec = pc.outputs().make<VecDigitType>(o2::framework::Output{mDataOrigin, VecDigitType::value_type::sChannelNameDPL, 0});
     return refVec;
+  }
+  void enableEmptyTFprotection()
+  {
+    mEnableEmptyTFprotection = true;
+  }
+  void emptyTFprotection()
+  {
+    if (mEnableEmptyTFprotection && mVecDigit.size() == 0) {
+      std::get<0>(mVecSubDigit).emplace_back();
+    }
   }
 };
 

@@ -13,8 +13,9 @@
 // Analyses kinematics and track references of a kinematics file
 
 #include "SimulationDataFormat/MCTrack.h"
+#include "SimulationDataFormat/MCUtils.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 #include "SimulationDataFormat/TrackReference.h"
 #include "Steer/MCKinematicsReader.h"
 #include "TFile.h"
@@ -23,8 +24,8 @@
 #undef NDEBUG
 #endif
 #include <cassert>
-#include "FairLogger.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include <fairlogger/Logger.h>
+#include "DetectorsCommonDataFormats/DetectorNameConf.h"
 #include "ITSMFTSimulation/Hit.h"
 #include <unordered_map>
 
@@ -32,10 +33,10 @@ int main(int argc, char** argv)
 {
   const char* nameprefix = argv[1];
 
-  FairLogger::GetLogger()->SetLogScreenLevel("DEBUG");
+  fair::Logger::SetConsoleSeverity("DEBUG");
   TFile f(o2::base::NameConf::getMCKinematicsFileName(nameprefix).c_str());
 
-  LOG(DEBUG) << "Checking input file :" << f.GetPath();
+  LOG(debug) << "Checking input file :" << f.GetPath();
 
   std::vector<o2::MCTrack>* mctracks = nullptr;
   auto tr = (TTree*)f.Get("o2sim");
@@ -53,7 +54,7 @@ int main(int argc, char** argv)
   o2::steer::MCKinematicsReader mcreader(nameprefix, o2::steer::MCKinematicsReader::Mode::kMCKine);
 
   // when present we also read some hits for ITS to test consistency of trackID assignments
-  TFile hitf(o2::base::NameConf::getHitsFileName(o2::detectors::DetID::ITS, nameprefix).c_str());
+  TFile hitf(o2::base::DetectorNameConf::getHitsFileName(o2::detectors::DetID::ITS, nameprefix).c_str());
   auto hittr = (TTree*)hitf.Get("o2sim");
   auto hitbr = hittr ? hittr->GetBranch("ITSHit") : nullptr;
   std::vector<o2::itsmft::Hit>* hits = nullptr;
@@ -64,13 +65,13 @@ int main(int argc, char** argv)
   for (int eventID = 0; eventID < mcbr->GetEntries(); ++eventID) {
     mcbr->GetEntry(eventID);
     refbr->GetEntry(eventID);
-    LOG(DEBUG) << "-- Entry --" << eventID;
-    LOG(DEBUG) << "Have " << mctracks->size() << " tracks";
+    LOG(debug) << "-- Entry --" << eventID;
+    LOG(debug) << "Have " << mctracks->size() << " tracks";
 
     std::unordered_map<int, bool> trackidsinITS_fromhits;
     if (hitbr) {
       hitbr->GetEntry(eventID);
-      LOG(DEBUG) << "Have " << hits->size() << " hits";
+      LOG(debug) << "Have " << hits->size() << " hits";
 
       // check that trackIDs from the hits are within range
       int maxid = 0;
@@ -88,17 +89,41 @@ int main(int argc, char** argv)
     std::vector<int> trackidsinTPC;
     std::vector<int> trackidsinITS;
 
+    // fetch the encoding of DetIDs to bits for the hit properties (can be fetched from any MCEventHeader)
+    auto& mcEventHeader = mcreader.getMCEventHeader(0, 0);
+
+    int primaries = 0;
+    int physicalprimaries = 0;
+    int secondaries = 0;
     for (auto& t : *mctracks) {
-      // check that mother indices are reasonable
-      // TODO: this seems currently broken with pythia8pp
-      // assert(ti > t.getMotherTrackId());
-      if (t.leftTrace(o2::detectors::DetID::TPC)) {
+      // perform checks on the mass
+      if (t.GetMass() < 0) {
+        LOG(info) << "Mass not found for PDG " << t.GetPdgCode();
+      }
+
+      if (t.isSecondary()) {
+        // check that mother indices are monotonic
+        // for primaries, this may be different (for instance with Pythia8)
+        assert(ti > t.getMotherTrackId());
+      }
+
+      if (t.leftTrace(o2::detectors::DetID::TPC, mcEventHeader.getDetId2HitBitLUT())) {
         trackidsinTPC.emplace_back(ti);
       }
-      if (t.leftTrace(o2::detectors::DetID::ITS)) {
+      if (t.leftTrace(o2::detectors::DetID::ITS, mcEventHeader.getDetId2HitBitLUT())) {
         trackidsinITS.emplace_back(ti);
       }
-      LOG(DEBUG) << " track " << ti << "\t" << t.getMotherTrackId() << " hits " << t.hasHits();
+
+      bool physicalPrim = o2::mcutils::MCTrackNavigator::isPhysicalPrimary(t, *mctracks);
+      LOG(debug) << " track " << ti << "\t" << t.getMotherTrackId() << " hits " << t.hasHits() << " isPhysicalPrimary " << physicalPrim;
+      if (t.isPrimary()) {
+        primaries++;
+      } else {
+        secondaries++;
+      }
+      if (physicalPrim) {
+        physicalprimaries++;
+      }
       ti++;
     }
 
@@ -109,22 +134,23 @@ int main(int argc, char** argv)
       }
     }
 
-    LOG(DEBUG) << "Have " << trackidsinTPC.size() << " tracks with hits in TPC";
-    LOG(DEBUG) << "Have " << trackrefs->size() << " track refs";
+    LOG(debug) << "Have " << trackidsinTPC.size() << " tracks with hits in TPC";
+    LOG(debug) << "Have " << trackrefs->size() << " track refs";
+    LOG(info) << "Have " << primaries << " primaries and " << physicalprimaries << " physical primaries";
 
     // check correct working of MCKinematicsReader
     bool havereferences = trackrefs->size();
     if (havereferences) {
       for (auto& trackID : trackidsinTPC) {
-        auto trackrefs = mcreader.getTrackRefs(eventID, trackID);
-        assert(trackrefs.size() > 0);
-        LOG(DEBUG) << " Track " << trackID << " has " << trackrefs.size() << " TrackRefs";
-        for (auto& ref : trackrefs) {
+        auto tpc_trackrefs = mcreader.getTrackRefs(eventID, trackID);
+        LOG(debug) << " Track " << trackID << " has " << tpc_trackrefs.size() << " TrackRefs";
+        assert(tpc_trackrefs.size() > 0);
+        for (auto& ref : tpc_trackrefs) {
           assert(ref.getTrackID() == trackID);
         }
       }
     }
   }
-  LOG(INFO) << "STACK TEST SUCCESSFULL\n";
+  LOG(info) << "STACK TEST SUCCESSFULL\n";
   return 0;
 }

@@ -10,18 +10,20 @@
 // or submit itself to any jurisdiction.
 
 #include "DataFormatsTRD/Tracklet64.h"
-#include "DataFormatsTRD/Constants.h"
-
+#include "DataFormatsTRD/HelperMethods.h"
 #include "fairlogger/Logger.h"
 #include <iostream>
 
 namespace o2
 {
-
 namespace trd
 {
 
-using namespace constants;
+void Tracklet64::print() const
+{
+  LOGF(info, "%02i_%i_%i, ROB(%i), MCM(%i), row(%i), col(%i), position(%i), slope(%i), pid(%i), q0(%i), q1(%i), q2(%i). Format(%i)",
+       HelperMethods::getSector(getDetector()), HelperMethods::getStack(getDetector()), HelperMethods::getLayer(getDetector()), getROB(), getMCM(), getPadRow(), getPadCol(), getPosition(), getSlope(), getPID(), getQ0(), getQ1(), getQ2(), getFormat());
+}
 
 #ifndef GPUCA_GPUCODE_DEVICE
 void Tracklet64::printStream(std::ostream& stream) const
@@ -38,6 +40,16 @@ std::ostream& operator<<(std::ostream& stream, const Tracklet64& trg)
   trg.printStream(stream);
   return stream;
 }
+
+bool operator<(const Tracklet64& lhs, const Tracklet64& rhs)
+{
+  return (lhs.getDetector() < rhs.getDetector()) ||
+         (lhs.getDetector() == rhs.getDetector() && lhs.getROB() < rhs.getROB()) ||
+         (lhs.getDetector() == rhs.getDetector() && lhs.getROB() == rhs.getROB() && lhs.getMCM() < rhs.getMCM()) ||
+         (lhs.getDetector() == rhs.getDetector() && lhs.getROB() == rhs.getROB() && lhs.getMCM() == rhs.getMCM() && lhs.getPadRow() < rhs.getPadRow()) ||
+         (lhs.getDetector() == rhs.getDetector() && lhs.getROB() == rhs.getROB() && lhs.getMCM() == rhs.getMCM() && lhs.getPadRow() == rhs.getPadRow() && lhs.getPadCol() < rhs.getPadCol());
+}
+
 #endif // GPUCA_GPUCODE_DEVICE
 
 } // namespace trd

@@ -44,7 +44,7 @@ DataProcessorSpec getTrackWriterSpec(bool useMC)
     *tracksSize = tracks.size();
   };
   auto logger = [tracksSize](std::vector<o2::itsmft::ROFRecord> const& rofs) {
-    LOG(INFO) << "ITSTrackWriter pulled " << *tracksSize << " tracks, in " << rofs.size() << " RO frames";
+    LOG(info) << "ITSTrackWriter pulled " << *tracksSize << " tracks, in " << rofs.size() << " RO frames";
   };
   return MakeRootTreeWriterSpec("its-track-writer",
                                 "o2trac_its.root",
@@ -65,10 +65,17 @@ DataProcessorSpec getTrackWriterSpec(bool useMC)
                                                              "ITSTrackMCTruth",
                                                              (useMC ? 1 : 0), // one branch if mc labels enabled
                                                              ""},
+                                BranchDefinition<LabelsType>{InputSpec{"labelsVertices", "ITS", "VERTICESMCTR", 0},
+                                                             "ITSVertexMCTruth",
+                                                             (useMC ? 1 : 0), // one branch if mc labels enabled
+                                                             ""},
                                 BranchDefinition<ROFRecLblT>{InputSpec{"MC2ROframes", "ITS", "ITSTrackMC2ROF", 0},
                                                              "ITSTracksMC2ROF",
                                                              (useMC ? 1 : 0), // one branch if mc labels enabled
-                                                             ""})();
+                                                             ""},
+                                BranchDefinition<std::vector<float>>{InputSpec{"purityVertices", "ITS", "VERTICESMCPUR", 0},
+                                                                     "ITSVertexMCPurity", (useMC ? 1 : 0), // one branch if mc labels enabled
+                                                                     ""})();
 }
 
 } // namespace its

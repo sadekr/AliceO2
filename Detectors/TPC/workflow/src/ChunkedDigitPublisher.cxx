@@ -19,6 +19,8 @@
 #include "Framework/DataAllocator.h"
 #include "Framework/ControlService.h"
 #include "DataFormatsTPC/Digit.h"
+#include "CommonUtils/ConfigurableParam.h"
+#include "DetectorsRaw/HBFUtilsInitializer.h"
 #include "TPCSimulation/CommonMode.h"
 #include "DetectorsBase/Detector.h"
 #include <SimulationDataFormat/MCCompLabel.h>
@@ -34,6 +36,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <numeric>
 #include <TROOT.h>
 #ifdef NDEBUG
 #undef NDEBUG
@@ -48,6 +51,11 @@ using SubSpecificationType = o2::framework::DataAllocator::SubSpecificationType;
 
 using namespace o2::framework;
 using namespace o2::header;
+
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
 
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
@@ -65,6 +73,8 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
 
   // option to disable MC truth
   workflowOptions.push_back(ConfigParamSpec{"disable-mc", o2::framework::VariantType::Bool, false, {"disable  mc-truth"}});
+  workflowOptions.push_back(ConfigParamSpec{"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings ..."}});
+  o2::raw::HBFUtilsInitializer::addConfigOption(workflowOptions);
 }
 
 // ------------------------------------------------------------------
@@ -97,12 +107,11 @@ void copyHelper<MCTruthContainer>(MCTruthContainer const& origin, MCTruthContain
 template <typename T>
 auto makePublishBuffer(framework::ProcessingContext& pc, int sector, uint64_t activeSectors)
 {
-  LOG(INFO) << "PUBLISHING SECTOR " << sector;
+  LOG(info) << "PUBLISHING SECTOR " << sector;
 
   o2::tpc::TPCSectorHeader header{sector};
   header.activeSectors = activeSectors;
-  return &pc.outputs().make<T>(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(sector), Lifetime::Timeframe,
-                                      header});
+  return &pc.outputs().make<T>(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(sector), header});
 }
 
 template <>
@@ -121,14 +130,14 @@ template <>
 void publishBuffer<MCTruthContainer>(framework::ProcessingContext& pc, int sector, uint64_t activeSectors, MCTruthContainer* accum)
 {
 
-  LOG(INFO) << "PUBLISHING MC LABELS " << accum->getNElements();
+  LOG(info) << "PUBLISHING MC LABELS " << accum->getNElements();
   o2::tpc::TPCSectorHeader header{sector};
   header.activeSectors = activeSectors;
   using LabelType = std::decay_t<decltype(pc.outputs().make<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(Output{"", "", 0}))>;
   LabelType* sharedlabels;
 #pragma omp critical
   sharedlabels = &pc.outputs().make<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(
-    Output{"TPC", "DIGITSMCTR", static_cast<SubSpecificationType>(sector), Lifetime::Timeframe, header});
+    Output{"TPC", "DIGITSMCTR", static_cast<SubSpecificationType>(sector), header});
 
   accum->flatten_to(*sharedlabels);
   delete accum;
@@ -190,12 +199,12 @@ void publishMergedTimeframes(std::vector<int> const& lanes, std::vector<int> con
   auto digitfilelist = o2::utils::listFiles("tpc_driftime_digits_lane.*.root$");
 #ifdef WITH_OPENMP
   omp_set_num_threads(std::min(lanes.size(), digitfilelist.size()));
-  LOG(INFO) << "Running digit publisher with OpenMP enabled";
+  LOG(info) << "Running digit publisher with OpenMP enabled";
 #pragma omp parallel for schedule(dynamic)
 #endif
   for (size_t fi = 0; fi < digitfilelist.size(); ++fi) {
     auto& filename = digitfilelist[fi];
-    LOG(DEBUG) << "MERGING CHUNKED DIGITS FROM FILE " << filename;
+    LOG(debug) << "MERGING CHUNKED DIGITS FROM FILE " << filename;
     auto originfile = new TFile(filename.c_str(), "OPEN");
     assert(originfile);
 
@@ -220,7 +229,7 @@ class Task
 
   void run(framework::ProcessingContext& pc)
   {
-    LOG(INFO) << "Preparing digits (from digit chunks) for reconstruction";
+    LOG(info) << "Preparing digits (from digit chunks) for reconstruction";
 
     TStopwatch w;
     w.Start();
@@ -229,7 +238,7 @@ class Task
     pc.services().get<ControlService>().endOfStream();
     pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
 
-    LOG(INFO) << "DIGIT PUBLISHING TOOK " << w.RealTime();
+    LOG(info) << "DIGIT PUBLISHING TOOK " << w.RealTime();
     return;
   }
 
@@ -274,6 +283,8 @@ DataProcessorSpec getSpec(std::vector<int> const& laneConfiguration, std::vector
 WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
 {
   WorkflowSpec specs;
+  o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
+
   auto numlanes = configcontext.options().get<int>("tpc-lanes");
   bool mctruth = !configcontext.options().get<bool>("disable-mc");
   auto tpcsectors = o2::RangeTokenizer::tokenize<int>(configcontext.options().get<std::string>("tpc-sectors"));
@@ -281,5 +292,8 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
   std::vector<int> lanes(numlanes);
   std::iota(lanes.begin(), lanes.end(), 0);
   specs.emplace_back(o2::tpc::getSpec(lanes, tpcsectors, mctruth));
+
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
+  o2::raw::HBFUtilsInitializer hbfIni(configcontext, specs);
   return specs;
 }

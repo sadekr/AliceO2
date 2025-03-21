@@ -12,6 +12,7 @@
 #define FRAMEWORK_INPUTROUTE_H
 
 #include "Framework/ExpirationHandler.h"
+#include "Framework/ServiceRegistryRef.h"
 #include "Framework/InputSpec.h"
 #include <cstddef>
 #include <string>
@@ -27,9 +28,10 @@ struct DeviceState;
 class ConfigParamRegistry;
 
 struct RouteConfigurator {
-  using CreationConfigurator = std::function<ExpirationHandler::Creator(DeviceState&, ServiceRegistry&, ConfigParamRegistry const&)>;
+  using CreationConfigurator = std::function<ExpirationHandler::Creator(DeviceState&, ServiceRegistryRef, ConfigParamRegistry const&)>;
   using DanglingConfigurator = std::function<ExpirationHandler::Checker(DeviceState&, ConfigParamRegistry const&)>;
   using ExpirationConfigurator = std::function<ExpirationHandler::Handler(DeviceState&, ConfigParamRegistry const&)>;
+  std::string name = "unknown";
 
   CreationConfigurator creatorConfigurator = nullptr;
   DanglingConfigurator danglingConfigurator = nullptr;
@@ -53,7 +55,7 @@ struct InputRoute {
   size_t inputSpecIndex;
   std::string sourceChannel;
   size_t timeslice;
-  std::optional<RouteConfigurator> configurator;
+  std::optional<RouteConfigurator> configurator = std::nullopt;
 };
 
 } // namespace o2::framework

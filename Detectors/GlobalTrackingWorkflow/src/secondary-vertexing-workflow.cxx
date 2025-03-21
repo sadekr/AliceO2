@@ -11,24 +11,40 @@
 
 #include "GlobalTrackingWorkflow/SecondaryVertexingSpec.h"
 #include "GlobalTrackingWorkflow/SecondaryVertexWriterSpec.h"
+#include "GlobalTrackingWorkflow/StrangenessTrackingWriterSpec.h"
 #include "GlobalTrackingWorkflowReaders/TrackTPCITSReaderSpec.h"
 #include "GlobalTrackingWorkflowReaders/PrimaryVertexReaderSpec.h"
 #include "GlobalTrackingWorkflowHelpers/InputHelper.h"
 #include "ITSWorkflow/TrackReaderSpec.h"
 #include "TPCReaderWorkflow/TrackReaderSpec.h"
+#include "TPCWorkflow/TPCScalerSpec.h"
 #include "TOFWorkflowIO/TOFMatchedReaderSpec.h"
 #include "TOFWorkflowIO/ClusterReaderSpec.h"
 #include "ReconstructionDataFormats/GlobalTrackID.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
 #include "Framework/CompletionPolicy.h"
 #include "Framework/ConfigParamSpec.h"
+#include "Framework/CompletionPolicyHelpers.h"
+#include "DetectorsBase/DPLWorkflowUtils.h"
+#include "TPCCalibration/CorrectionMapsLoader.h"
 
 using namespace o2::framework;
 using GID = o2::dataformats::GlobalTrackID;
 using DetID = o2::detectors::DetID;
 // ------------------------------------------------------------------
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
+
+void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+{
+  // ordered policies for the writers
+  policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*secondary-vertex-writer.*"));
+}
 
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
@@ -37,12 +53,17 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
   std::vector<o2::framework::ConfigParamSpec> options{
     {"disable-root-input", o2::framework::VariantType::Bool, false, {"disable root-files input reader"}},
     {"disable-root-output", o2::framework::VariantType::Bool, false, {"disable root-files output writer"}},
+    {"disable-mc", o2::framework::VariantType::Bool, false, {"disable MC (relevant for strangeness tracker only))"}},
     {"vertexing-sources", VariantType::String, std::string{GID::ALL}, {"comma-separated list of sources to use in vertexing"}},
     {"disable-cascade-finder", o2::framework::VariantType::Bool, false, {"do not run cascade finder"}},
-    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings ..."}}};
-
+    {"disable-3body-finder", o2::framework::VariantType::Bool, false, {"do not run 3 body finder"}},
+    {"disable-strangeness-tracker", o2::framework::VariantType::Bool, false, {"do not run strangeness tracker"}},
+    {"disable-ccdb-params", o2::framework::VariantType::Bool, false, {"do not load the svertexer parameters from the ccdb"}},
+    {"use-full-geometry", o2::framework::VariantType::Bool, false, {"use full geometry instead of the light-weight ITS part"}},
+    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings ..."}},
+    {"combine-source-devices", o2::framework::VariantType::Bool, false, {"merge DPL source devices"}}};
+  o2::tpc::CorrectionMapsLoader::addGlobalOptions(options);
   o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
   std::swap(workflowOptions, options);
 }
 
@@ -52,32 +73,66 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
 
 WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
 {
-  GID::mask_t allowedSources = GID::getSourcesMask("ITS,ITS-TPC,TPC-TRD,TPC-TOF,ITS-TPC-TRD,ITS-TPC-TOF");
+  GID::mask_t allowedSources = GID::getSourcesMask("ITS,TPC,ITS-TPC,TPC-TOF,TPC-TRD,ITS-TPC-TRD,ITS-TPC-TOF,TPC-TRD-TOF,ITS-TPC-TRD-TOF");
 
   // Update the (declared) parameters if changed from the command line
   o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
   // write the configuration used for the workflow
   o2::conf::ConfigurableParam::writeINI("o2secondary-vertexing-workflow_configuration.ini");
-  bool useMC = false;
+  bool useMC = !configcontext.options().get<bool>("disable-mc");
   auto disableRootOut = configcontext.options().get<bool>("disable-root-output");
+  auto enableCCDBParams = !configcontext.options().get<bool>("disable-ccdb-params");
   auto enableCasc = !configcontext.options().get<bool>("disable-cascade-finder");
-
+  auto enable3body = !configcontext.options().get<bool>("disable-3body-finder");
+  auto enableStrTr = !configcontext.options().get<bool>("disable-strangeness-tracker");
+  auto useGeom = configcontext.options().get<bool>("use-full-geometry");
+  auto sclOpt = o2::tpc::CorrectionMapsLoader::parseGlobalOptions(configcontext.options());
   GID::mask_t src = allowedSources & GID::getSourcesMask(configcontext.options().get<std::string>("vertexing-sources"));
-  GID::mask_t dummy, srcClus = GID::includesDet(DetID::TOF, src) ? GID::getSourceMask(GID::TOF) : dummy;
-
+  GID::mask_t dummy, srcClus = GID::includesDet(DetID::TOF, src) ? GID::getSourceMask(GID::TOF) : dummy; // eventually, TPC clusters will be needed for refit
+  if (enableStrTr) {
+    srcClus |= GID::getSourceMask(GID::ITS);
+  }
+  if (src[GID::TPC]) {
+    srcClus |= GID::getSourceMask(GID::TPC);
+  }
+  if (sclOpt.requestCTPLumi) {
+    src = src | GID::getSourcesMask("CTP");
+  }
   WorkflowSpec specs;
-
-  specs.emplace_back(o2::vertexing::getSecondaryVertexingSpec(src, enableCasc));
+  if (sclOpt.needTPCScalersWorkflow() && !configcontext.options().get<bool>("disable-root-input")) {
+    specs.emplace_back(o2::tpc::getTPCScalerSpec(sclOpt.lumiType == 2, sclOpt.enableMShapeCorrection));
+  }
+  specs.emplace_back(o2::vertexing::getSecondaryVertexingSpec(src, enableCasc, enable3body, enableStrTr, enableCCDBParams, useMC, useGeom, sclOpt));
 
   // only TOF clusters are needed if TOF is involved, no clusters MC needed
-  o2::globaltracking::InputHelper::addInputSpecs(configcontext, specs, srcClus, src, src, useMC, srcClus);
-  o2::globaltracking::InputHelper::addInputSpecsPVertex(configcontext, specs, useMC); // P-vertex is always needed
+  WorkflowSpec inputspecs;
+  o2::globaltracking::InputHelper::addInputSpecs(configcontext, inputspecs, srcClus, src, src, useMC, srcClus);
+  o2::globaltracking::InputHelper::addInputSpecsPVertex(configcontext, inputspecs, useMC); // P-vertex is always needed
+
+  if (configcontext.options().get<bool>("combine-source-devices")) {
+    std::vector<DataProcessorSpec> unmerged;
+    specs.push_back(specCombiner("SV-Input-Reader", inputspecs, unmerged));
+    if (unmerged.size() > 0) {
+      // LOG(fatal) << "unexpected DPL merge error";
+      for (auto& s : unmerged) {
+        specs.push_back(s);
+        LOG(info) << " adding unmerged spec " << s.name;
+      }
+    }
+  } else {
+    for (auto& s : inputspecs) {
+      specs.push_back(s);
+    }
+  }
 
   if (!disableRootOut) {
     specs.emplace_back(o2::vertexing::getSecondaryVertexWriterSpec());
+    if (enableStrTr) {
+      specs.emplace_back(o2::strangeness_tracking::getStrangenessTrackingWriterSpec(useMC));
+    }
   }
 
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(configcontext, specs);
 
   return std::move(specs);

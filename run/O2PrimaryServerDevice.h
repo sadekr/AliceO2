@@ -14,22 +14,25 @@
 #ifndef O2_DEVICES_PRIMSERVDEVICE_H_
 #define O2_DEVICES_PRIMSERVDEVICE_H_
 
-#include <FairMQDevice.h>
-#include <FairMQTransportFactory.h>
+#include <fairmq/Device.h>
+#include <fairmq/TransportFactory.h>
 #include <FairPrimaryGenerator.h>
 #include <Generators/GeneratorFactory.h>
-#include <FairMQMessage.h>
-#include <SimulationDataFormat/Stack.h>
+#include <fairmq/Message.h>
+#include <DetectorsBase/Stack.h>
 #include <SimulationDataFormat/MCEventHeader.h>
+#include <SimulationDataFormat/DigitizationContext.h>
 #include <TMessage.h>
 #include <TClass.h>
 #include <SimulationDataFormat/PrimaryChunk.h>
 #include <Generators/GeneratorFromFile.h>
 #include <Generators/PrimaryGenerator.h>
+#include <Generators/Generator.h>
 #include <SimConfig/SimConfig.h>
 #include <CommonUtils/ConfigurableParam.h>
 #include <CommonUtils/RngHelper.h>
-#include "Field/MagneticField.h"
+#include <DetectorsBase/SimFieldUtils.h>
+#include <Field/MagneticField.h>
 #include <TGeoGlobalMagField.h>
 #include <typeinfo>
 #include <thread>
@@ -41,17 +44,25 @@
 #include "PrimaryServerState.h"
 #include "SimPublishChannelHelper.h"
 #include <chrono>
+#include <CCDB/BasicCCDBManager.h>
+#include <TRandom3.h>
 
 namespace o2
 {
 namespace devices
 {
 
-class O2PrimaryServerDevice final : public FairMQDevice
+class O2PrimaryServerDevice final : public fair::mq::Device
 {
  public:
   /// constructor
-  O2PrimaryServerDevice() = default;
+  O2PrimaryServerDevice()
+  {
+    mUseFixedChunkSeed = getenv("ALICEO2_O2SIM_SUBEVENTSEED") && atoi(getenv("ALICEO2_O2SIM_SUBEVENTSEED"));
+    if (mUseFixedChunkSeed) {
+      mFixedChunkSeed = atol(getenv("ALICEO2_O2SIM_SUBEVENTSEED"));
+    }
+  }
 
   /// Default destructor
   ~O2PrimaryServerDevice() final
@@ -73,11 +84,17 @@ class O2PrimaryServerDevice final : public FairMQDevice
     TStopwatch timer;
     timer.Start();
     const auto& conf = mSimConfig;
+    auto& ccdbmgr = o2::ccdb::BasicCCDBManager::instance();
+    ccdbmgr.setURL(conf.getConfigData().mCCDBUrl);
+    ccdbmgr.setTimestamp(conf.getTimestamp());
+
+    // set the global information about the number of events to be generated
+    unsigned int nTotalEvents = conf.getNEvents();
+    o2::eventgen::Generator::setTotalNEvents(nTotalEvents);
 
     // init magnetic field as it might be needed by the generator
     if (TGeoGlobalMagField::Instance()->GetField() == nullptr) {
-      auto field = o2::field::MagneticField::createNominalField(conf.getConfigData().mField, conf.getConfigData().mUniformField);
-      TGeoGlobalMagField::Instance()->SetField(field);
+      TGeoGlobalMagField::Instance()->SetField(o2::base::SimFieldUtils::createMagField());
       TGeoGlobalMagField::Instance()->Lock();
     }
 
@@ -93,14 +110,28 @@ class O2PrimaryServerDevice final : public FairMQDevice
     if (conf.getGenerator().compare("extkin") != 0 || conf.getGenerator().compare("extkinO2") != 0) {
       auto iter = mPrimGeneratorCache.find(conf.getGenerator());
       if (iter != mPrimGeneratorCache.end()) {
-        mPrimGen = iter->second;
-        LOG(INFO) << "Found cached generator for " << conf.getGenerator();
+        mPrimGen = iter->second.get();
+        LOG(info) << "Found cached generator for " << conf.getGenerator();
       }
     }
 
     if (mPrimGen == nullptr) {
       mPrimGen = new o2::eventgen::PrimaryGenerator;
       o2::eventgen::GeneratorFactory::setPrimaryGenerator(conf, mPrimGen);
+
+      // setup vertexing
+      auto vtxMode = conf.getVertexMode();
+      using o2::conf::VertexMode;
+      if (vtxMode == VertexMode::kNoVertex || vtxMode == VertexMode::kDiamondParam) {
+        mPrimGen->setVertexMode(vtxMode);
+      } else if (vtxMode == VertexMode::kCCDB) {
+        // we need to fetch the CCDB object
+        mPrimGen->setVertexMode(vtxMode, ccdbmgr.getForTimeStamp<o2::dataformats::MeanVertexObject>("GLO/Calib/MeanVertex", conf.getTimestamp()));
+      } else if (vtxMode == VertexMode::kCollCxt) {
+        // The vertex will be injected from the outside via setExternalVertex
+      } else {
+        LOG(fatal) << "Unsupported vertex mode";
+      }
 
       auto embedinto_filename = conf.getEmbedIntoFileName();
       if (!embedinto_filename.empty()) {
@@ -109,11 +140,33 @@ class O2PrimaryServerDevice final : public FairMQDevice
 
       mPrimGen->Init();
 
-      mPrimGeneratorCache[conf.getGenerator()] = mPrimGen;
+      std::unique_ptr<o2::eventgen::PrimaryGenerator> ptr_wrapper;
+      ptr_wrapper.reset(mPrimGen);
+      mPrimGeneratorCache[conf.getGenerator()] = std::move(ptr_wrapper);
     }
     mPrimGen->SetEvent(&mEventHeader);
 
-    LOG(INFO) << "Generator initialization took " << timer.CpuTime() << "s";
+    // A good moment to couple to collision context
+    auto collContextFileName_PrefixPair = mSimConfig.getCollContextFilenameAndEventPrefix();
+    auto collContextFileName = collContextFileName_PrefixPair.first;
+    if (collContextFileName.size() > 0) {
+      LOG(info) << "Simulation has collission context";
+      mCollissionContext = o2::steer::DigitizationContext::loadFromFile(collContextFileName);
+      if (mCollissionContext) {
+        const auto& vertices = mCollissionContext->getInteractionVertices();
+        LOG(info) << "We found " << vertices.size() << " vertices included ";
+
+        // initialize the eventID to collID mapping
+        const auto source = mCollissionContext->findSimPrefix(collContextFileName_PrefixPair.second);
+        if (source == -1) {
+          LOG(fatal) << "Wrong simulation prefix";
+        }
+        mEventID_to_CollID.clear();
+        mEventID_to_CollID = mCollissionContext->getCollisionIndicesForSource(source);
+      }
+    }
+
+    LOG(info) << "Generator initialization took " << timer.CpuTime() << "s";
     if (mMaxEvents > 0) {
       generateEvent(); // generate a first event
     }
@@ -122,21 +175,47 @@ class O2PrimaryServerDevice final : public FairMQDevice
   // function generating one event
   void generateEvent(/*bool changeState = false*/)
   {
-    bool changeState = false;
-    LOG(INFO) << "Event generation started ";
+    bool changeState = true; // false;
+    LOG(info) << "Event generation started ";
     if (changeState) {
       stateTransition(O2PrimaryServerState::WaitingEvent, "GENEVENT");
     }
     TStopwatch timer;
     timer.Start();
     try {
-      mStack->Reset();
-      mPrimGen->GenerateEvent(mStack);
+      bool valid = false;
+      int retry_counter = 0;
+      const int MAX_RETRY = 100;
+      do {
+        mStack->Reset();
+        const auto& conf = mSimConfig;
+        // see if we the vertex comes from the collision context
+        if (mCollissionContext && conf.getVertexMode() == o2::conf::VertexMode::kCollCxt) {
+          const auto& vertices = mCollissionContext->getInteractionVertices();
+          if (vertices.size() > 0) {
+            auto collisionindex = mEventID_to_CollID.at(mEventCounter);
+            auto& vertex = vertices.at(collisionindex);
+            LOG(info) << "Setting vertex " << vertex << " for event " << mEventCounter << " for prefix " << mSimConfig.getOutPrefix() << " from CollContext";
+            mPrimGen->setExternalVertexForNextEvent(vertex.X(), vertex.Y(), vertex.Z());
+          }
+        }
+        mPrimGen->GenerateEvent(mStack);
+        if (mStack->getPrimaries().size() > 0) {
+          valid = true;
+        } else {
+          retry_counter++;
+          if (retry_counter > MAX_RETRY) {
+            LOG(warn) << "Not able to generate a non-empty event in " << MAX_RETRY << " trials";
+            //  empty event is sent out
+            valid = true;
+          }
+        }
+      } while (!valid);
     } catch (std::exception const& e) {
-      LOG(ERROR) << " Exception occurred during event gen ";
+      LOG(error) << " Exception occurred during event gen " << e.what();
     }
     timer.Stop();
-    LOG(INFO) << "Event generation took " << timer.CpuTime() << "s"
+    LOG(info) << "Event generation took " << timer.CpuTime() << "s"
               << " and produced " << mStack->getPrimaries().size() << " primaries ";
     if (changeState) {
       stateTransition(O2PrimaryServerState::ReadyToServe, "GENEVENT");
@@ -147,29 +226,29 @@ class O2PrimaryServerDevice final : public FairMQDevice
   void launchInfoThread()
   {
     static std::vector<std::thread> threads;
-    LOG(INFO) << "LAUNCHING STATUS THREAD";
+    LOG(info) << "LAUNCHING STATUS THREAD";
     auto lambda = [this]() {
       while (mState != O2PrimaryServerState::Stopped) {
-        auto& channel = fChannels.at("o2sim-primserv-info").at(0);
+        auto& channel = GetChannels().at("o2sim-primserv-info").at(0);
         if (!channel.IsValid()) {
-          LOG(ERROR) << "channel primserv-info not valid";
+          LOG(error) << "channel primserv-info not valid";
         }
-        std::unique_ptr<FairMQMessage> request(channel.NewSimpleMessage(-1));
+        std::unique_ptr<fair::mq::Message> request(channel.NewSimpleMessage(-1));
         int timeout = 100; // 100ms --> so as not to block and allow for proper termination of this thread
         if (channel.Receive(request, timeout) > 0) {
-          LOG(INFO) << "INFO REQUEST RECEIVED";
+          LOG(info) << "INFO REQUEST RECEIVED";
           if (*(int*)(request->GetData()) == (int)O2PrimaryServerInfoRequest::Status) {
-            LOG(INFO) << "Received status request";
+            LOG(info) << "Received status request";
             // request needs to be a simple enum of type O2PrimaryServerInfoRequest
-            std::unique_ptr<FairMQMessage> reply(channel.NewSimpleMessage((int)mState.load()));
+            std::unique_ptr<fair::mq::Message> reply(channel.NewSimpleMessage((int)mState.load()));
             if (channel.Send(reply) > 0) {
-              LOG(INFO) << "Send status successful";
+              LOG(info) << "Send status successful";
             }
           } else if (*(int*)request->GetData() == (int)O2PrimaryServerInfoRequest::Config) {
             HandleConfigRequest(channel);
           } else {
-            LOG(FATAL) << "UNKNOWN REQUEST";
-            std::unique_ptr<FairMQMessage> reply(channel.NewSimpleMessage(404));
+            LOG(fatal) << "UNKNOWN REQUEST";
+            std::unique_ptr<fair::mq::Message> reply(channel.NewSimpleMessage(404));
             channel.Send(reply);
           }
         }
@@ -182,24 +261,30 @@ class O2PrimaryServerDevice final : public FairMQDevice
 
   void InitTask() final
   {
-    o2::simpubsub::publishMessage(fChannels["primary-notifications"].at(0), "SERVER : INITIALIZING");
+    // fatal without core dump
+    fair::Logger::OnFatal([] { throw fair::FatalException("Fatal error occured. Exiting without core dump..."); });
+
+    o2::simpubsub::publishMessage(GetChannels()["primary-notifications"].at(0), "SERVER : INITIALIZING");
 
     stateTransition(O2PrimaryServerState::Initializing, "INITTASK");
-    LOG(INFO) << "Init Server device ";
+    LOG(info) << "Init Server device ";
 
     // init sim config
-    auto& conf = o2::conf::SimConfig::Instance();
     auto& vm = GetConfig()->GetVarMap();
+    auto& conf = o2::conf::SimConfig::Instance();
+    if (vm.count("isRun5")) {
+      conf.setRun5();
+    }
     conf.resetFromParsedMap(vm);
-    // output varmap
-    // for (auto& keyvalue : vm) {
-    //  LOG(INFO) << "///// " << keyvalue.first << " " << keyvalue.second.value().type().name();
-    //}
 
     // update the parameters from an INI/JSON file, if given (overrides code-based version)
     o2::conf::ConfigurableParam::updateFromFile(conf.getConfigFile());
     // update the parameters from stuff given at command line (overrides file-based version)
     o2::conf::ConfigurableParam::updateFromString(conf.getKeyValueString());
+
+    // customize the level of log output
+    FairLogger::GetLogger()->SetLogScreenLevel(conf.getLogSeverity().c_str());
+    FairLogger::GetLogger()->SetLogVerbosityLevel(conf.getLogVerbosity().c_str());
 
     // from now on mSimConfig should be used within this process
     mSimConfig = conf;
@@ -208,15 +293,16 @@ class O2PrimaryServerDevice final : public FairMQDevice
     mStack->setExternalMode(true);
 
     // MC ENGINE
-    LOG(INFO) << "ENGINE SET TO " << vm["mcEngine"].as<std::string>();
+    LOG(info) << "ENGINE SET TO " << vm["mcEngine"].as<std::string>();
     // CHUNK SIZE
     mChunkGranularity = vm["chunkSize"].as<unsigned int>();
-    LOG(INFO) << "CHUNK SIZE SET TO " << mChunkGranularity;
+    LOG(info) << "CHUNK SIZE SET TO " << mChunkGranularity;
 
     // initial initial seed --> we should store this somewhere
-    mInitialSeed = vm["seed"].as<int>();
+    mInitialSeed = vm["seed"].as<ULong_t>();
     mInitialSeed = o2::utils::RngHelper::setGRandomSeed(mInitialSeed);
-    LOG(INFO) << "RNG INITIAL SEED " << mInitialSeed;
+    mSeedGenerator.SetSeed(mInitialSeed);
+    LOG(info) << "RNG INITIAL SEED " << mInitialSeed;
 
     mMaxEvents = conf.getNEvents();
 
@@ -230,19 +316,32 @@ class O2PrimaryServerDevice final : public FairMQDevice
     // and do not block here
     mGeneratorThread = std::thread(&O2PrimaryServerDevice::initGenerator, this);
     if (mGeneratorThread.joinable()) {
-      mGeneratorThread.join();
+      try {
+        mGeneratorThread.join();
+      } catch (std::exception const& e) {
+        LOG(warn) << "Exception during thread join ..ignoring";
+      }
     }
 
     // init pipe
     auto pipeenv = getenv("ALICE_O2SIMSERVERTODRIVER_PIPE");
     if (pipeenv) {
       mPipeToDriver = atoi(pipeenv);
-      LOG(INFO) << "ASSIGNED PIPE HANDLE " << mPipeToDriver;
+      LOG(info) << "ASSIGNED PIPE HANDLE " << mPipeToDriver;
     } else {
-      LOG(INFO) << "DID NOT FIND ENVIRONMENT VARIABLE TO INIT PIPE";
+      LOG(info) << "DID NOT FIND ENVIRONMENT VARIABLE TO INIT PIPE";
     }
 
     mAsService = vm["asservice"].as<bool>();
+    if (mAsService) {
+      mControlChannel = fair::mq::Channel{"o2sim-control", "sub", fTransportFactory};
+      auto controlsocketname = getenv("ALICE_O2SIMCONTROL");
+      if (!controlsocketname) {
+        LOG(fatal) << "Internal error: Socketname for control input missing";
+      }
+      mControlChannel.Connect(std::string(controlsocketname));
+      mControlChannel.Validate();
+    }
 
     if (mMaxEvents <= 0) {
       if (mAsService) {
@@ -251,12 +350,19 @@ class O2PrimaryServerDevice final : public FairMQDevice
     } else {
       stateTransition(O2PrimaryServerState::ReadyToServe, "INITTASK");
     }
+
+    // feedback to driver that we are done initializing
+    if (mPipeToDriver != -1) {
+      int message = -111; // special code meaning end of initialization
+      if (write(mPipeToDriver, &message, sizeof(int))) {
+      }
+    }
   }
 
   // function for intermediate/on-the-fly reinitializations
   bool ReInit(o2::conf::SimReconfigData const& reconfig)
   {
-    LOG(INFO) << "ReInit Server device ";
+    LOG(info) << "ReInit Server device ";
 
     if (reconfig.stop) {
       return false;
@@ -272,7 +378,8 @@ class O2PrimaryServerDevice final : public FairMQDevice
     // initial initial seed --> we should store this somewhere
     mInitialSeed = reconfig.startSeed;
     mInitialSeed = o2::utils::RngHelper::setGRandomSeed(mInitialSeed);
-    LOG(INFO) << "RNG INITIAL SEED " << mInitialSeed;
+    mSeedGenerator.SetSeed(mInitialSeed);
+    LOG(info) << "RNG INITIAL SEED " << mInitialSeed;
 
     mMaxEvents = reconfig.nEvents;
 
@@ -287,21 +394,22 @@ class O2PrimaryServerDevice final : public FairMQDevice
     mNeedNewEvent = true;
     // reinit generator and start generation of a new event
     if (mGeneratorThread.joinable()) {
-      mGeneratorThread.join();
+      try {
+        mGeneratorThread.join();
+      } catch (std::exception const& e) {
+        LOG(warn) << "Exception during thread join ..ignoring";
+      }
     }
-    mGeneratorThread = std::thread(&O2PrimaryServerDevice::initGenerator, this);
-    // initGenerator();
-    if (mGeneratorThread.joinable()) {
-      mGeneratorThread.join();
-    }
+    // mGeneratorThread = std::thread(&O2PrimaryServerDevice::initGenerator, this);
+    initGenerator();
 
     return true;
   }
 
   // method reacting to requests to get the simulation configuration
-  bool HandleConfigRequest(FairMQChannel& channel)
+  bool HandleConfigRequest(fair::mq::Channel& channel)
   {
-    LOG(INFO) << "Received config request";
+    LOG(info) << "Received config request";
     // just sending the simulation configuration to anyone that wants it
     const auto& confdata = mSimConfig.getConfigData();
 
@@ -310,12 +418,12 @@ class O2PrimaryServerDevice final : public FairMQDevice
 
     auto free_tmessage = [](void* data, void* hint) { delete static_cast<TMessage*>(hint); };
 
-    std::unique_ptr<FairMQMessage> message(
+    std::unique_ptr<fair::mq::Message> message(
       fTransportFactory->CreateMessage(tmsg->Buffer(), tmsg->BufferSize(), free_tmessage, tmsg));
 
     // send answer
     if (channel.Send(message) > 0) {
-      LOG(INFO) << "config reply send ";
+      LOG(info) << "config reply send ";
       return true;
     }
     return true;
@@ -324,7 +432,7 @@ class O2PrimaryServerDevice final : public FairMQDevice
   bool ConditionalRun() override
   {
     // we might come here in IDLE mode
-    if (mState == O2PrimaryServerState::Idle) {
+    if (mState.load() == O2PrimaryServerState::Idle) {
       if (mWaitingControlInput.load() == 0) {
         if (mControlThread.joinable()) {
           mControlThread.join();
@@ -333,12 +441,12 @@ class O2PrimaryServerDevice final : public FairMQDevice
       }
     }
 
-    auto& channel = fChannels.at("primary-get").at(0);
+    auto& channel = GetChannels().at("primary-get").at(0);
     PrimaryChunkRequest requestpayload;
-    std::unique_ptr<FairMQMessage> request(channel.NewSimpleMessage(requestpayload));
+    std::unique_ptr<fair::mq::Message> request(channel.NewSimpleMessage(requestpayload));
     auto bytes = channel.Receive(request);
     if (bytes < 0) {
-      LOG(ERROR) << "Some error/interrupt occurred on socket during receive";
+      LOG(error) << "Some error/interrupt occurred on socket during receive";
       if (NewStatePending()) { // new state is typically pending if (term) signal was received
         WaitForNextState();
         // ask ourselves for termination of this loop
@@ -350,7 +458,7 @@ class O2PrimaryServerDevice final : public FairMQDevice
     TStopwatch timer;
     timer.Start();
     auto& r = *((PrimaryChunkRequest*)(request->GetData()));
-    LOG(INFO) << "PARTICLE REQUEST IN STATE " << PrimStateToString[(int)mState.load()] << " from " << r.workerid << ":" << r.requestid;
+    LOG(debug) << "PARTICLE REQUEST IN STATE " << PrimStateToString[(int)mState.load()] << " from " << r.workerid << ":" << r.requestid;
 
     auto prestate = mState.load();
     auto more = HandleRequest(request, 0, channel);
@@ -365,24 +473,24 @@ class O2PrimaryServerDevice final : public FairMQDevice
     }
     timer.Stop();
     auto time = timer.CpuTime();
-    LOG(INFO) << "COND-RUN TOOK " << time << " s";
+    LOG(debug) << "COND-RUN TOOK " << time << " s";
     return mState != O2PrimaryServerState::Stopped;
   }
 
   void PostRun() override
   {
     while (!mInfoThreadStopped) {
-      LOG(INFO) << "Waiting info thread";
+      LOG(info) << "Waiting info thread";
       using namespace std::chrono_literals;
       std::this_thread::sleep_for(100ms);
     }
   }
 
-  bool HandleRequest(FairMQMessagePtr& request, int /*index*/, FairMQChannel& channel)
+  bool HandleRequest(fair::mq::MessagePtr& request, int /*index*/, fair::mq::Channel& channel)
   {
-    // LOG(DEBUG) << "GOT A REQUEST WITH SIZE " << request->GetSize();
+    // LOG(debug) << "GOT A REQUEST WITH SIZE " << request->GetSize();
     // std::string requeststring(static_cast<char*>(request->GetData()), request->GetSize());
-    // LOG(INFO) << "NORMAL REQUEST STRING " << requeststring;
+    // LOG(info) << "NORMAL REQUEST STRING " << requeststring;
     bool workavailable = true;
     if (mEventCounter >= mMaxEvents && mNeedNewEvent) {
       workavailable = false;
@@ -393,47 +501,56 @@ class O2PrimaryServerDevice final : public FairMQDevice
     }
 
     PrimaryChunkAnswer header{mState, workavailable};
-    FairMQParts reply;
-    std::unique_ptr<FairMQMessage> headermsg(channel.NewSimpleMessage(header));
+    fair::mq::Parts reply;
+    std::unique_ptr<fair::mq::Message> headermsg(channel.NewSimpleMessage(header));
     reply.AddPart(std::move(headermsg));
 
-    LOG(INFO) << "Received request for work " << mEventCounter << " " << mMaxEvents << " " << mNeedNewEvent << " available " << workavailable;
-    if (mNeedNewEvent) {
-      // we need a newly generated event now
-      if (mGeneratorThread.joinable()) {
-        try {
-          mGeneratorThread.join();
-        } catch (std::exception const& e) {
-          LOG(WARN) << "Exception during thread join ..ignoring";
-        }
-      }
-      mNeedNewEvent = false;
-      mPartCounter = 0;
-      mEventCounter++;
-    }
-
-    auto& prims = mStack->getPrimaries();
-    auto numberofparts = (int)std::ceil(prims.size() / (1. * mChunkGranularity));
-    // number of parts should be at least 1 (even if empty)
-    numberofparts = std::max(1, numberofparts);
-
-    LOG(INFO) << "Have " << prims.size() << " " << numberofparts;
-
-    o2::data::PrimaryChunk m;
-    o2::data::SubEventInfo i;
-    i.eventID = workavailable ? mEventCounter : -1;
-    i.maxEvents = mMaxEvents;
-    i.part = mPartCounter + 1;
-    i.nparts = numberofparts;
-    i.seed = mEventCounter + mInitialSeed;
-    i.index = m.mParticles.size();
-    i.mMCEventHeader = mEventHeader;
-    m.mSubEventInfo = i;
-
+    LOG(debug) << "Received request for work " << mEventCounter << " " << mMaxEvents << " " << mNeedNewEvent << " available " << workavailable;
     if (workavailable) {
+
+      if (mNeedNewEvent) {
+        // we need a newly generated event now
+        if (mGeneratorThread.joinable()) {
+          try {
+            mGeneratorThread.join();
+          } catch (std::exception const& e) {
+            LOG(warn) << "Exception during thread join ..ignoring";
+          }
+        }
+        // also if we are still in event waiting stage (doing some busy sleep)
+        while (mState.load() == O2PrimaryServerState::WaitingEvent) {
+          LOG(info) << "Waiting for event generation do become fully available";
+          usleep(100);
+        }
+        mNeedNewEvent = false;
+        mPartCounter = 0;
+        mEventCounter++;
+      }
+
+      auto& prims = mStack->getPrimaries();
+      auto numberofparts = (int)std::ceil(prims.size() / (1. * mChunkGranularity));
+      // number of parts should be at least 1 (even if empty)
+      numberofparts = std::max(1, numberofparts);
+
+      LOG(debug) << "Have " << prims.size() << " " << numberofparts;
+
+      o2::data::PrimaryChunk m;
+      o2::data::SubEventInfo i;
+      i.eventID = workavailable ? mEventCounter : -1;
+      i.maxEvents = mMaxEvents;
+      i.part = mPartCounter + 1;
+      i.nparts = numberofparts;
+      // assign a deterministic (yet collision free seed) to process this particle chunk in Geant
+      // limit range to uint32_t since internal limit of TRandom (despite API suggesting otherwise)
+      const uint64_t drawnSeed = (uint64_t)(static_cast<double>(std::numeric_limits<uint32_t>::max()) * mSeedGenerator.Rndm());
+      i.seed = mUseFixedChunkSeed ? mFixedChunkSeed : drawnSeed;
+      i.index = m.mParticles.size();
+      i.mMCEventHeader = mEventHeader;
+      m.mSubEventInfo = i;
+
       int endindex = prims.size() - mPartCounter * mChunkGranularity;
       int startindex = prims.size() - (mPartCounter + 1) * mChunkGranularity;
-      LOG(INFO) << "indices " << startindex << " " << endindex;
+      LOG(debug) << "indices " << startindex << " " << endindex;
 
       if (startindex < 0) {
         startindex = 0;
@@ -446,8 +563,8 @@ class O2PrimaryServerDevice final : public FairMQDevice
         m.mParticles.emplace_back(prims[index]);
       }
 
-      LOG(INFO) << "Sending " << m.mParticles.size() << " particles";
-      LOG(INFO) << "treating ev " << mEventCounter << " part " << i.part << " out of " << i.nparts;
+      LOG(info) << "Sending " << m.mParticles.size() << " particles";
+      LOG(info) << "treating ev " << mEventCounter << " part " << i.part << " out of " << i.nparts;
 
       // feedback to driver if new event started
       if (mPipeToDriver != -1 && i.part == 1 && workavailable) {
@@ -459,7 +576,9 @@ class O2PrimaryServerDevice final : public FairMQDevice
       if (mPartCounter == numberofparts) {
         mNeedNewEvent = true;
         // start generation of a new event
-        mGeneratorThread = std::thread(&O2PrimaryServerDevice::generateEvent, this);
+        if (mEventCounter < mMaxEvents) {
+          mGeneratorThread = std::thread(&O2PrimaryServerDevice::generateEvent, this);
+        }
       }
 
       TMessage* tmsg = new TMessage(kMESS_OBJECT);
@@ -467,7 +586,7 @@ class O2PrimaryServerDevice final : public FairMQDevice
 
       auto free_tmessage = [](void* data, void* hint) { delete static_cast<TMessage*>(hint); };
 
-      std::unique_ptr<FairMQMessage> message(channel.NewMessage(tmsg->Buffer(), tmsg->BufferSize(), free_tmessage, tmsg));
+      std::unique_ptr<fair::mq::Message> message(channel.NewMessage(tmsg->Buffer(), tmsg->BufferSize(), free_tmessage, tmsg));
 
       reply.AddPart(std::move(message));
     }
@@ -479,61 +598,59 @@ class O2PrimaryServerDevice final : public FairMQDevice
     timer.Stop();
     auto time = timer.CpuTime();
     if (code > 0) {
-      LOG(INFO) << "Reply send in " << time << "s";
+      LOG(debug) << "Reply send in " << time << "s";
       return workavailable;
     } else {
-      LOG(WARN) << "Sending process had problems. Return code : " << code << " time " << time << "s";
+      LOG(warn) << "Sending process had problems. Return code : " << code << " time " << time << "s";
     }
     return false; // -> error should not get here
   }
 
   void stateTransition(O2PrimaryServerState to, const char* message)
   {
-    LOG(INFO) << message << " CHANGING STATE TO " << PrimStateToString[(int)to];
+    LOG(info) << message << " CHANGING STATE TO " << PrimStateToString[(int)to];
     mState = to;
   }
 
   void waitForControlInput()
   {
     mWaitingControlInput.store(1);
-    stateTransition(O2PrimaryServerState::Idle, "CONTROL");
+    if (mState.load() != O2PrimaryServerState::Idle) {
+      mWaitingControlInput.store(0);
+      return;
+    }
 
-    o2::simpubsub::publishMessage(fChannels["primary-notifications"].at(0), o2::simpubsub::simStatusString("PRIMSERVER", "STATUS", "AWAITING INPUT"));
+    o2::simpubsub::publishMessage(GetChannels()["primary-notifications"].at(0), o2::simpubsub::simStatusString("PRIMSERVER", "STATUS", "AWAITING INPUT"));
     // this means we are idling
 
-    auto factory = FairMQTransportFactory::CreateTransportFactory("zeromq");
-    auto channel = FairMQChannel{"o2sim-control", "sub", factory};
-    auto controlsocketname = getenv("ALICE_O2SIMCONTROL");
-    channel.Connect(std::string(controlsocketname));
-    channel.Validate();
-    std::unique_ptr<FairMQMessage> reply(channel.NewMessage());
+    std::unique_ptr<fair::mq::Message> reply(mControlChannel.NewMessage());
 
     bool ok = false;
 
-    LOG(INFO) << "WAITING FOR CONTROL INPUT";
-    if (channel.Receive(reply) > 0) {
+    LOG(info) << "WAITING FOR CONTROL INPUT";
+    if (mControlChannel.Receive(reply) > 0) {
       stateTransition(O2PrimaryServerState::Initializing, "CONTROL");
       auto data = reply->GetData();
       auto size = reply->GetSize();
 
       std::string command(reinterpret_cast<char const*>(data), size);
-      LOG(INFO) << "message: " << command;
+      LOG(info) << "message: " << command;
 
       o2::conf::SimReconfigData reconfig;
       o2::conf::parseSimReconfigFromString(command, reconfig);
-      LOG(INFO) << "Processing " << reconfig.nEvents << " new events";
+      LOG(info) << "Processing " << reconfig.nEvents << " new events";
       try {
-        LOG(INFO) << "REINIT START";
+        LOG(info) << "REINIT START";
         ok = ReInit(reconfig);
-        LOG(INFO) << "REINIT DONE";
+        LOG(info) << "REINIT DONE";
       } catch (std::exception e) {
-        LOG(INFO) << "Exception during reinit";
+        LOG(info) << "Exception during reinit";
       }
     } else {
-      LOG(INFO) << "NOTHING RECEIVED";
+      LOG(info) << "NOTHING RECEIVED";
     }
     if (ok) {
-      stateTransition(O2PrimaryServerState::ReadyToServe, "CONTROL");
+      // stateTransition(O2PrimaryServerState::ReadyToServe, "CONTROL"); --> SHOULD BE DONE FROM EVENT GENERATOR (which get's however called only when mEvents>0)
     } else {
       stateTransition(O2PrimaryServerState::Stopped, "CONTROL");
     }
@@ -549,7 +666,9 @@ class O2PrimaryServerDevice final : public FairMQDevice
   int mPartCounter = 0;
   bool mNeedNewEvent = true;
   int mMaxEvents = 2;
-  int mInitialSeed = -1;
+  ULong_t mInitialSeed = 0;
+  bool mUseFixedChunkSeed = false;
+  ULong_t mFixedChunkSeed = 0;
   int mPipeToDriver = -1; // handle for direct piper to driver (to communicate meta info)
   int mEventCounter = 0;
 
@@ -559,17 +678,26 @@ class O2PrimaryServerDevice final : public FairMQDevice
 
   // Keeps various generators instantiated in memory
   // useful when running simulation as a service (when generators
-  // change between batches)
+  // change between batches). Also takes care of resource management of Primary generators via unique ptr
   // TODO: some care needs to be taken (or the user warned) that the caching is based on generator name
   //       and that parameter-based reconfiguration is not yet implemented (for which we would need to hash all
   //       configuration parameters as well)
-  std::map<std::string, o2::eventgen::PrimaryGenerator*> mPrimGeneratorCache;
+  std::map<std::string, std::unique_ptr<o2::eventgen::PrimaryGenerator>> mPrimGeneratorCache;
 
   std::atomic<O2PrimaryServerState> mState{O2PrimaryServerState::Initializing};
   std::atomic<int> mWaitingControlInput{0};
   std::atomic<bool> mInfoThreadStopped{false};
 
   bool mAsService = false;
+
+  // a dedicate (on-the-fly channel) for control messages
+  fair::mq::Channel mControlChannel;
+
+  // some information specific to use case when we have a collision context
+  o2::steer::DigitizationContext* mCollissionContext = nullptr; //!
+  std::unordered_map<int, int> mEventID_to_CollID;              //!
+
+  TRandom3 mSeedGenerator; //! specific random generator for seed generation for work chunks
 };
 
 } // namespace devices

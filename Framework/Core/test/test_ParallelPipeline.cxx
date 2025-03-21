@@ -21,8 +21,7 @@
 #include "Framework/CompletionPolicy.h"
 #include "Framework/CompletionPolicyHelpers.h"
 #include "Framework/DataRefUtils.h"
-#include <FairMQDevice.h>
-#include <iostream>
+#include <fairmq/Device.h>
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
@@ -39,7 +38,7 @@ void customize(std::vector<o2::framework::CompletionPolicy>& policies)
 
 #define ASSERT_ERROR(condition)                                   \
   if ((condition) == false) {                                     \
-    LOG(FATAL) << R"(Test condition ")" #condition R"(" failed)"; \
+    LOG(fatal) << R"(Test condition ")" #condition R"(" failed)"; \
   }
 
 using DataHeader = o2::header::DataHeader;
@@ -61,11 +60,10 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
      AlgorithmSpec{[](ProcessingContext& ctx) {
        for (auto const& input : ctx.inputs()) {
          auto const& parallelContext = ctx.services().get<ParallelContext>();
-         LOG(DEBUG) << "instance " << parallelContext.index1D() << " of " << parallelContext.index1DSize() << ": "
+         LOG(debug) << "instance " << parallelContext.index1D() << " of " << parallelContext.index1DSize() << ": "
                     << *input.spec << ": " << *((int*)input.payload);
          auto const* dataheader = DataRefUtils::getHeader<o2::header::DataHeader*>(input);
-         //auto& data = ctx.outputs().make<int>(OutputRef{"output", dataheader->subSpecification});
-         auto& data = ctx.outputs().make<int>(Output{"TST", "PREPROC", dataheader->subSpecification, Lifetime::Timeframe});
+         auto& data = ctx.outputs().make<int>(Output{"TST", "PREPROC", dataheader->subSpecification});
          ASSERT_ERROR(ctx.inputs().get<int>(input.spec->binding.c_str()) == parallelContext.index1D());
          data = parallelContext.index1D();
        }
@@ -79,17 +77,15 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
      AlgorithmSpec{[](ProcessingContext& ctx) {
        for (auto const& input : ctx.inputs()) {
          auto const& parallelContext = ctx.services().get<ParallelContext>();
-         LOG(DEBUG) << "instance " << parallelContext.index1D() << " of " << parallelContext.index1DSize() << ": "
+         LOG(debug) << "instance " << parallelContext.index1D() << " of " << parallelContext.index1DSize() << ": "
                     << *input.spec << ": " << *((int*)input.payload);
          ASSERT_ERROR(ctx.inputs().get<int>(input.spec->binding.c_str()) == parallelContext.index1D());
          auto const* dataheader = DataRefUtils::getHeader<o2::header::DataHeader*>(input);
          // TODO: there is a bug in the API for using OutputRef, returns an rvalue which can not be bound to
          // lvalue reference
-         //auto& data = ctx.outputs().make<int>(OutputRef{"output", dataheader->subSpecification});
-         auto& data = ctx.outputs().make<int>(Output{"TST", "DATA", dataheader->subSpecification, Lifetime::Timeframe});
+         auto& data = ctx.outputs().make<int>(Output{"TST", "DATA", dataheader->subSpecification});
          data = ctx.inputs().get<int>(input.spec->binding.c_str());
-         //auto& meta = ctx.outputs().make<int>(OutputRef{"metadt", dataheader->subSpecification});
-         auto& meta = ctx.outputs().make<int>(Output{"TST", "META", dataheader->subSpecification, Lifetime::Timeframe});
+         auto& meta = ctx.outputs().make<int>(Output{"TST", "META", dataheader->subSpecification});
          meta = dataheader->subSpecification;
        }
      }}},
@@ -146,7 +142,7 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
           if (multiplicities[pipeline] == 0) {
             continue;
           }
-          ctx.outputs().make<int>(Output{"TST", "TRIGGER", subspecs[index], Lifetime::Timeframe}) = pipeline;
+          ctx.outputs().make<int>(Output{"TST", "TRIGGER", subspecs[index]}) = pipeline;
           multiplicities[pipeline++]--;
           if (pipeline >= nPipelines) {
             pipeline = 0;
@@ -181,23 +177,24 @@ std::vector<DataProcessorSpec> defineDataProcessing(ConfigContext const&)
                 }),
     Outputs(),
     AlgorithmSpec{adaptStateful([checkMap, bindings = std::move(bindings)](CallbackService& callbacks) {
-      callbacks.set(CallbackService::Id::EndOfStream, [checkMap](EndOfStreamContext& ctx) {
+      callbacks.set<CallbackService::Id::EndOfStream>([checkMap](EndOfStreamContext& ctx) {
         for (auto const& [subspec, pipeline] : *checkMap) {
           // we require all checks to be invalidated
           ASSERT_ERROR(pipeline == -1);
         }
         checkMap->clear();
       });
-      callbacks.set(CallbackService::Id::Stop, [checkMap]() {
+      callbacks.set<CallbackService::Id::Stop>([checkMap]() {
         ASSERT_ERROR(checkMap->size() == 0);
       });
       return adaptStateless([checkMap, bindings = std::move(bindings)](InputRecord& inputs) {
         bool haveDataIn = false;
+        size_t index = 0;
         for (auto const& input : inputs) {
           if (!DataRefUtils::isValid(input)) {
             continue;
           }
-          LOG(DEBUG) << "consuming : " << *input.spec << ": " << *((int*)input.payload);
+          LOG(info) << "consuming : " << *input.spec << ": " << *((int*)input.payload);
           auto const* dataheader = DataRefUtils::getHeader<o2::header::DataHeader*>(input);
           if (input.spec->binding.compare(0, 6, "datain") == 0) {
             if (input.spec->binding != bindings.at(dataheader->subSpecification)) {

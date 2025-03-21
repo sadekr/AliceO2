@@ -13,8 +13,7 @@
 #include "Framework/DeviceSpec.h"
 #include "Framework/RawDeviceService.h"
 #include "Framework/ControlService.h"
-#include <FairMQDevice.h>
-#include <InfoLogger/InfoLogger.hxx>
+#include <fairmq/Device.h>
 
 #include <chrono>
 #include <thread>
@@ -50,7 +49,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& specs)
                                             device.device()->WaitFor(std::chrono::milliseconds(3));
                                             auto& count = inputs.get<int>("x");
                                             if (expected != count) {
-                                              LOGP(ERROR, "Missing message. Expected: {}, Found {}.", expected, count);
+                                              LOGP(error, "Missing message. Expected: {}, Found {}.", expected, count);
                                               control.readyToQuit(QuitRequest::All);
                                             }
                                             expected++;

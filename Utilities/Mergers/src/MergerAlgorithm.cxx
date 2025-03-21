@@ -9,7 +9,7 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-/// \file Merger.cxx
+/// \file MergerAlgorithm.cxx
 /// \brief Implementation of O2 Mergers, v0.1
 ///
 /// \author Piotr Konopka, piotr.jan.konopka@cern.ch
@@ -17,19 +17,83 @@
 #include "Mergers/MergerAlgorithm.h"
 
 #include "Mergers/MergeInterface.h"
+#include "Mergers/ObjectStore.h"
+#include "Framework/Logger.h"
 
+#include <TEfficiency.h>
+#include <TGraph.h>
 #include <TH1.h>
 #include <TH2.h>
 #include <TH3.h>
 #include <THn.h>
-#include <TTree.h>
 #include <THnSparse.h>
 #include <TObjArray.h>
-#include <TGraph.h>
-#include <TEfficiency.h>
+#include <TObject.h>
+#include <TTree.h>
+#include <TPad.h>
+#include <TCanvas.h>
+#include <algorithm>
+#include <stdexcept>
 
 namespace o2::mergers::algorithm
 {
+
+size_t estimateTreeSize(TTree* tree)
+{
+  size_t totalSize = 0;
+  auto branchList = tree->GetListOfBranches();
+  for (const auto* branch : *branchList) {
+    totalSize += dynamic_cast<const TBranch*>(branch)->GetTotalSize();
+  }
+  return totalSize;
+}
+
+// Mergeable objects are kept as primitives in TCanvas object in underlying TPad.
+// TPad is a linked list of primitives of any type (https://root.cern.ch/doc/master/classTPad.html)
+// including other TPads. So in order to collect all mergeable objects from TCanvas
+// we need to recursively transverse whole TPad structure.
+auto collectUnderlyingObjects(TCanvas* canvas) -> std::vector<TObject*>
+{
+  auto collectFromTPad = [](TPad* pad, std::vector<TObject*>& objects, const auto& collectFromTPad) {
+    if (!pad) {
+      return;
+    }
+    auto* primitives = pad->GetListOfPrimitives();
+    for (int i = 0; i < primitives->GetSize(); ++i) {
+      auto* primitive = primitives->At(i);
+      if (auto* primitivePad = dynamic_cast<TPad*>(primitive)) {
+        collectFromTPad(primitivePad, objects, collectFromTPad);
+      } else {
+        objects.push_back(primitive);
+      }
+    }
+  };
+
+  std::vector<TObject*> collectedObjects;
+  collectFromTPad(canvas, collectedObjects, collectFromTPad);
+
+  return collectedObjects;
+}
+
+struct MatchedCollectedObjects {
+  MatchedCollectedObjects(TObject* t, TObject* o) : target(t), other(o) {}
+
+  TObject* target;
+  TObject* other;
+};
+
+auto matchCollectedToPairs(const std::vector<TObject*>& targetObjects, const std::vector<TObject*> otherObjects) -> std::vector<MatchedCollectedObjects>
+{
+  std::vector<MatchedCollectedObjects> matchedObjects;
+  matchedObjects.reserve(std::max(targetObjects.size(), otherObjects.size()));
+  for (const auto& targetObject : targetObjects) {
+    if (const auto found_it = std::ranges::find_if(otherObjects, [&targetObject](TObject* obj) { return std::string_view(targetObject->GetName()) == std::string_view(obj->GetName()); });
+        found_it != otherObjects.end()) {
+      matchedObjects.emplace_back(targetObject, *found_it);
+    }
+  }
+  return matchedObjects;
+}
 
 void merge(TObject* const target, TObject* const other)
 {
@@ -70,6 +134,29 @@ void merge(TObject* const target, TObject* const other)
       }
     }
     delete otherIterator;
+  } else if (auto targetCanvas = dynamic_cast<TCanvas*>(target)) {
+
+    auto otherCanvas = dynamic_cast<TCanvas*>(other);
+    if (otherCanvas == nullptr) {
+      throw std::runtime_error(std::string("The target object '") + target->GetName() +
+                               "' is a TCanvas, while the other object '" + other->GetName() + "' is not.");
+    }
+
+    const auto targetObjects = collectUnderlyingObjects(targetCanvas);
+    const auto otherObjects = collectUnderlyingObjects(otherCanvas);
+    if (targetObjects.size() != otherObjects.size()) {
+      throw std::runtime_error(std::string("Trying to merge canvas: ") + targetCanvas->GetName() + " and canvas " + otherObjects.size() + "but contents are not the same");
+    }
+
+    const auto matched = matchCollectedToPairs(targetObjects, otherObjects);
+    if (targetObjects.size() != matched.size()) {
+      throw std::runtime_error(std::string("Trying to merge canvas: ") + targetCanvas->GetName() + " and canvas " + otherObjects.size() + "but contents are not the same");
+    }
+
+    for (const auto& [targetObject, otherObject] : matched) {
+      merge(targetObject, otherObject);
+    }
+
   } else {
     Long64_t errorCode = 0;
     TObjArray otherCollection;
@@ -78,35 +165,80 @@ void merge(TObject* const target, TObject* const other)
 
     if (target->InheritsFrom(TH1::Class())) {
       // this includes TH1, TH2, TH3
-      errorCode = reinterpret_cast<TH1*>(target)->Merge(&otherCollection);
+      auto targetTH1 = reinterpret_cast<TH1*>(target);
+      if (targetTH1->TestBit(TH1::kIsAverage)) {
+        // Merge() does not support averages, we have to use Add()
+        // this will break if collection.size != 1
+        if (auto otherTH1 = dynamic_cast<TH1*>(otherCollection.First())) {
+          errorCode = targetTH1->Add(otherTH1);
+        }
+      } else {
+        // Add() does not support histograms with labels, thus we resort to Merge() by default
+        errorCode = targetTH1->Merge(&otherCollection);
+      }
     } else if (target->InheritsFrom(THnBase::Class())) {
       // this includes THn and THnSparse
       errorCode = reinterpret_cast<THnBase*>(target)->Merge(&otherCollection);
     } else if (target->InheritsFrom(TTree::Class())) {
-      errorCode = reinterpret_cast<TTree*>(target)->Merge(&otherCollection);
+      auto targetTree = reinterpret_cast<TTree*>(target);
+      auto otherTree = reinterpret_cast<TTree*>(other);
+      auto targetTreeSize = estimateTreeSize(targetTree);
+      auto otherTreeSize = estimateTreeSize(otherTree);
+      if (auto totalSize = targetTreeSize + otherTreeSize; totalSize > 100000000) {
+        LOG(warn) << "The tree '" << targetTree->GetName() << "' would be larger than 100MB (" << totalSize << "B) after merging, skipping to let the system survive";
+        errorCode = 0;
+      } else {
+        errorCode = targetTree->Merge(&otherCollection);
+      }
     } else if (target->InheritsFrom(TGraph::Class())) {
       errorCode = reinterpret_cast<TGraph*>(target)->Merge(&otherCollection);
     } else if (target->InheritsFrom(TEfficiency::Class())) {
       errorCode = reinterpret_cast<TEfficiency*>(target)->Merge(&otherCollection);
     } else {
-      throw std::runtime_error("Object with type '" + std::string(target->ClassName()) + "' is not one of the mergeable types.");
+      LOG(warn) << "Object '" + std::string(target->GetName()) + "' with type '" + std::string(target->ClassName()) + "' is not one of the mergeable types, skipping";
     }
     if (errorCode == -1) {
-      throw std::runtime_error("Merging object of type '" + std::string(target->ClassName()) + "' failed.");
+      LOG(error) << "Failed to merge the input object '" + std::string(other->GetName()) + "' of type '" + std::string(other->ClassName()) //
+                      + " and the target object '" + std::string(target->GetName()) + "' of type '" + std::string(target->ClassName()) + "'";
     }
   }
 }
 
+void merge(VectorOfTObjectPtrs& targets, const VectorOfTObjectPtrs& others)
+{
+  for (const auto& other : others) {
+    if (const auto targetSameName = std::find_if(targets.begin(), targets.end(), [&other](const auto& target) {
+          return std::string_view{other->GetName()} == std::string_view{target->GetName()};
+        });
+        targetSameName != targets.end()) {
+      merge(targetSameName->get(), other.get());
+    } else {
+      targets.push_back(std::shared_ptr<TObject>(other->Clone(), deleteTCollections));
+    }
+  }
+}
+
+void deleteRecursive(TCollection* Coll)
+{
+  // I can iterate a collection
+  Coll->SetOwner(false);
+  auto ITelem = Coll->MakeIterator();
+  while (auto* element = ITelem->Next()) {
+    if (auto* Coll2 = dynamic_cast<TCollection*>(element)) {
+      Coll2->SetOwner(false);
+      deleteRecursive(Coll2);
+    }
+    Coll->Remove(element); // Remove from mother collection
+    delete element;        // Delete payload
+  }
+  delete ITelem;
+}
+
 void deleteTCollections(TObject* obj)
 {
-  if (auto c = dynamic_cast<TCollection*>(obj)) {
-    c->SetOwner(false);
-    auto iter = c->MakeIterator();
-    while (auto element = iter->Next()) {
-      deleteTCollections(element);
-    }
-    delete iter;
-    delete c;
+  if (auto* L = dynamic_cast<TCollection*>(obj)) {
+    deleteRecursive(L);
+    delete L;
   } else {
     delete obj;
   }

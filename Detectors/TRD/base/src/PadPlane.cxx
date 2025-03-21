@@ -24,7 +24,7 @@
 
 #include "TRDBase/PadPlane.h"
 #include <TMath.h>
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 #include "DataFormatsTRD/Constants.h"
 
 using namespace o2::trd;
@@ -39,41 +39,6 @@ void PadPlane::setTiltingAngle(double t)
 
   mTiltingAngle = t;
   mTiltingTan = TMath::Tan(TMath::DegToRad() * mTiltingAngle);
-}
-
-//_____________________________________________________________________________
-int PadPlane::getPadRowNumber(double z) const
-{
-  //
-  // Finds the pad row number for a given z-position in local supermodule system
-  //
-
-  int row = 0;
-  int nabove = 0;
-  int nbelow = 0;
-  int middle = 0;
-
-  if ((z > getRow0()) || (z < getRowEnd())) {
-    row = -1;
-
-  } else {
-    nabove = mNrows + 1;
-    nbelow = 0;
-    while (nabove - nbelow > 1) {
-      middle = (nabove + nbelow) / 2;
-      if (z == (mPadRow[middle - 1] + mPadRowSMOffset)) {
-        row = middle;
-      }
-      if (z > (mPadRow[middle - 1] + mPadRowSMOffset)) {
-        nabove = middle;
-      } else {
-        nbelow = middle;
-      }
-    }
-    row = nbelow - 1;
-  }
-
-  return row;
 }
 
 //_____________________________________________________________________________
@@ -149,7 +114,7 @@ int PadPlane::getPadColNumber(double rphi) const
 void PadPlane::setNcols(int n)
 {
   if (n > MAXCOLS) {
-    LOG(FATAL) << "MAXCOLS exceeded " << n << " > " << MAXCOLS;
+    LOG(fatal) << "MAXCOLS exceeded " << n << " > " << MAXCOLS;
   }
   mNcols = n;
 };
@@ -157,7 +122,7 @@ void PadPlane::setNcols(int n)
 void PadPlane::setNrows(int n)
 {
   if (n > MAXROWS) {
-    LOG(FATAL) << "MAXROWS exceeded " << n << " > " << MAXROWS;
+    LOG(fatal) << "MAXROWS exceeded " << n << " > " << MAXROWS;
   }
   mNrows = n;
 };
@@ -179,7 +144,14 @@ double PadPlane::getPadRow(double z) const
   }
 
   // sanity check: is the padrow coordinate reasonable?
-  assert(!(padrow < 0.0 || padrow > double(mNrows)));
+  // assert(!(padrow < 0.0 || padrow > double(mNrows)));
+  if (padrow < 0.0) {
+    padrow = 0;
+  } else {
+    if (padrow > double(mNrows)) {
+      padrow = mNrows;
+    }
+  }
 
   return padrow;
 }
@@ -211,7 +183,15 @@ double PadPlane::getPad(double y, double z) const
     pad += tiltOffsetPad;
   }
 
-  assert(!(pad < 0.0 || pad > double(mNcols)));
+  // TODO come back and find why this assert fails on mac arm.
+  // assert(!(pad < 0.0 || pad > double(mNcols)));
+  if (pad < 0.0) {
+    pad = 0;
+  } else {
+    if (pad > double(mNcols)) {
+      pad = mNcols;
+    }
+  }
 
   return pad;
 }

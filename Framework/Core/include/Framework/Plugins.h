@@ -12,10 +12,7 @@
 #define O2_FRAMEWORK_PLUGINS_H_
 
 #include "Framework/AlgorithmSpec.h"
-#include <cstring>
 #include <string>
-#include <functional>
-#include <uv.h>
 
 namespace o2::framework
 {
@@ -29,7 +26,63 @@ enum struct DplPluginKind : int {
   DebugGUIImpl,
   // A plugin which implements a custom Services. Needs to return
   // an object of the kind o2::framework::ServiceSpec
-  CustomService
+  CustomService,
+  // A plugin which implements a new way to discover extra configuration.
+  // parameters. E.g. it can be used to read metadata from a file or a service
+  // if a certain parameter is available.
+  ConfigDiscovery,
+  // A capability plugin is a plugin used to discover other viable plugins.
+  // For example, if you find out that you have the --aod-file option
+  // set, you might want to load metadata from it and attach it to the
+  // configuration.
+  Capability,
+  // A RootObjectReadingCapability is used to discover if there is away
+  // to read and understand an object serialised with ROOT.
+  RootObjectReadingCapability,
+
+  // A RootObjectReadingImplementation is actually used to read said object
+  // using the arrow dataset API
+  RootObjectReadingImplementation,
+
+  // A plugin which was not initialised properly.
+  Unknown
+};
+
+/// A service which can be loaded from a shared library.
+/// Description is the actual string "LibraryName:ServiceName"
+/// which can be used to load it.
+template <typename T>
+struct LoadableServicePlugin {
+  // How to load the given service.
+  std::string loadSpec;
+
+  void setInstance(T* instance_)
+  {
+    ptr = instance_;
+  }
+
+  T& operator*() const
+  {
+    return ptr;
+  }
+
+  T* operator->() const
+  {
+    return ptr;
+  }
+
+  T* get() const
+  {
+    return ptr;
+  }
+
+  void reset()
+  {
+    delete ptr;
+    ptr = nullptr;
+  }
+
+  T* ptr = nullptr;
 };
 
 } // namespace o2::framework
@@ -37,18 +90,10 @@ enum struct DplPluginKind : int {
 /// An handle for a generic DPL plugin.
 /// The handle is returned by the dpl_plugin_callback()
 struct DPLPluginHandle {
-  void* instance;
-  char const* name;
-  enum o2::framework::DplPluginKind kind;
-  DPLPluginHandle* previous;
-};
-
-// Struct to hold live plugin information which the plugin itself cannot
-// know and that is owned by the framework.
-struct PluginInfo {
-  uv_lib_t* dso = nullptr;
-  std::string name;
-  DPLPluginHandle* instance = nullptr;
+  void* instance = nullptr;
+  char const* name = nullptr;
+  enum o2::framework::DplPluginKind kind = o2::framework::DplPluginKind::Unknown;
+  DPLPluginHandle* previous = nullptr;
 };
 
 #define DEFINE_DPL_PLUGIN(NAME, KIND)                                                                    \
@@ -71,27 +116,5 @@ struct PluginInfo {
   return previous;             \
   }                            \
   }
-
-namespace o2::framework
-{
-struct PluginManager {
-  template <typename T>
-  static T* getByName(DPLPluginHandle* handle, char const* name)
-  {
-    while (handle != nullptr) {
-      if (strncmp(handle->name, name, strlen(name)) == 0) {
-        return reinterpret_cast<T*>(handle->instance);
-      }
-      handle = handle->previous;
-    }
-    return nullptr;
-  }
-  /// Load a DSO called @a dso and insert its handle in @a infos
-  /// On successfull completion @a onSuccess is called passing
-  /// the DPLPluginHandle provided by the library.
-  static void load(std::vector<PluginInfo>& infos, const char* dso, std::function<void(DPLPluginHandle*)>& onSuccess);
-};
-
-} // namespace o2::framework
 
 #endif // O2_FRAMEWORK_PLUGINS_H_

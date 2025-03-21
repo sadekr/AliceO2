@@ -16,13 +16,9 @@
 #define ALICEO2_FV0_RECPOINTS_H
 
 #include "CommonDataFormat/InteractionRecord.h"
-#include "CommonDataFormat/TimeStamp.h"
-#include "DataFormatsFV0/ChannelData.h"
 #include "CommonDataFormat/RangeReference.h"
-#include "DataFormatsFV0/BCData.h"
+#include "DataFormatsFV0/Digit.h"
 #include <array>
-#include "Rtypes.h"
-#include <TObject.h>
 #include <gsl/span>
 
 namespace o2
@@ -32,7 +28,7 @@ namespace fv0
 struct ChannelDataFloat {
 
   int channel = -1;       // channel Id
-  double time = -20000;   // time in ps, 0 at the LHC clk center
+  double time = -20000;   // time in ns, 0 at the LHC clk center
   double charge = -20000; // charge [channels]
   int adcId = -1;         // QTC chain
 
@@ -46,6 +42,7 @@ struct ChannelDataFloat {
   }
 
   void print() const;
+  bool operator==(const ChannelDataFloat&) const = default;
 
   ClassDefNV(ChannelDataFloat, 1);
 };
@@ -59,7 +56,7 @@ class RecPoints
                              TimeSelectedMean };
   RecPoints() = default;
   RecPoints(const std::array<short, 3>& collisiontime, int first, int ne,
-            o2::InteractionRecord iRec, o2::fv0::Triggers triggers)
+            o2::InteractionRecord iRec, o2::fit::Triggers triggers)
     : mCollisionTimePs(collisiontime)
   {
     mRef.setFirstEntry(first);
@@ -76,15 +73,18 @@ class RecPoints
   bool isValidTime(TimeTypeIndex type) const { return getCollisionTime(type) < sDummyCollissionTime; }
   void setCollisionTime(Float_t time, TimeTypeIndex type) { mCollisionTimePs[type] = time; }
 
-  o2::fv0::Triggers getTrigger() const { return mTriggers; }
+  o2::fit::Triggers getTrigger() const { return mTriggers; }
   o2::InteractionRecord getInteractionRecord() const { return mIntRecord; };
   gsl::span<const ChannelDataFloat> getBunchChannelData(const gsl::span<const ChannelDataFloat> tfdata) const;
   short static constexpr sDummyCollissionTime = 32767;
 
+  void print() const;
+  bool operator==(const RecPoints&) const = default;
+
  private:
   o2::dataformats::RangeReference<int, int> mRef;
   o2::InteractionRecord mIntRecord;
-  o2::fv0::Triggers mTriggers;                                                                                // pattern of triggers  in this BC
+  o2::fit::Triggers mTriggers;                                                                                // pattern of triggers  in this BC
   std::array<short, 3> mCollisionTimePs = {sDummyCollissionTime, sDummyCollissionTime, sDummyCollissionTime}; // in picoseconds
 
   ClassDefNV(RecPoints, 1);

@@ -20,9 +20,16 @@
 #include "Align/AlignableDetector.h"
 #include "Align/utils.h"
 #include "ReconstructionDataFormats/TrackParametrizationWithError.h"
+#include "ReconstructionDataFormats/BaseCluster.h"
+#include "ITSMFTReconstruction/ChipMappingITS.h"
 
 namespace o2
 {
+namespace itsmft
+{
+class TopologyDictionary;
+}
+
 namespace align
 {
 
@@ -32,38 +39,34 @@ class AlignableDetectorITS : public AlignableDetector
 {
  public:
   //
-  enum ITSSel_t { kSPDNoSel,
-                  kSPDBoth,
-                  kSPDAny,
-                  kSPD0,
-                  kSPD1,
-                  kNSPDSelTypes };
-  //
-  AlignableDetectorITS() = default;
+  using ClusterD = o2::BaseCluster<double>;
+  using OVL = o2::itsmft::ChipMappingITS::Overlaps;
+  enum EdgeFlags : int8_t { NONE = -1,
+                            LowRow = OVL::LowRow,
+                            HighRow = OVL::HighRow,
+                            Biased = 2 };
+  AlignableDetectorITS() = default; // RS FIXME do we need default c-tor?
   AlignableDetectorITS(Controller* ctr);
   ~AlignableDetectorITS() override = default;
   //
-  void defineVolumes() override;
+  // virtual void initGeom() final;
+  void defineVolumes() final;
   //
   // RSTODO
   //  bool AcceptTrack(const AliESDtrack* trc, int trtype) const;
+
+  int processPoints(GIndex gid, int npntCut, bool inv) final;
+  bool prepareDetectorData() final;
 
   void SetAddErrorLr(int ilr, double sigY, double sigZ);
   void SetSkipLr(int ilr);
   //
   void updatePointByTrackInfo(AlignmentPoint* pnt, const trackParam_t* t) const override;
-  void setUseErrorParam(int v = 1) override;
-  void SetITSSelPattern(int trtype, ITSSel_t sel) { fITSPatt[trtype] = sel; }
-  void SetITSSelPatternColl(ITSSel_t sel = kSPDAny) { SetITSSelPattern(utils::Coll, sel); }
-  void SetITSSelPatternCosm(ITSSel_t sel = kSPDNoSel) { SetITSSelPattern(utils::Cosm, sel); }
-
-  int GetITSSelPattern(int tp) const { return fITSPatt[tp]; }
-  int GetITSSelPatternColl() const { return fITSPatt[utils::Coll]; }
-  int GetITSSelPatternCosm() const { return fITSPatt[utils::Cosm]; }
+  void setUseErrorParam(int v = 0) override;
+  //
+  void setITSDictionary(const o2::itsmft::TopologyDictionary* d) { mITSDict = d; }
   //
   void Print(const Option_t* opt = "") const override;
-  //
-  static const char* GetITSPattName(int sel) { return sel < kNSPDSelTypes ? fgkHitsSel[sel] : nullptr; }
   //
  protected:
   //
@@ -73,9 +76,11 @@ class AlignableDetectorITS : public AlignableDetector
   //
  protected:
   //
-  int fITSPatt[utils::NTrackTypes]; // ITS hits selection pattern for coll/cosm tracks
-  //
-  static const char* fgkHitsSel[kNSPDSelTypes]; // ITS selection names
+  std::vector<ClusterD> mITSClustersArray;
+  std::vector<int> mOverlapCandidateID; // pool of indices for potentially overlapping clusters
+  std::vector<int> mOverlapClusRef;     // 1st entry in mOverlapCandidateID for the overlapping cluster indices of each cluster
+  std::vector<o2::itsmft::ChipMappingITS::Overlaps> mOverlaps;
+  const o2::itsmft::TopologyDictionary* mITSDict{nullptr}; // cluster patterns dictionary
   //
   ClassDefOverride(AlignableDetectorITS, 1);
 };

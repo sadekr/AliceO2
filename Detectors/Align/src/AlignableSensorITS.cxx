@@ -13,12 +13,10 @@
 /// @author ruben.shahoyan@cern.ch, michael.lettrich@cern.ch
 /// @since  2021-02-01
 /// @brief  ITS sensor
-
+#include "ITSBase/GeometryTGeo.h"
 #include "Align/AlignableSensorITS.h"
 #include "Align/utils.h"
 #include "Framework/Logger.h"
-//#include "AliTrackPointArray.h"
-//#include "AliESDtrack.h"
 #include "Align/AlignmentPoint.h"
 #include "Align/AlignableDetector.h"
 
@@ -39,84 +37,69 @@ AlignableSensorITS::AlignableSensorITS(const char* name, int vid, int iid, Contr
   // def c-tor
 }
 
-//________________________________________________________________
-void AlignableSensorITS::setTrackingFrame()
+//____________________________________________
+void AlignableSensorITS::prepareMatrixT2L()
 {
-  // define tracking frame of the sensor
-  double tra[3]={0},loc[3],glo[3];
-  // ITS defines tracking frame with origin in sensor, others at 0
-  getMatrixT2L().LocalToMaster(tra,loc);
-  getMatrixL2GIdeal().LocalToMaster(loc,glo);
-  mX = Sqrt(glo[0] * glo[0] + glo[1] * glo[1]);
-  mAlp = ATan2(glo[1], glo[0]);
-  utils::bringToPiPM(mAlp);
+  // extract geometry T2L matrix
+  TGeoHMatrix t2l;
+  const auto& l2g = getMatrixL2GIdeal();
+  double locA[3] = {-100., 0., 0.}, locB[3] = {100., 0., 0.}, gloA[3], gloB[3];
+  l2g.LocalToMaster(locA, gloA);
+  l2g.LocalToMaster(locB, gloB);
+  double dx = gloB[0] - gloA[0], dy = gloB[1] - gloA[1];
+  double t = (gloB[0] * dx + gloB[1] * dy) / (dx * dx + dy * dy);
+  double xp = gloB[0] - dx * t, yp = gloB[1] - dy * t;
+  mX = std::sqrt(xp * xp + yp * yp);
+  float alp = std::atan2(yp, xp);
+  o2::math_utils::bringTo02Pi(alp);
+  mAlp = alp;
+  /* // this would proved x, alpha accounting for the corrections, we need ideal ones ?
+     float x, alp;
+     auto geom = o2::its::GeometryTGeo::Instance();
+     geom->getSensorXAlphaRefPlane(getVolID(), x, alp);
+     mAlp = alp;
+     mX = x;
+  */
+  t2l.RotateZ(mAlp * RadToDeg()); // rotate in direction of normal to the sensor plane
+  const TGeoHMatrix l2gi = l2g.Inverse();
+  t2l.MultiplyLeft(&l2gi);
+  setMatrixT2L(t2l);
 }
 
-/*
-//____________________________________________
-AlignmentPoint* AlignableSensorITS::TrackPoint2AlgPoint(int pntId, const AliTrackPointArray* trpArr, const AliESDtrack*)
+void AlignableSensorITS::prepareMatrixL2G(bool reco)
 {
-  // convert the pntId-th point to AlignmentPoint
-  //
-  AlignableDetector* det = getDetector();
-  AlignmentPoint* pnt = det->getPointFromPool();
-  pnt->setSensor(this);
-  //
-  double tra[3], locId[3], loc[3],
-    glo[3] = {trpArr->GetX()[pntId], trpArr->GetY()[pntId], trpArr->GetZ()[pntId]};
-  const TGeoHMatrix& matL2Grec = getMatrixL2GReco(); // local to global matrix used for reconstruction
-  const TGeoHMatrix& matT2L = getMatrixT2L();        // matrix for tracking to local frame translation
-  //
-  // undo reco-time alignment
-  matL2Grec.MasterToLocal(glo, locId); // go to local frame using reco-time matrix, here we recover ideal measurement
-  //
-  getMatrixClAlg().LocalToMaster(locId, loc); // apply alignment
-  //
-  matT2L.MasterToLocal(loc, tra); // go to tracking frame
-  //
-  //
-  if (!det->getUseErrorParam()) {
-    // convert error
-    TGeoHMatrix hcov;
-    double hcovel[9];
-    const float* pntcov = trpArr->GetCov() + pntId * 6; // 6 elements per error matrix
-    hcovel[0] = double(pntcov[0]);
-    hcovel[1] = double(pntcov[1]);
-    hcovel[2] = double(pntcov[2]);
-    hcovel[3] = double(pntcov[1]);
-    hcovel[4] = double(pntcov[3]);
-    hcovel[5] = double(pntcov[4]);
-    hcovel[6] = double(pntcov[2]);
-    hcovel[7] = double(pntcov[4]);
-    hcovel[8] = double(pntcov[5]);
-    hcov.SetRotation(hcovel);
-    hcov.Multiply(&matL2Grec);
-    const TGeoHMatrix& l2gi = matL2Grec.Inverse();
-    hcov.MultiplyLeft(&l2gi); // errors in local frame
-    hcov.Multiply(&matT2L);
-    const TGeoHMatrix& t2li = matT2L.Inverse();
-    hcov.MultiplyLeft(&t2li); // errors in tracking frame
-    //
-    double* hcovscl = hcov.GetRotationMatrix();
-    const double* sysE = getAddError(); // additional syst error
-    pnt->setYZErrTracking(hcovscl[4] + sysE[0] * sysE[0], hcovscl[5], hcovscl[8] + sysE[1] * sysE[1]);
-  } else { // errors will be calculated just before using the point in the fit, using track info
-    pnt->setYZErrTracking(0, 0, 0);
-    pnt->setNeedUpdateFromTrack();
+  // Note that for ITS2 it is NOT the same as GeometryManager::getMatrix() (i.e. that of the alignable volule)
+  // since we need the matrix of epitaxial layer and not the whole chip
+  auto geom = o2::its::GeometryTGeo::Instance();
+  const auto* m = geom->extractMatrixSensor(getVolID());
+  if (!m) {
+    LOGP(fatal, "Failed on :GeometryTGeo::extractMatrixSensor({})", getVolID());
   }
-  pnt->setXYZTracking(tra[0], tra[1], tra[2]);
-  pnt->setAlphaSens(getAlpTracking());
-  pnt->setXSens(getXTracking());
-  pnt->setDetID(det->getDetID());
-  pnt->setSID(getSID());
-  //
-  pnt->setContainsMeasurement();
-  //
-  pnt->init();
-  //
-  return pnt;
-  //
+  reco ? setMatrixL2GReco(*m) : setMatrixL2G(*m);
 }
-*/
+
+void AlignableSensorITS::prepareMatrixL2GIdeal()
+{
+  // Note that for ITS2 it is NOT the same as GeometryManager::getOriginalMatrix (i.e. that of the alignable volule)
+  // since we need the matrix of epitaxial layer and not the whole chip
+  auto geom = o2::its::GeometryTGeo::Instance();
+  TGeoHMatrix mtmp;
+  if (!base::GeometryManager::getOriginalMatrix(getSymName(), mtmp)) { // this is chip ideal matrix, not that of the epitaxial layer
+    LOG(fatal) << "Failed to find ideal L2G matrix for " << getSymName();
+  }
+  // we have to apply to it the difference between the aligner epitaxial layer matrix and that of the chip
+  const auto* malgSens = geom->extractMatrixSensor(getVolID());
+  if (!malgSens) {
+    LOGP(fatal, "Failed on :GeometryTGeo::extractMatrixSensor({})", getVolID());
+  }
+  const auto* malgChip = geom->getMatrix(getVolID());
+  // correct chip original matrix by the difference between aligneg chip and sensor matrices
+  // Sens_ideal = Chip_ideal * Chip_aligned^-1 * Sens_aligned
+  auto chAlignInv = malgChip->Inverse();
+  chAlignInv.Multiply(*malgSens);
+  mtmp.Multiply(chAlignInv);
+  setMatrixL2GIdeal(mtmp);
+}
+
 } // namespace align
 } // namespace o2

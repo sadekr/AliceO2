@@ -15,11 +15,18 @@
 #pragma link off all classes;
 #pragma link off all functions;
 
-#pragma link C++ class o2::trk::V11Geometry + ;
-#pragma link C++ class o2::trk::V1Layer + ;
-#pragma link C++ class o2::trk::V3Layer + ;
-#pragma link C++ class o2::trk::V3Services + ;
+#pragma link C++ class o2::trk::TRKPetalCase + ;
+#pragma link C++ class o2::trk::TRKLayer + ;
+#pragma link C++ class o2::trk::TRKPetalLayer + ;
+#pragma link C++ class o2::trk::TRKPetalDisk + ;
+#pragma link C++ class o2::trk::TRKServices + ;
 #pragma link C++ class o2::trk::Detector + ;
 #pragma link C++ class o2::base::DetImpl < o2::trk::Detector> + ;
+#pragma link C++ class o2::trk::Digitizer + ;
+
+// #pragma link C++ class o2::itsmft::DPLDigitizerParam < o2::detectors::DetID::ITS> + ;
+// #pragma link C++ class o2::itsmft::DPLDigitizerParam < o2::detectors::DetID::ITS> + ;
+// #pragma link C++ class o2::conf::ConfigurableParamHelper < o2::trk::DPLDigitizerParam < o2::detectors::DetID::TRK>> + ;
+// #pragma link C++ class o2::conf::ConfigurableParamHelper < o2::trk::DPLDigitizerParam < o2::detectors::DetID::FT3>> + ;
 
 #endif

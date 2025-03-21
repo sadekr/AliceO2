@@ -16,6 +16,8 @@
 #include "Framework/WorkflowCustomizationHelpers.h"
 #include "Framework/ChannelConfigurationPolicy.h"
 
+namespace
+{
 std::unique_ptr<o2::framework::ConfigContext> makeEmptyConfigContext()
 {
   using namespace o2::framework;
@@ -23,11 +25,19 @@ std::unique_ptr<o2::framework::ConfigContext> makeEmptyConfigContext()
   //        either owns or shares ownership of the registry.
   std::vector<std::unique_ptr<ParamRetriever>> retrievers;
   static std::vector<ConfigParamSpec> specs = WorkflowCustomizationHelpers::requiredWorkflowOptions();
+  for (auto& spec : specs) {
+    if (spec.name == "timeframes-rate-limit-ipcid") {
+      spec.defaultValue = "1";
+    }
+  }
   auto store = std::make_unique<ConfigParamStore>(specs, std::move(retrievers));
   store->preload();
   store->activate();
   static ConfigParamRegistry registry(std::move(store));
-  auto context = std::make_unique<ConfigContext>(registry, 0, nullptr);
+  static std::unique_ptr<ServiceRegistry> services;
+  // We need to reset it because we will inject services into it.
+  services = std::make_unique<ServiceRegistry>();
+  auto context = std::make_unique<ConfigContext>(registry, ServiceRegistryRef{*services}, 0, nullptr);
   return context;
 }
 
@@ -48,3 +58,4 @@ std::vector<ChannelConfigurationPolicy> makeTrivialChannelPolicies(ConfigContext
 
   return {defaultPolicy};
 }
+} // namespace

@@ -15,16 +15,18 @@
 /// \date 01/08/2016
 
 #include "ITSMFTSimulation/Hit.h"
+#include "ITSMFTReconstruction/ChipMappingMFT.h"
 
 #include "MFTBase/Geometry.h"
 #include "MFTBase/GeometryTGeo.h"
+#include "MFTBase/MFTBaseParam.h"
 
 #include "MFTSimulation/Detector.h"
 
 #include "Field/MagneticField.h"
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "FairRootManager.h"
 #include "FairVolume.h"
 #include "TGeoManager.h"
@@ -40,6 +42,10 @@ ClassImp(o2::mft::Detector);
 //_____________________________________________________________________________
 Detector::Detector()
   : o2::base::DetImpl<Detector>("MFT", kTRUE), mVersion(1), mDensitySupportOverSi(0.036), mHits(o2::utils::createSimVector<o2::itsmft::Hit>()), mTrackData() {}
+
+//_____________________________________________________________________________
+Detector::Detector(Bool_t active)
+  : o2::base::DetImpl<Detector>("MFT", active), mVersion(1), mDensitySupportOverSi(0.036), mHits(o2::utils::createSimVector<o2::itsmft::Hit>()), mTrackData() {}
 
 //_____________________________________________________________________________
 Detector::Detector(const Detector& src)
@@ -113,7 +119,7 @@ Bool_t Detector::ProcessHits(FairVolume* vol)
   Int_t sensorIndex =
     mGeometryTGeo->getSensorIndex(halfID, diskID, ladderID, sensorID);
 
-  // LOG(INFO) << "Found hit into half = " << halfID << "; disk = " << diskID <<
+  // LOG(info) << "Found hit into half = " << halfID << "; disk = " << diskID <<
   // "; ladder = " << ladderID << "; sensor = " << sensorID ;
 
   bool startHit = false, stopHit = false;
@@ -199,6 +205,7 @@ Hit* Detector::addHit(Int_t trackID, Int_t detID, TVector3 startPos,
 //_____________________________________________________________________________
 void Detector::createMaterials()
 {
+  auto& mftBaseParam = MFTBaseParam::Instance();
 
   // data from PDG booklet 2002                 density [gr/cm^3]     rad len
   // [cm]           abs len [cm]
@@ -272,14 +279,21 @@ void Detector::createMaterials()
   Float_t wRohacell[nRohacell] = {0.0858, 0.5964, 0.3178};
   Float_t dRohacell;
   if (Geometry::sGrooves == 0) {
-    dRohacell =
-      0.032 /
-      (1 - 0.15); //  No grooves, water pipes outside rohacell ==> smaller
-                  //  thcikness, greater rohacell density by 15%
+    //  No grooves, water pipes outside rohacell ==>
+    //  smaller rohacell thickness, greater density by 15% (from 1.327cm to 1.117cm)
+    dRohacell = 0.032 / (1 - 0.158);
+    // to perform chips aligment
+    if (mftBaseParam.buildAlignment) {
+      dRohacell = dRohacell / (1 - 0.358); // decrase by 4mm of the rohacell thickness
+    }
   }
   if (Geometry::sGrooves == 1) {
-    dRohacell = 0.032; // With grooves, usual rohacell density: 0.032 g/cm3
-                       // rohacell 31, 0.075 g/cm3 rohacell 71;
+    // With grooves, usual rohacell density: 0.032 g/cm3 rohacell 31
+    dRohacell = 0.032;
+    // to perform chips aligment
+    if (mftBaseParam.buildAlignment) {
+      dRohacell = dRohacell / (1 - 0.301); // decrase by 4mm of the rohacell thickness
+    }
   }
 
   // Polyimide pipe mixture
@@ -328,7 +342,7 @@ void Detector::createMaterials()
   Float_t aCM46J[4] = {12.0107, 14.0067, 15.9994, 1.00794};
   Float_t zCM46J[4] = {6., 7., 8., 1.};
   Float_t wCM46J[4] = {0.908508078, 0.010387573, 0.055957585, 0.025146765};
-  Float_t dCM46J = 1.84; // only changes density
+  Float_t dCM46J = 1.48; // only changes density
 
   // Polypropylene[C3H6]n
   const Int_t nPolyppln = 2;
@@ -372,7 +386,7 @@ void Detector::createMaterials()
   Float_t maxField;
   o2::base::Detector::initFieldTrackingParams(fieldType, maxField);
 
-  LOG(DEBUG) << "Detector::createMaterials >>>>> fieldType " << fieldType
+  LOG(debug) << "Detector::createMaterials >>>>> fieldType " << fieldType
              << " maxField " << maxField;
 
   matId = 0; // starting value
@@ -566,7 +580,7 @@ void Detector::createMaterials()
                              tmaxfd, stemax, deemax, epsil, stmin);
   matId++;
 
-  LOG(DEBUG) << "Detector::createMaterials -----> matId = " << matId;
+  LOG(debug) << "Detector::createMaterials -----> matId = " << matId;
 }
 
 //_____________________________________________________________________________
@@ -592,7 +606,7 @@ void Detector::defineSensitiveVolumes()
 
   auto id = registerSensitiveVolumeAndGetVolID("MFTSensor");
   if (id <= 0) {
-    LOG(FATAL) << "Can't register volume MFTSensor";
+    LOG(fatal) << "Can't register volume MFTSensor";
   }
   if (!mftGeom->getSensorVolumeID()) {
     mftGeom->setSensorVolumeID(id);
@@ -608,7 +622,7 @@ void Detector::addAlignableVolumes() const
   // Modified: 21 Apr 2021 Robin Caron
 
   if (!gGeoManager) {
-    LOG(FATAL) << "TGeoManager doesn't exist !";
+    LOG(fatal) << "TGeoManager doesn't exist !";
     return;
   }
 
@@ -616,7 +630,7 @@ void Detector::addAlignableVolumes() const
   TString sname = GeometryTGeo::composeSymNameMFT();
 
   if (!gGeoManager->SetAlignableEntry(sname.Data(), path.Data())) {
-    LOG(FATAL) << "Unable to set alignable entry ! " << sname << " : " << path;
+    LOG(fatal) << "Unable to set alignable entry ! " << sname << " : " << path;
   }
 
   Int_t lastUID = 0;
@@ -636,7 +650,7 @@ void Detector::addAlignableVolumesHalf(int hf, TString& parent, Int_t& lastUID) 
   TString sname = mGeometryTGeo->composeSymNameHalf(hf);
 
   if (!gGeoManager->SetAlignableEntry(sname.Data(), path.Data())) {
-    LOG(FATAL) << "Unable to set alignable entry ! " << sname << " : " << path;
+    LOG(fatal) << "Unable to set alignable entry ! " << sname << " : " << path;
   }
 
   Int_t nDisks = mGeometryTGeo->getNumberOfDisksPerHalf(hf);
@@ -656,7 +670,7 @@ void Detector::addAlignableVolumesDisk(Int_t hf, Int_t dk,
   TString sname = mGeometryTGeo->composeSymNameDisk(hf, dk);
 
   if (!gGeoManager->SetAlignableEntry(sname.Data(), path.Data())) {
-    LOG(FATAL) << "Unable to set alignable entry ! " << sname << " : " << path;
+    LOG(fatal) << "Unable to set alignable entry ! " << sname << " : " << path;
   }
 
   Int_t nLadders = 0;
@@ -681,7 +695,7 @@ void Detector::addAlignableVolumesLadder(Int_t hf, Int_t dk, Int_t lr,
   TString sname = mGeometryTGeo->composeSymNameLadder(hf, dk, lr);
 
   if (!gGeoManager->SetAlignableEntry(sname.Data(), path.Data())) {
-    LOG(FATAL) << "Unable to set alignable entry ! " << sname << " : " << path;
+    LOG(fatal) << "Unable to set alignable entry ! " << sname << " : " << path;
   }
 
   Int_t nSensors = mGeometryTGeo->getNumberOfSensorsPerLadder(hf, dk, lr);
@@ -700,10 +714,11 @@ void Detector::addAlignableVolumesChip(Int_t hf, Int_t dk, Int_t lr, Int_t ms,
   TString path = Form("%s/%s_%d_%d_%d_%d", parent.Data(), GeometryTGeo::getMFTChipPattern(), hf, dk, lr, ms);
   TString sname = mGeometryTGeo->composeSymNameChip(hf, dk, lr, ms);
 
-  Int_t uid = o2::base::GeometryManager::getSensID(o2::detectors::DetID::MFT, lastUID++);
+  Int_t chipID = itsmft::ChipMappingMFT::mChipIDGeoToRO[lastUID++];
+  Int_t uid = o2::base::GeometryManager::getSensID(o2::detectors::DetID::MFT, chipID);
 
   if (!gGeoManager->SetAlignableEntry(sname, path.Data(), uid)) {
-    LOG(FATAL) << "Unable to set alignable entry ! " << sname << " : " << path;
+    LOG(fatal) << "Unable to set alignable entry ! " << sname << " : " << path;
   }
 }
 

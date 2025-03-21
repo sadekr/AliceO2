@@ -28,8 +28,24 @@ namespace dataformats
 // We could just alias it to the bracket specialization, but this would create
 // problems with fwd.declaration
 struct IRFrame : public o2::math_utils::detail::Bracket<o2::InteractionRecord> {
+  static constexpr uint64_t LastIRFrame = uint64_t(0x1) << 63;
+
   using o2::math_utils::detail::Bracket<o2::InteractionRecord>::Bracket;
-  ClassDefNV(IRFrame, 1);
+
+  uint64_t info = uint64_t(0);
+
+  void setLast(bool v = true)
+  {
+    if (v) {
+      info |= LastIRFrame;
+    } else {
+      v &= ~LastIRFrame;
+    }
+  }
+
+  bool isLast() const { return (info & LastIRFrame) != 0UL; }
+
+  ClassDefNV(IRFrame, 2);
 };
 
 } // namespace dataformats

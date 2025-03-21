@@ -18,6 +18,8 @@
 #include <vector>
 #include <regex>
 #include <iostream>
+#include <unistd.h>
+#include <fmt/format.h>
 
 namespace o2::utils
 {
@@ -32,11 +34,17 @@ std::vector<std::string> listFiles(std::string const& dir, std::string const& se
   std::regex str_expr(rs);
 
   for (auto& p : std::filesystem::directory_iterator(dir)) {
-    if (!p.is_directory()) {
-      auto fn = p.path().filename().string();
-      if (regex_match(fn, str_expr)) {
-        filenames.push_back(p.path().string());
+    try {
+      if (!p.is_directory()) {
+        auto fn = p.path().filename().string();
+        if (regex_match(fn, str_expr)) {
+          filenames.push_back(p.path().string());
+        }
       }
+    } catch (...) {
+      // problem listing some file, just ignore continue
+      // with next one
+      continue;
     }
   }
   return filenames;
@@ -45,6 +53,53 @@ std::vector<std::string> listFiles(std::string const& dir, std::string const& se
 std::vector<std::string> listFiles(std::string const& searchpattern)
 {
   return listFiles("./", searchpattern);
+}
+
+void createDirectoriesIfAbsent(std::string const& path)
+{
+  if (!path.empty() && !std::filesystem::create_directories(path) && !std::filesystem::is_directory(path)) {
+    throw std::runtime_error(fmt::format("Failed to create {} directory", path));
+  }
+}
+// A function to expand string containing shell variables
+// to a string in which these vars have been substituted.
+// Motivation:: filesystem::exists() does not do this by default
+// and I couldn't find information on this. Potentially there is an
+// existing solution.
+std::string expandShellVarsInFileName(std::string const& input)
+{
+  std::regex e(R"(\$\{?[a-zA-Z0-9_]*\}?)");
+  std::regex e3("[a-zA-Z0-9_]+");
+  std::string finalstr;
+  std::sregex_iterator iter;
+  auto words_end = std::sregex_iterator(); // the end iterator (default)
+  auto words_begin = std::sregex_iterator(input.begin(), input.end(), e);
+
+  // check first of all if there is shell variable inside
+  if (words_end == words_begin) {
+    return input;
+  }
+
+  std::string tail;
+  for (auto i = words_begin; i != words_end; ++i) {
+    std::smatch match = *i;
+    // remove ${ and }
+    std::smatch m;
+    std::string s(match.str());
+
+    if (std::regex_search(s, m, e3)) {
+      auto envlookup = getenv(m[0].str().c_str());
+      if (envlookup) {
+        finalstr += match.prefix().str() + std::string(envlookup);
+      } else {
+        // in case of non existance we keep the env part unreplaced
+        finalstr += match.prefix().str() + "${" + m[0].str().c_str() + "}";
+      }
+      tail = match.suffix().str();
+    }
+  }
+  finalstr += tail;
+  return finalstr;
 }
 
 } // namespace o2::utils

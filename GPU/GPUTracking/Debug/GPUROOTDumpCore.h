@@ -21,9 +21,7 @@
 
 class TFile;
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 class GPUROOTDumpCore;
 
@@ -61,7 +59,6 @@ class GPUROOTDumpCore
   std::vector<GPUROOTDumpBase*> mBranches;
 #endif
 };
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

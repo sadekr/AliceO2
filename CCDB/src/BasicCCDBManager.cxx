@@ -13,6 +13,8 @@
 // Created by Sandro Wenzel on 2019-08-14.
 //
 #include "CCDB/BasicCCDBManager.h"
+#include <boost/lexical_cast.hpp>
+#include <fairlogger/Logger.h>
 #include <string>
 
 namespace o2
@@ -23,6 +25,112 @@ namespace ccdb
 void CCDBManagerInstance::setURL(std::string const& url)
 {
   mCCDBAccessor.init(url);
+}
+
+void CCDBManagerInstance::reportFatal(std::string_view err)
+{
+  LOG(fatal) << err;
+}
+
+std::pair<int64_t, int64_t> CCDBManagerInstance::getRunDuration(const std::map<std::string, std::string>& headers)
+{
+  if (headers.size() != 0) {
+    std::string report{};
+    auto strt = headers.find("STF");
+    auto stop = headers.find("ETF");
+    long valStrt = (strt == headers.end()) ? -1L : boost::lexical_cast<int64_t>(strt->second);
+    long valStop = (stop == headers.end()) ? -1L : boost::lexical_cast<int64_t>(stop->second);
+    if (valStrt < 0 || valStop < 0) {
+      report += "Missing STF/EFT -> use SOX/EOX;";
+      strt = headers.find("SOX");
+      valStrt = (strt == headers.end()) ? -1L : boost::lexical_cast<int64_t>(strt->second);
+      if (valStrt < 1) {
+        report += fmt::format(" Missing/invalid SOX -> use SOR");
+        strt = headers.find("SOR");
+        valStrt = (strt == headers.end()) ? -1L : boost::lexical_cast<int64_t>(strt->second);
+      }
+      stop = headers.find("EOX");
+      valStop = (stop == headers.end()) ? -1L : boost::lexical_cast<int64_t>(stop->second);
+      if (valStop < 1) {
+        report += fmt::format(" | Missing/invalid EOX -> use EOR");
+        stop = headers.find("EOR");
+        valStop = (stop == headers.end()) ? -1L : boost::lexical_cast<int64_t>(stop->second);
+      }
+      if (!report.empty()) {
+        LOGP(warn, "{}", report);
+      }
+    }
+    return std::make_pair(valStrt, valStop);
+  }
+  return std::make_pair(-1L, -1L);
+}
+
+std::pair<int64_t, int64_t> CCDBManagerInstance::getRunDuration(o2::ccdb::CcdbApi const& api, int runnumber, bool fatal)
+{
+  auto headers = api.retrieveHeaders("RCT/Info/RunInformation", std::map<std::string, std::string>(), runnumber);
+  auto response = getRunDuration(headers);
+  if ((response.first <= 0 || response.second < response.first) && fatal) {
+    LOG(fatal) << "Empty, missing or invalid response from query to RCT/Info/RunInformation for run " << runnumber;
+  }
+  return response;
+}
+
+std::pair<int64_t, int64_t> CCDBManagerInstance::getRunDuration(int runnumber, bool fatal)
+{
+  mQueries++;
+  if (!isCachingEnabled()) {
+    return CCDBManagerInstance::getRunDuration(mCCDBAccessor, runnumber, fatal);
+  }
+  auto& cached = mCache["RCT-Run-Info HeaderOnly"];
+  std::pair<int64_t, int64_t> rd;
+  cached.queries++;
+  if (cached.startvalidity != runnumber) { // need to fetch
+    rd = CCDBManagerInstance::getRunDuration(mCCDBAccessor, runnumber, fatal);
+    cached.objPtr = std::make_shared<std::pair<int64_t, int64_t>>(rd);
+    cached.startvalidity = runnumber;
+    cached.endvalidity = runnumber + 1;
+    cached.minSize = cached.maxSize = 0;
+    cached.fetches++;
+  } else {
+    rd = *reinterpret_cast<std::pair<int64_t, int64_t>*>(cached.objPtr.get());
+  }
+  return rd;
+}
+
+std::string CCDBManagerInstance::getSummaryString() const
+{
+  std::string res = fmt::format("{} queries, {} bytes", mQueries, fmt::group_digits(mFetchedSize));
+  if (mCachingEnabled) {
+    res += fmt::format(" for {} objects", mCache.size());
+  }
+  res += fmt::format(", {} good fetches (and {} failed ones", mFetches, mFailures);
+  if (mCachingEnabled && mFailures) {
+    int nfailObj = 0;
+    for (const auto& obj : mCache) {
+      if (obj.second.failures) {
+        nfailObj++;
+      }
+    }
+    res += fmt::format(" for {} objects", nfailObj);
+  }
+  res += fmt::format(") in {} ms, instance: {}", fmt::group_digits(mTimerMS), mCCDBAccessor.getUniqueAgentID());
+  return res;
+}
+
+void CCDBManagerInstance::report(bool longrep)
+{
+  LOG(info) << "CCDBManager summary: " << getSummaryString();
+  if (longrep && mCachingEnabled) {
+    LOGP(info, "CCDB cache miss/hit/failures");
+    for (const auto& obj : mCache) {
+      LOGP(info, "  {}: {}/{}/{} ({}-{} bytes)", obj.first, obj.second.fetches, obj.second.queries - obj.second.fetches - obj.second.failures, obj.second.failures, obj.second.minSize, obj.second.maxSize);
+    }
+  }
+}
+
+void CCDBManagerInstance::endOfStream()
+{
+  report(true);
 }
 
 } // namespace ccdb

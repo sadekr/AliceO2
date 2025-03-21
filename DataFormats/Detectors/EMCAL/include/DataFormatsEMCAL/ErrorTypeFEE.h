@@ -57,6 +57,9 @@ class ErrorTypeFEE
     FIT_ERROR,         ///< Raw fit failed
     GEOMETRY_ERROR,    ///< Decoded position outside EMCAL
     GAIN_ERROR,        ///< Error due to gain type
+    LINK_ERROR,        ///< Error due to missing DDL links
+    TRU_ERROR,         ///< Errors from TRU data
+    STU_ERROR,         ///< Error from STU data
     UNDEFINED          ///< Error source undefined
   };
   /// \brief Constructor
@@ -66,7 +69,9 @@ class ErrorTypeFEE
   /// \param FEEID ID of the FEE responsible for the error
   /// \param errortype Type of the error
   /// \param errorCode Error code for the given error type
-  ErrorTypeFEE(int FEEID, ErrorSource_t errortype, int errorCode) : mFEEID(FEEID), mErrorSource(errortype), mErrorCode(errorCode) {}
+  /// \param subspec Subspecification of the error (i.e. FEC ID)
+  /// \param hardwareAddress Hardware address of the channel
+  ErrorTypeFEE(int FEEID, ErrorSource_t errortype, int errorCode, int subspec, int hardwareAddress) : mFEEID(FEEID), mErrorSource(errortype), mErrorCode(errorCode), mSubspecification(subspec), mHardwareAddress(hardwareAddress) {}
 
   /// \brief Destructor
   ~ErrorTypeFEE() = default;
@@ -95,6 +100,18 @@ class ErrorTypeFEE
   /// \param gainError Error code of the gain type error
   void setGainErrorType(int gainError) { setError(ErrorSource_t::GAIN_ERROR, gainError); }
 
+  /// \brief Set the error type as link error and store the error code
+  /// \param linkError Error code of the link error
+  void setLinkErrorTYpe(int linkError) { setError(ErrorSource_t::LINK_ERROR, linkError); }
+
+  /// \brief Set the error as STU decoder error and store the error code
+  /// \param gainError Error code of the STU decoder error
+  void setSTUDecoderErrorType(int stuerror) { setError(ErrorSource_t::STU_ERROR, stuerror); }
+
+  /// \brief Set the error as TRU decoder error and store the error code
+  /// \param gainError Error code of the TRU decoder error
+  void setTRUDecoderErrorType(int truerror) { setError(ErrorSource_t::TRU_ERROR, truerror); }
+
   /// \brief Set the error type of the object
   /// \param errorsource Error type of the object
   void setErrorType(ErrorSource_t errorsource) { mErrorSource = errorsource; }
@@ -112,9 +129,20 @@ class ErrorTypeFEE
     setErrorCode(errorcode);
   }
 
+  /// \brief Set the subspecification of the error
+  /// \param subspec Subspecification of the error
+  void setSubspecification(int subspec) { mSubspecification = subspec; }
+
+  /// \brief Set the hardware address of the error
+  /// \param hardwareAddress Hardware address of the error
+  void setHardwareAddress(int hardwareAddress) { mHardwareAddress = hardwareAddress; }
+
   /// \brief Get the FEE ID of the electronics responsible for the error
   /// \return ID of the FEE component
-  int getFEEID() const { return mFEEID; }
+  int getFEEID() const
+  {
+    return mFEEID;
+  }
 
   /// \brief Get the type of the error handled by the object
   /// \return Error type
@@ -144,11 +172,45 @@ class ErrorTypeFEE
   /// \return Error code (-1 in case the object is not a gain type error)
   int getGainTypeErrorType() const { return getRawErrorForType(ErrorSource_t::GAIN_ERROR); }
 
+  /// \brief Get the error code of the obect in case the object is a link error
+  /// \return Error code (-1 in case the object is not a gain type error)
+  int getLinkErrorType() const { return getRawErrorForType(ErrorSource_t::LINK_ERROR); }
+
+  /// \brief Get the error code of the obect in case the object is a STU decoder error
+  /// \return Error code (-1 in case the object is not a STU decoder error)
+  int getSTUDecoderErrorType() const { return getRawErrorForType(ErrorSource_t::STU_ERROR); }
+
+  /// \brief Get the error code of the obect in case the object is a TRU decoder error
+  /// \return Error code (-1 in case the object is not a STU decoder error)
+  int getTRUDecoderErrorType() const { return getRawErrorForType(ErrorSource_t::TRU_ERROR); }
+
+  /// \brief Get subspecification of the error
+  /// \return Subspecification of the error
+  int getSubspecification() const { return mSubspecification; }
+
+  /// \brief Get the hardware address of the error
+  /// \return Hardware address of the error
+  int getHarwareAddress() const { return mHardwareAddress; }
+
   /// \brief Printing information of the error type
   /// \param stream Output stream where to print the error
   ///
   /// Helper function, called in the output stream operator for the ErrorTypeFEE
   void PrintStream(std::ostream& stream) const;
+
+  /// \brief Get the number of error types
+  /// \return Number of error types (including undefined)
+  static constexpr int getNumberOfErrorTypes() { return 10; }
+
+  /// \brief Get the name of the error type
+  /// \param errorTypeID ID of the error type
+  /// \return Name of the error type
+  static const char* getErrorTypeName(unsigned int errorTypeID);
+
+  /// \brief Get the title of the error type
+  /// \param errorTypeID ID of the error type
+  /// \return Title of the error type
+  static const char* getErrorTypeTitle(unsigned int errorTypeID);
 
  private:
   /// \brief Helper function getting the error code under condition that the error is of a certain type
@@ -158,6 +220,8 @@ class ErrorTypeFEE
   int mFEEID = -1;                                       ///< FEE ID of the SM responsible for the error
   ErrorSource_t mErrorSource = ErrorSource_t::UNDEFINED; ///< Source of the error
   int mErrorCode = -1;                                   ///< Raw page error type
+  int mSubspecification;                                 ///< Subspecification
+  int mHardwareAddress;                                  ///< Hardware address of the channel
 
   ClassDefNV(ErrorTypeFEE, 1);
 };

@@ -22,13 +22,16 @@ namespace constants
 {
 namespace math
 {
-constexpr float Almost0 = 1.17549e-38;
-constexpr float Almost1 = 1.f - Almost0;
+constexpr float Almost0 = 0x1.0p-126f;   // smallest non-denormal float
+constexpr float Epsilon = 0x0.000002p0f; // smallest float such that 1 != 1 + Epsilon
+constexpr float Almost1 = 1.f - 1.0e-6f;
 constexpr float VeryBig = 1.f / Almost0;
 
 constexpr float PI = 3.14159274101257324e+00f;
 constexpr float TwoPI = 2.f * PI;
 constexpr float PIHalf = 0.5f * PI;
+constexpr float PIThird = PI / 3.0f;
+constexpr float PIQuarter = 0.25f * PI;
 constexpr float Rad2Deg = 180.f / PI;
 constexpr float Deg2Rad = PI / 180.f;
 

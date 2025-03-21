@@ -21,14 +21,25 @@
 
 #endif
 
+#include "ZDCBase/Helpers.h"
 using namespace o2::zdc;
 using namespace std;
 
-void CreateModuleConfig(long tmin = 0, long tmax = -1,
-                        std::string ccdbHost = "http://ccdb-test.cern.ch:8080")
+void CreateModuleConfig(long tmin = 0, long tmax = -1, std::string ccdbHost = "")
 {
+  // Shortcuts: internal, external, test, local, root
 
   ModuleConfig conf;
+
+  // Conversion factor for baseline
+  conf.nBunchAverage = 2; // Number of bunch crossings in average
+  int bshift = std::ceil(std::log2(double(o2::zdc::NTimeBinsPerBC) * double(conf.nBunchAverage) * double(ADCRange))) - 16;
+  int divisor = 0x1 << bshift;
+  conf.baselineFactor = float(divisor) / float(conf.nBunchAverage) / float(o2::zdc::NTimeBinsPerBC);
+
+  // Bunch list for baseline calculation e.g.:
+  // conf.resetMap();
+  // conf.addBunch(3563);
 
   int modID;
 
@@ -111,8 +122,8 @@ void CreateModuleConfig(long tmin = 0, long tmax = -1,
     module.id = modID;
     module.setChannel(0, IdZPCC, 2 * modID, true, true, -5, 6, 4, 12);
     module.setChannel(1, IdZEM2, 2 * modID, true, true, -5, 6, 4, 12);
-    module.setChannel(2, IdZPC1, 2 * modID + 1, true, false, -5, 6, 4, 12);
-    module.setChannel(3, IdZPC2, 2 * modID + 1, true, false, -5, 6, 4, 12);
+    module.setChannel(2, IdZPC3, 2 * modID + 1, true, false, -5, 6, 4, 12);
+    module.setChannel(3, IdZPC4, 2 * modID + 1, true, false, -5, 6, 4, 12);
     //
   }
   //-------------------------------------------
@@ -122,18 +133,26 @@ void CreateModuleConfig(long tmin = 0, long tmax = -1,
     module.id = modID;
     module.setChannel(0, IdZPCC, 2 * modID, false, true, -5, 6, 4, 12);
     module.setChannel(1, IdZPCSum, 2 * modID, true, false, -5, 6, 4, 12);
-    module.setChannel(2, IdZPC3, 2 * modID + 1, true, false, -5, 6, 4, 12);
-    module.setChannel(3, IdZPC4, 2 * modID + 1, true, false, -5, 6, 4, 12);
+    module.setChannel(2, IdZPC1, 2 * modID + 1, true, false, -5, 6, 4, 12);
+    module.setChannel(3, IdZPC2, 2 * modID + 1, true, false, -5, 6, 4, 12);
     //
   }
   conf.check();
   conf.print();
 
+  std::string ccdb_host = ccdbShortcuts(ccdbHost, conf.Class_Name(), CCDBPathConfigModule);
+
+  if (endsWith(ccdb_host, ".root")) {
+    TFile f(TString::Format(ccdb_host.data(), tmin, tmax), "recreate");
+    f.WriteObjectAny(&conf, conf.Class_Name(), "ccdb_object");
+    f.Close();
+    return;
+  }
+
   o2::ccdb::CcdbApi api;
   map<string, string> metadata; // can be empty
-  api.init(ccdbHost.c_str());   // or http://localhost:8080 for a local installation
+  api.init(ccdb_host.c_str());
+  LOG(info) << "CCDB server: " << api.getURL();
   // store abitrary user object in strongly typed manner
   api.storeAsTFileAny(&conf, CCDBPathConfigModule, metadata, tmin, tmax);
-
-  // return conf;
 }

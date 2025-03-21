@@ -15,6 +15,7 @@
 #pragma link off all classes;
 #pragma link off all functions;
 #pragma link C++ class o2::tof::Cluster + ;
+#pragma link C++ class o2::tof::TOFFEElightInfo + ;
 #pragma link C++ class o2::tof::CalibInfoCluster + ;
 #pragma link C++ class o2::tof::CosmicInfo + ;
 #pragma link C++ class o2::tof::CalibInfoTrackCl + ;
@@ -32,6 +33,8 @@
 
 #pragma link C++ class std::vector < o2::dataformats::CalibInfoTOFshort> + ;
 #pragma link C++ class std::vector < o2::dataformats::CalibInfoTOF> + ;
+#pragma link C++ class o2::tof::Parameters < 5> + ;
+#pragma link C++ class o2::tof::ParameterCollection + ;
 
 #pragma link C++ class o2::tof::CTFHeader + ;
 #pragma link C++ class o2::tof::CompressedInfos + ;

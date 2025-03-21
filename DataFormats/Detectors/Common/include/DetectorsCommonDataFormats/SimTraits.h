@@ -87,13 +87,19 @@ class SimTraits
       /*FT0*/ VS{ "FT0Hit" },
       /*FV0*/ VS{ "FV0Hit" },
       /*FDD*/ VS{ "FDDHit" },
-      /*ACO*/ VS{ "ACOHit" },
-      /*CTP*/ VS{ "CTPHit" }
+      /*TST*/ VS{ "TSTHit" }, // former ACO
+      /*CTP*/ VS{ "CTPHit" },
+      /*FOC*/ VS{ "FOCHit" }
 #ifdef ENABLE_UPGRADES
       ,
       /*IT3*/ VS{ "IT3Hit" },
       /*TRK*/ VS{ "TRKHit" },
-      /*FT3*/ VS{ "FT3Hit" }
+      /*FT3*/ VS{ "FT3Hit" },
+      /*FCT*/ VS{ "FCTHit" },
+      /*TF3*/ VS{ "TF3Hit" },
+      /*RCH*/ VS{ "RCHHit" },
+      /*MI3*/ VS{ "MI3Hit" },
+      /*ECL*/ VS{ "ECLHit" }
 #endif
     };
   // clang-format on
@@ -161,7 +167,10 @@ namespace tpc
 {
 class HitGroup;
 }
-
+namespace focal
+{
+class Hit;
+}
 namespace detectors
 {
 
@@ -225,6 +234,10 @@ template <>
 struct DetIDToHitTypes<o2::detectors::DetID::TPC> {
   using HitType = o2::tpc::HitGroup;
 };
+template <>
+struct DetIDToHitTypes<o2::detectors::DetID::FOC> {
+  using HitType = o2::focal::Hit;
+};
 #ifdef ENABLE_UPGRADES
 template <>
 struct DetIDToHitTypes<o2::detectors::DetID::IT3> {
@@ -236,6 +249,10 @@ struct DetIDToHitTypes<o2::detectors::DetID::TRK> {
 };
 template <>
 struct DetIDToHitTypes<o2::detectors::DetID::FT3> {
+  using HitType = o2::itsmft::Hit;
+};
+template <>
+struct DetIDToHitTypes<o2::detectors::DetID::FCT> {
   using HitType = o2::itsmft::Hit;
 };
 #endif

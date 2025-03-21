@@ -13,19 +13,20 @@
 #define ALICEO2_ZDC_CONSTANTS_H
 
 #include "CommonConstants/PhysicsConstants.h"
+#include "CommonConstants/LHCConstants.h"
+#include "CommonConstants/ZDCConstants.h"
 #include <cstdint>
 #include <cstdlib>
 #include <array>
 #include <string_view>
 #include <string>
 #include <type_traits>
+#include <limits>
 
 // Enable debug printout in reconstruction
-//#define O2_ZDC_DEBUG
+// #define O2_ZDC_DEBUG
 // TDC arrays in debug output
-//#define O2_ZDC_TDC_C_ARRAY
-// Debug output of full interpolated function
-//#define O2_ZDC_INTERP_DEBUG
+// #define O2_ZDC_TDC_C_ARRAY
 
 namespace o2
 {
@@ -52,6 +53,7 @@ enum ChannelTypeZEM { ZEMCh1,
 constexpr int NTimeBinsPerBC = 12; //< number of samples per BC
 constexpr int NBCReadOut = 4;      // N BCs read out per trigger
 constexpr int NTimeBinsReadout = NTimeBinsPerBC * NBCReadOut;
+constexpr int16_t Int16MaxVal = 0x7fff;
 
 constexpr int NChannelsZN = 6;  //< number of channels stored per ZN
 constexpr int NChannelsZP = 6;  //< number of channels stored per ZP
@@ -69,7 +71,11 @@ constexpr int NLinks = NModules * 2;
 constexpr int NDigiChannels = NModules * NChPerModule;
 constexpr int NWPerBc = 3;
 constexpr int MaxTriggerChannels = NChannels;
+
+// Limits
 constexpr int ADCMin = -2048, ADCMax = 2047, ADCRange = 4096; // 12 bit ADC
+constexpr float FInfty = std::numeric_limits<float>::infinity();
+constexpr float DInfty = std::numeric_limits<double>::infinity();
 
 // Encoding of ZDC energy into an uint32_t value
 // Most significant 5 bits are for channel id, least significant 27 bits are for energy
@@ -84,13 +90,18 @@ constexpr int MaxTDCValues = 5;  // max number of TDC values to store in reconst
 constexpr int NTDCChannels = 10; // max number of TDC values to store in reconstructed event
 constexpr uint32_t ZDCRefInitVal = 0xffffffff;
 // Parameters of interpolating function
-constexpr int TSL = 6;                      // number of zeros on the right (and on the left) of central peak
-constexpr int TSN = 200;                    // Number of interpolated points between each pair = TSN-1
-constexpr int TSNH = TSN / 2;               // Half of TSN
-constexpr int TSNS = 96;                    // Number of interpolated points per ns
-constexpr int NTS = 2 * TSL * TSN + 1;      // Tapered sinc function array size
-constexpr static float FTDCAmp = 1. / 8.;   // Multiplication factor in conversion from integer
-constexpr static float FTDCVal = 1. / TSNS; // Multiplication factor in conversion from integer
+constexpr int TSL = 6;                    // number of zeros on the right (and on the left) of central peak
+constexpr int TSN = 200;                  // Number of interpolated points between each pair = TSN-1
+constexpr int TSNH = TSN / 2;             // Half of TSN
+constexpr int NTS = 2 * TSL * TSN + 1;    // Tapered sinc function array size
+constexpr int NIS = NTimeBinsPerBC * TSN; // Number of interpolated samples
+// With a reference clock of 40 MHz exact this FTDCVal would have been
+// constexpr float FTDCVal = 1. / TSNS;
+// with constexpr int TSNS = 96;
+// However we need to modify to take into account actual LHC clock frequency
+// Multiplication factor in conversion from integer
+constexpr float FTDCVal = o2::constants::lhc::LHCBunchSpacingNS / NTimeBinsPerBC / TSN;
+constexpr float FOffset = 8.; // Conversion from average pedestal to representation in OrbitData (16 bit)
 
 enum TDCChannelID {
   TDCZNAC,
@@ -105,6 +116,12 @@ enum TDCChannelID {
   TDCZPCS
 }; // TDC channels in reconstructed event, their number should be equal to NTDCChannels
 
+constexpr int NBucket = 10; // Number of buckets in a
+constexpr int NBKZero = 5;  // Bucket with main-main collisions
+constexpr int NFParA = 3;   // Number of parameters in fitting function - Amplitude
+constexpr int NFParT = 3;   // Number of parameters in fitting function - Time
+constexpr int NBCAn = 3;    // Number of analyzed bunches
+
 //< get detector TOF correction in ns
 constexpr float getTOFCorrection(int det)
 {
@@ -117,73 +134,50 @@ constexpr float getTOFCorrection(int det)
   return TOFCorr[det - DetIDOffs];
 }
 
-//< map detector/tower to continuous channel Id
-constexpr int IdDummy = -1;
-constexpr int IdVoid = -2;
-
-constexpr int IdZNAC = 0;
-constexpr int IdZNA1 = 1;
-constexpr int IdZNA2 = 2;
-constexpr int IdZNA3 = 3;
-constexpr int IdZNA4 = 4;
-constexpr int IdZNASum = 5;
-//
-constexpr int IdZPAC = 6;
-constexpr int IdZPA1 = 7;
-constexpr int IdZPA2 = 8;
-constexpr int IdZPA3 = 9;
-constexpr int IdZPA4 = 10;
-constexpr int IdZPASum = 11;
-//
-constexpr int IdZEM1 = 12;
-constexpr int IdZEM2 = 13;
-//
-constexpr int IdZNCC = 14;
-constexpr int IdZNC1 = 15;
-constexpr int IdZNC2 = 16;
-constexpr int IdZNC3 = 17;
-constexpr int IdZNC4 = 18;
-constexpr int IdZNCSum = 19;
-//
-constexpr int IdZPCC = 20;
-constexpr int IdZPC1 = 21;
-constexpr int IdZPC2 = 22;
-constexpr int IdZPC3 = 23;
-constexpr int IdZPC4 = 24;
-constexpr int IdZPCSum = 25;
+constexpr uint32_t MaskZNA = 0x0000001f;
+constexpr uint32_t MaskAllZNA = 0x0000003f;
+constexpr uint32_t MaskZPA = 0x000007c0;
+constexpr uint32_t MaskAllZPA = 0x00000fc0;
+constexpr uint32_t MaskZEM = 0x00003000;
+constexpr uint32_t MaskZNC = 0x000fc000;
+constexpr uint32_t MaskAllZNC = 0x0007f000;
+constexpr uint32_t MaskZPC = 0x01f00000;
+constexpr uint32_t MaskAllZPC = 0x03f00000;
 
 constexpr std::string_view ChannelNames[] = {
-  "ZNAC",
-  "ZNA1",
-  "ZNA2",
-  "ZNA3",
-  "ZNA4",
-  "ZNAS",
+  "ZNAC", //  0
+  "ZNA1", //  1
+  "ZNA2", //  2
+  "ZNA3", //  3
+  "ZNA4", //  4
+  "ZNAS", //  5
   //
-  "ZPAC",
-  "ZPA1",
-  "ZPA2",
-  "ZPA3",
-  "ZPA4",
-  "ZPAS",
+  "ZPAC", //  6
+  "ZPA1", //  7
+  "ZPA2", //  8
+  "ZPA3", //  9
+  "ZPA4", // 10
+  "ZPAS", // 11
   //
-  "ZEM1",
-  "ZEM2",
+  "ZEM1", // 12
+  "ZEM2", // 13
   //
-  "ZNCC",
-  "ZNC1",
-  "ZNC2",
-  "ZNC3",
-  "ZNC4",
-  "ZNCS",
+  "ZNCC", // 14
+  "ZNC1", // 15
+  "ZNC2", // 16
+  "ZNC3", // 17
+  "ZNC4", // 18
+  "ZNCS", // 19
   //
-  "ZPCC",
-  "ZPC1",
-  "ZPC2",
-  "ZPC3",
-  "ZPC4",
-  "ZPCS"};
+  "ZPCC", // 20
+  "ZPC1", // 21
+  "ZPC2", // 22
+  "ZPC3", // 23
+  "ZPC4", // 24
+  "ZPCS"  // 25
+};
 
+// From TDC ID to signal ID
 const int TDCSignal[NTDCChannels] = {
   IdZNAC,   // TDCZNAC
   IdZNASum, // TDCZNAS
@@ -197,10 +191,24 @@ const int TDCSignal[NTDCChannels] = {
   IdZPCSum  // TDCZPCS
 };
 
+// From Signal ID to TDC ID
+const int SignalTDC[NChannels] = {
+  TDCZNAC,
+  TDCZNAS, TDCZNAS, TDCZNAS, TDCZNAS, TDCZNAS,
+  TDCZPAC,
+  TDCZPAS, TDCZPAS, TDCZPAS, TDCZPAS, TDCZPAS,
+  TDCZEM1,
+  TDCZEM2,
+  TDCZNCC,
+  TDCZNCS, TDCZNCS, TDCZNCS, TDCZNCS, TDCZNCS,
+  TDCZPCC,
+  TDCZPCS, TDCZPCS, TDCZPCS, TDCZPCS, TDCZPCS};
+
 constexpr int DbgZero = 0;
 constexpr int DbgMinimal = 1;
 constexpr int DbgMedium = 2;
 constexpr int DbgFull = 3;
+constexpr int DbgExtra = 4;
 
 // paths to CCDB objects
 // TODO: eventually these paths should be retrieved from NameConfigurator class
@@ -209,11 +217,18 @@ constexpr int DbgFull = 3;
 
 const std::string CCDBPathConfigSim = "ZDC/Config/Sim";
 const std::string CCDBPathConfigModule = "ZDC/Config/Module";
-const std::string CCDBPathConfigReco = "ZDC/Calib/RecoParam";
 const std::string CCDBPathRecoConfigZDC = "ZDC/Calib/RecoConfigZDC";
 const std::string CCDBPathTDCCalib = "ZDC/Calib/TDCCalib";
+const std::string CCDBPathTDCCalibConfig = "ZDC/Calib/TDCCalibConfig";
+const std::string CCDBPathTDCCorr = "ZDC/Calib/TDCCorr";
 const std::string CCDBPathEnergyCalib = "ZDC/Calib/EnergyCalib";
 const std::string CCDBPathTowerCalib = "ZDC/Calib/TowerCalib";
+const std::string CCDBPathInterCalibConfig = "ZDC/Calib/InterCalibConfig";
+const std::string CCDBPathWaveformCalib = "ZDC/Calib/WaveformCalib";
+const std::string CCDBPathWaveformCalibConfig = "ZDC/Calib/WaveformCalibConfig";
+const std::string CCDBPathBaselineCalib = "ZDC/Calib/BaselineCalib";
+const std::string CCDBPathBaselineCalibConfig = "ZDC/Calib/BaselineCalibConfig";
+const std::string CCDBPathNoiseCalib = "ZDC/Calib/NoiseCalib";
 
 enum Ped { PedND = 0,
            PedEv = 1,
@@ -221,31 +236,62 @@ enum Ped { PedND = 0,
            PedQC = 3,
            PedMissing = 4 };
 
+// Max 256 error messages
 enum Msg { MsgGeneric = 0,
            MsgTDCPedQC = 1,
            MsgTDCPedMissing = 2,
            MsgADCPedOr = 3,
            MsgADCPedQC = 4,
            MsgADCPedMissing = 5,
-           MsgEnd };
+           MsgOffPed = 6,
+           MsgPilePed = 7,
+           MsgPileTM = 8,
+           MsgADCMissingwTDC = 9,
+           MsgTDCPileEvC = 10, // A correction is done
+           MsgTDCPileEvE = 11, // Correction has problems
+           MsgTDCPileM1C = 12,
+           MsgTDCPileM1E = 13,
+           MsgTDCPileM2C = 14,
+           MsgTDCPileM2E = 15,
+           MsgTDCPileM3C = 16,
+           MsgTDCPileM3E = 17,
+           MsgTDCSigE = 18, // Error correcting isolated signal
+           MsgEnd           // End_of_messages
+};
 
 constexpr std::string_view MsgText[] = {
-  "generic error",
+  "Generic E",
   "TDC QC ped",
   "TDC missing ped",
   "ADC Orbit ped",
   "ADC QC ped",
-  "ADC missing ped"};
+  "ADC missing ped",
+  "Positive ped offset",
+  "Pile-up in ev ped",
+  "Pile-up in TM",
+  "ADC missing, TDC present",
+  "TDC pile-up Ev C", // In-event pile-up corrected
+  "TDC pile-up Ev E", // In-event pile-up correction error
+  "TDC pile-up M1 C", // Corrected for pile-up in bunch -1
+  "TDC pile-up M1 E",
+  "TDC pile-up M2 C",
+  "TDC pile-up M2 E",
+  "TDC pile-up M3 C",
+  "TDC pile-up M3 E",
+  "TDC signal E"
+  // End_of_messages
+};
 
 // List of channels that can be calibrated
 constexpr std::array<int, 10> ChEnergyCalib{IdZNAC, IdZNASum, IdZPAC, IdZPASum,
                                             IdZEM1, IdZEM2,
                                             IdZNCC, IdZNCSum, IdZPCC, IdZPCSum};
 
-constexpr std::array<int, 16> ChTowerCalib{IdZNA1, IdZNA2, IdZNA3, IdZNA4,
+constexpr std::array<int, 17> ChTowerCalib{IdZNA1, IdZNA2, IdZNA3, IdZNA4,
                                            IdZPA1, IdZPA2, IdZPA3, IdZPA4,
                                            IdZNC1, IdZNC2, IdZNC3, IdZNC4,
-                                           IdZPC1, IdZPC2, IdZPC3, IdZPC4};
+                                           IdZPC1, IdZPC2, IdZPC3, IdZPC4,
+                                           IdZEM2};
 
 constexpr std::array<int, NChannels> CaloCommonPM{IdZNAC, IdZNAC, IdZNAC, IdZNAC, IdZNAC, IdZNAC,
                                                   IdZPAC, IdZPAC, IdZPAC, IdZPAC, IdZPAC, IdZPAC,
@@ -295,6 +341,16 @@ constexpr int toDet(int channel, int& tower)
     return ZNC + channel / NChannelsZP;
   }
 }
+
+// Calibration workflows
+// Waveform calibration
+constexpr int WaveformCalib_NBB = 3; // Number of bunches acquired before colliding b.c.
+constexpr int WaveformCalib_NBA = 6; // Number of bunches acquired after colliding b.c.
+constexpr int WaveformCalib_NBT = WaveformCalib_NBB + WaveformCalib_NBA + 1;
+constexpr int WaveformCalib_NW = WaveformCalib_NBT * NIS;
+
+using zdcBaseline_t = int16_t;
+constexpr int BaselineMin = -32768, BaselineMax = 32767, BaselineRange = 65536; // 16 bit with sign
 
 } // namespace zdc
 } // namespace o2

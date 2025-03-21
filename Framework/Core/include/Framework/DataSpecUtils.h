@@ -51,6 +51,16 @@ struct DataSpecUtils {
                     const o2::header::DataDescription& description,
                     const o2::header::DataHeader::SubSpecificationType& subSpec);
 
+  static bool match(const InputSpec& spec, o2::header::DataHeader const& dh)
+  {
+    return DataSpecUtils::match(spec, dh.dataOrigin, dh.dataDescription, dh.subSpecification);
+  }
+
+  static bool match(const OutputSpec& spec, o2::header::DataHeader const& dh)
+  {
+    return DataSpecUtils::match(spec, dh.dataOrigin, dh.dataDescription, dh.subSpecification);
+  }
+
   /// find a matching spec in the container
   /// @return std::optional with found spec or std::nullopt
   template <typename ContainerT>
@@ -70,8 +80,23 @@ struct DataSpecUtils {
   /// @return true if the InputSpec will match at least the provided @a origin.
   static bool partialMatch(InputSpec const& spec, o2::header::DataOrigin const& origin);
 
+  /// @return true if the InputSpec will match at least one of the provided @a origins
+  template <size_t N>
+  static bool partialMatch(InputSpec const& spec, std::array<header::DataOrigin, N> const& origins)
+  {
+    return std::find_if(origins.begin(), origins.end(), [&](auto const& o) { return DataSpecUtils::asConcreteOrigin(spec) == o; }) != origins.end();
+  }
+
   /// @return true if the OutputSpec will match at least the provided @a origin.
   static bool partialMatch(OutputSpec const& spec, o2::header::DataOrigin const& origin);
+
+  /// @return true if the OutputSpec will match at least one of the provided @a origins
+  template <size_t N>
+  static bool partialMatch(OutputSpec const& spec, std::array<header::DataOrigin, N> const& origins)
+  {
+    auto dataType = DataSpecUtils::asConcreteDataTypeMatcher(spec);
+    return std::find_if(origins.begin(), origins.end(), [&](auto const& o) { return dataType.origin == o; }) != origins.end();
+  }
 
   /// @return true if the OutputSpec will match at least the provided @a description.
   static bool partialMatch(InputSpec const& spec, o2::header::DataDescription const& description);
@@ -129,6 +154,9 @@ struct DataSpecUtils {
   /// Same as the other describe, but uses a buffer to reduce memory churn.
   static void describe(char* buffer, size_t size, InputSpec const& spec);
 
+  /// Same as the other describe, but uses a buffer to reduce memory churn.
+  static void describe(char* buffer, size_t size, OutputSpec const& spec);
+
   /// If possible extract the ConcreteDataMatcher from an InputSpec. This
   /// can be done either if the InputSpec is defined in terms for a ConcreteDataMatcher
   /// or if the query can be uniquely assigned to a ConcreteDataMatcher.
@@ -137,7 +165,13 @@ struct DataSpecUtils {
   /// If possible extract the ConcreteDataMatcher from an OutputSpec.
   /// For the moment this is trivial as the OutputSpec does not allow
   /// for wildcards.
+  /// @throw std::runtime_error if the OutputSpec contains wildcards.
   static ConcreteDataMatcher asConcreteDataMatcher(OutputSpec const& spec);
+
+  /// As the other asConcreteDataMatcher, but returns a std::optional
+  /// and does its best to handle the case where the OutputSpec contains
+  /// a wildcard.
+  static std::optional<ConcreteDataMatcher> asOptionalConcreteDataMatcher(OutputSpec const& spec);
 
   /// If possible extract the ConcreteTypeDataMatcher from an OutputSpec.
   /// This will always be possible, but implementation will have to
@@ -175,6 +209,9 @@ struct DataSpecUtils {
   /// OutputSpec
   static InputSpec matchingInput(OutputSpec const& spec);
 
+  /// Create an InputSpec from metadata string
+  static InputSpec fromMetadataString(std::string s);
+
   /// Get the origin, if available
   static std::optional<header::DataOrigin> getOptionalOrigin(InputSpec const& spec);
 
@@ -199,8 +236,18 @@ struct DataSpecUtils {
   /// Build a DataDescriptMatcher which does not care about the subSpec and origin.
   static data_matcher::DataDescriptorMatcher dataDescriptorMatcherFrom(header::DataDescription const& origin);
 
+  /// return fully qualified ConcreteDataMatcher if DataMatcher is connecting unique properties
+  /// via 'and' operation
+  static std::optional<framework::ConcreteDataMatcher> optionalConcreteDataMatcherFrom(data_matcher::DataDescriptorMatcher const& matcher);
+
   /// Checks if left includes right (or is equal to)
   static bool includes(const InputSpec& left, const InputSpec& right);
+
+  /// Updates list of InputSpecs by merging metadata
+  static void updateInputList(std::vector<InputSpec>& list, InputSpec&& input);
+
+  /// Updates list of OutputSpecs by merging metadata (or adding output).
+  static void updateOutputList(std::vector<OutputSpec>& list, OutputSpec&& input);
 };
 
 } // namespace framework

@@ -42,15 +42,20 @@ struct fileMon {
   std::string name;
   unsigned int nLines = 0;
   unsigned int nBytes = 0;
+  bool stopped = false;
 
   fileMon(const std::string& path, const std::string& filename);
+  fileMon(const std::string& filename, std::ifstream&& f);
 };
 
-fileMon::fileMon(const std::string& path, const std::string& filename)
+fileMon::fileMon(const std::string& path, const std::string& filename) : name(filename)
 {
   printf("Monitoring file %s\n", filename.c_str());
-  name = filename;
   file.open(path + "/" + filename, std::ifstream::in);
+}
+
+fileMon::fileMon(const std::string& filename, std::ifstream&& f) : file(std::move(f)), name(filename)
+{
 }
 
 class EPNMonitor
@@ -58,11 +63,13 @@ class EPNMonitor
  public:
   EPNMonitor(std::string path, bool infoLogger, int runNumber, std::string partition);
   ~EPNMonitor();
+  void setRunNr(int nr) { mRunNumber = nr; }
 
  private:
   void thread();
   void check_add_file(const std::string& filename);
-  void sendLog(const std::string& file, const std::string& message);
+  void sendLog(const std::string& file, const std::string& message,
+               const InfoLogger::InfoLogger::Severity severity = InfoLogger::InfoLogger::Severity::Error, int level = 3);
 
   bool mInfoLoggerActive;
   volatile bool mTerminate = false;
@@ -70,7 +77,8 @@ class EPNMonitor
   std::unordered_map<std::string, fileMon> mFiles;
   std::string mPath;
   std::vector<std::regex> mFilters;
-  unsigned int mRunNUmber;
+  std::unordered_map<std::string, std::pair<InfoLogger::InfoLogger::Severity, int>> mMapLogTypes;
+  volatile unsigned int mRunNumber;
   std::string mPartition;
   unsigned int nLines = 0;
   unsigned int nBytes = 0;
@@ -81,16 +89,25 @@ class EPNMonitor
 EPNMonitor::EPNMonitor(std::string path, bool infoLogger, int runNumber, std::string partition)
 {
   mFilters.emplace_back("^Info in <");
+  mFilters.emplace_back("^Print in <");
   mFilters.emplace_back("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]{6}");
+  mFilters.emplace_back("^Warning in <Fit");
+  mFilters.emplace_back("^Warning in <TGraph");
+  mFilters.emplace_back("^Warning in <TInterpreter");
+  mFilters.emplace_back("Dividing histograms with different labels");
+  mMapLogTypes.emplace("(core dumped)", std::pair<InfoLogger::InfoLogger::Severity, int>{InfoLogger::InfoLogger::Severity::Error, 1});
+  mMapLogTypes.emplace("Warning in <", std::pair<InfoLogger::InfoLogger::Severity, int>{InfoLogger::InfoLogger::Severity::Warning, 11});
+  mMapLogTypes.emplace("Error in <", std::pair<InfoLogger::InfoLogger::Severity, int>{InfoLogger::InfoLogger::Severity::Error, 2});
+  mMapLogTypes.emplace("Fatal in <", std::pair<InfoLogger::InfoLogger::Severity, int>{InfoLogger::InfoLogger::Severity::Fatal, 1});
+  mMapLogTypes.emplace("*** Break ***", std::pair<InfoLogger::InfoLogger::Severity, int>{InfoLogger::InfoLogger::Severity::Fatal, 1});
   mInfoLoggerActive = infoLogger;
   mPath = path;
-  mRunNUmber = runNumber;
+  mRunNumber = runNumber;
   mPartition = partition;
   if (infoLogger) {
     mLogger = std::make_unique<InfoLogger::InfoLogger>();
     mLoggerContext = std::make_unique<InfoLogger::InfoLoggerContext>();
     mLoggerContext->setField(InfoLogger::InfoLoggerContext::FieldName::Partition, partition != "" ? partition : "unspecified");
-    mLoggerContext->setField(InfoLogger::InfoLoggerContext::FieldName::Run, runNumber == 0 ? std::to_string(runNumber) : "unspecified");
     mLoggerContext->setField(InfoLogger::InfoLoggerContext::FieldName::System, std::string("STDERR"));
   }
   mThread = std::thread(&EPNMonitor::thread, this);
@@ -111,20 +128,30 @@ void EPNMonitor::check_add_file(const std::string& filename)
   }
 }
 
-void EPNMonitor::sendLog(const std::string& file, const std::string& message)
+void EPNMonitor::sendLog(const std::string& file, const std::string& message, const InfoLogger::InfoLogger::Severity severity, int level)
 {
   if (mInfoLoggerActive) {
-    mLoggerContext->setField(InfoLogger::InfoLoggerContext::FieldName::Facility, "stderr/" + file);
-    static const InfoLogger::InfoLogger::InfoLoggerMessageOption opt = {InfoLogger::InfoLogger::Severity::Error, 3, InfoLogger::InfoLogger::undefinedMessageOption.errorCode, InfoLogger::InfoLogger::undefinedMessageOption.sourceFile, InfoLogger::InfoLogger::undefinedMessageOption.sourceLine};
-    mLogger->log(opt, *mLoggerContext, "stderr: %s", message.c_str());
+    mLoggerContext->setField(InfoLogger::InfoLoggerContext::FieldName::Facility, ("stderr/" + file).substr(0, 31));
+    mLoggerContext->setField(InfoLogger::InfoLoggerContext::FieldName::Run, mRunNumber != 0 ? std::to_string(mRunNumber) : "unspecified");
+    static const InfoLogger::InfoLogger::InfoLoggerMessageOption opt = {severity, level, InfoLogger::InfoLogger::undefinedMessageOption.errorCode, InfoLogger::InfoLogger::undefinedMessageOption.sourceFile, InfoLogger::InfoLogger::undefinedMessageOption.sourceLine};
+    mLogger->log(opt, *mLoggerContext, "stderr: %s", file == "SYSLOG" ? (std::string("[GLOBAL SYSLOG]: ") + message).c_str() : message.c_str());
   } else {
-    printf("stderr: %s: %s\n", file.c_str(), message.c_str());
+    printf("stderr: [%c] %s: %s\n", severity, file.c_str(), message.c_str());
   }
 }
 
 void EPNMonitor::thread()
 {
   printf("EPN stderr Monitor active\n");
+
+  try {
+    std::string syslogfile = "/var/log/infologger_syslog";
+    std::ifstream file;
+    file.open(syslogfile, std::ifstream::in);
+    file.seekg(0, file.end);
+    mFiles.emplace(std::piecewise_construct, std::forward_as_tuple(syslogfile), std::forward_as_tuple(std::string("SYSLOG"), std::move(file)));
+  } catch (...) {
+  }
 
   int fd;
   int wd;
@@ -165,6 +192,9 @@ void EPNMonitor::thread()
       std::string line;
       for (auto fit = mFiles.begin(); fit != mFiles.end(); fit++) {
         auto& f = fit->second;
+        if (f.stopped) {
+          continue;
+        }
         auto& file = f.file;
         file.clear();
         do {
@@ -180,19 +210,29 @@ void EPNMonitor::thread()
             if (filterLine) {
               continue;
             }
+            // assign proper severity / level for remaining ROOT log messages
+            auto severity{InfoLogger::InfoLogger::Severity::Error};
+            int level{3};
+            for (const auto& logType : mMapLogTypes) {
+              if (line.find(logType.first) != std::string::npos) {
+                severity = std::get<InfoLogger::InfoLogger::Severity>(logType.second);
+                level = std::get<int>(logType.second);
+                break;
+              }
+            }
             f.nLines++;
             f.nBytes += line.size();
             nLines++;
             nBytes += line.size();
             if (f.nLines >= MAX_LINES_FILE || f.nBytes >= MAX_BYTES_FILE) {
               sendLog(f.name, "Exceeded log size for process " + f.name + " (" + std::to_string(f.nLines) + " lines, " + std::to_string(f.nBytes) + " bytes), not reporting any more errors from this file...");
-              fit = mFiles.erase(fit);
+              f.stopped = true;
               break;
             }
             if (nLines >= MAX_LINES_TOTAL || nBytes >= MAX_BYTES_TOTAL) {
               break;
             }
-            sendLog(f.name, line);
+            sendLog(f.name, line, severity, level);
           }
         } while (!file.eof());
       }
@@ -219,17 +259,30 @@ namespace bpo = boost::program_options;
 struct EPNstderrMonitor : fair::mq::Device {
   void InitTask() override
   {
-    std::string path = ".";
+    std::string path = getenv("DDS_LOCATION") ? (std::string(getenv("DDS_LOCATION")) + "/") : std::string(".");
     bool infoLogger = fConfig->GetProperty<int>("infologger");
     bool dds = false;
-/*    if (fConfig->Count("plugin")) {
-      const auto& plugins = fConfig->GetProperty<std::vector<std::string>>("plugin");
-      dds = std::find(plugins.begin(), plugins.end(), "ODC") != plugins.end();
-    }
-    int runNumber = dds ? atoi(fConfig->GetProperty<std::string>("runNumber").c_str()) : 0;*/
-    int runNumber = 0;
+
     std::string partition = "";
-    gEPNMonitor = std::make_unique<EPNMonitor>(path, infoLogger, runNumber, partition);
+    try {
+      partition = fConfig->GetProperty<std::string>("environment_id", "");
+      printf("Got environment_id: %s\n", partition.c_str());
+    } catch (...) {
+      printf("Error getting environment_id\n");
+    }
+
+    gEPNMonitor = std::make_unique<EPNMonitor>(path, infoLogger, 0, partition);
+  }
+  void PreRun() override
+  {
+    int runNumber = 0;
+    try {
+      runNumber = atoi(fConfig->GetProperty<std::string>("runNumber", "").c_str());
+      printf("Got runNumber: %d\n", runNumber);
+    } catch (...) {
+      printf("Error getting runNumber\n");
+    }
+    gEPNMonitor->setRunNr(runNumber);
   }
   bool ConditionalRun() override
   {

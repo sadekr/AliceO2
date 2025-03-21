@@ -48,7 +48,7 @@ using RDH = o2::header::RDHAny;
 
 void RawFileReaderTask::init(framework::InitContext& ic)
 {
-  LOG(INFO) << "Raw file reader init ";
+  LOG(info) << "Raw file reader init ";
 
   // read input parameters
   mPrint = ic.options().get<bool>("print");
@@ -59,10 +59,10 @@ void RawFileReaderTask::init(framework::InitContext& ic)
   }
 
   auto stop = [this]() {
-    LOG(INFO) << "stop file reader"; // close the input file
+    LOG(info) << "stop file reader"; // close the input file
     this->mInputFile.close();
   };
-  ic.services().get<CallbackService>().set(CallbackService::Id::Stop, stop);
+  ic.services().get<CallbackService>().set<CallbackService::Id::Stop>(stop);
 
   mExTimer.start();
   return;
@@ -75,11 +75,11 @@ void RawFileReaderTask::run(framework::ProcessingContext& pc)
   char* outBuffer{nullptr};
   size_t bufSize{0};
   int numberOfFrames = 0;
-  LOG(INFO) << "Sleep 1 sec for sync";
+  LOG(info) << "Sleep 1 sec for sync";
   sleep(1);
 
   while (true) {
-    //usleep(100);
+    // usleep(100);
     mInputFile.read((char*)(&rdh), sizeof(RDH)); // read the next RDH, stop if no more data is available
     if (mInputFile.fail()) {
       free(outBuffer);
@@ -90,24 +90,24 @@ void RawFileReaderTask::run(framework::ProcessingContext& pc)
     }
     auto rdhVersion = o2::raw::RDHUtils::getVersion(rdh);
     auto rdhHeaderSize = o2::raw::RDHUtils::getHeaderSize(rdh);
-    LOG(DEBUG) << "header_version=" << (int)rdhVersion;
+    LOG(debug) << "header_version=" << (int)rdhVersion;
     if (rdhVersion < 6 || rdhHeaderSize != 64) {
-      LOG(INFO) << "Old or corrupted raw file, abort !";
+      LOG(info) << "Old or corrupted raw file, abort !";
       return;
     }
     auto frameSize = o2::raw::RDHUtils::getOffsetToNext(rdh); // get the frame size
-    LOG(DEBUG) << "frameSize=" << frameSize;
+    LOG(debug) << "frameSize=" << frameSize;
     if (frameSize < rdhHeaderSize) { // stop if the frame size is too small
-      LOG(INFO) << "Wrong Frame size - frameSize too small: " << frameSize;
+      LOG(info) << "Wrong Frame size - frameSize too small: " << frameSize;
       pc.services().get<ControlService>().endOfStream();
       return;
     }
     numberOfFrames++;
-    LOG(DEBUG) << "Process page " << numberOfFrames << " dim = " << frameSize;
+    LOG(debug) << "Process page " << numberOfFrames << " dim = " << frameSize;
 
     outBuffer = (char*)realloc(outBuffer, bufSize + frameSize); // allocate the buffer
     if (outBuffer == nullptr) {
-      LOG(INFO) << "Buffer allocation error. Abort !";
+      LOG(info) << "Buffer allocation error. Abort !";
       pc.services().get<ControlService>().endOfStream();
       return;
     }
@@ -121,7 +121,7 @@ void RawFileReaderTask::run(framework::ProcessingContext& pc)
     }
     bufSize = frameSize; // Set the buffer pointer
     pc.outputs().snapshot(Output{"HMP", "RAWDATA"}, outBuffer, bufSize);
-    //std::cout << mExTimer.mTimer.CpuTime() << " " << mExTimer.mLastLogTime << std::endl;
+    // std::cout << mExTimer.mTimer.CpuTime() << " " << mExTimer.mLastLogTime << std::endl;
     mExTimer.elapseMes("... Reading... Number of Pages = " + std::to_string(numberOfFrames));
   } // while (true)
 

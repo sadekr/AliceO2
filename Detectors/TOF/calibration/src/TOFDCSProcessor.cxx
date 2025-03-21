@@ -10,6 +10,7 @@
 // or submit itself to any jurisdiction.
 
 #include <TOFCalibration/TOFDCSProcessor.h>
+#include "DetectorsCalibration/Utils.h"
 #include "Rtypes.h"
 #include <deque>
 #include <string>
@@ -29,10 +30,14 @@ ClassImp(o2::tof::TOFDCSinfo);
 
 void TOFDCSinfo::print() const
 {
-  LOG(INFO) << "First Value: timestamp = " << firstValue.first << ", value = " << firstValue.second;
-  LOG(INFO) << "Last Value:  timestamp = " << lastValue.first << ", value = " << lastValue.second;
-  LOG(INFO) << "Mid Value:   timestamp = " << midValue.first << ", value = " << midValue.second;
-  LOG(INFO) << "Max Change:  timestamp = " << maxChange.first << ", value = " << maxChange.second;
+  LOG(info) << "First Value: timestamp = " << firstValue.first << ", value = " << firstValue.second;
+  LOG(info) << "Last Value:  timestamp = " << lastValue.first << ", value = " << lastValue.second;
+  LOG(info) << "Mid Value:   timestamp = " << midValue.first << ", value = " << midValue.second;
+  LOG(info) << "Min Value:   timestamp = " << minValue.first << ", value = " << minValue.second;
+  LOG(info) << "Max Value:   timestamp = " << maxValue.first << ", value = " << maxValue.second;
+  LOG(info) << "Max Change:  timestamp[0] = " << maxChange.first[0] << ", timestamp[1] = " << maxChange.first[1] << ", value = " << maxChange.second;
+  std::string updatedStr = updated ? "UPDATED" : "NOT UPDATED";
+  LOG(info) << "Status = " << updatedStr;
 }
 
 //__________________________________________________________________
@@ -61,24 +66,21 @@ int TOFDCSProcessor::process(const gsl::span<const DPCOM> dps)
 
   // first we check which DPs are missing - if some are, it means that
   // the delta map was sent
-  if (mVerbose) {
-    LOG(INFO) << "\n\n\nProcessing new TF\n-----------------";
+  if (mVerboseDP || mVerboseHVLV) {
+    LOG(info) << "\n\n\nProcessing new DCS DP map\n-----------------";
   }
-  if (!mStartTFset) {
-    mStartTF = mTF;
-    mStartTFset = true;
-  }
-
-  std::unordered_map<DPID, DPVAL> mapin;
-  for (auto& it : dps) {
-    mapin[it.id] = it.data;
-  }
-  for (auto& it : mPids) {
-    const auto& el = mapin.find(it.first);
-    if (el == mapin.end()) {
-      LOG(DEBUG) << "DP " << it.first << " not found in map";
-    } else {
-      LOG(DEBUG) << "DP " << it.first << " found in map";
+  if (false) {
+    std::unordered_map<DPID, DPVAL> mapin;
+    for (auto& it : dps) {
+      mapin[it.id] = it.data;
+    }
+    for (auto& it : mPids) {
+      const auto& el = mapin.find(it.first);
+      if (el == mapin.end()) {
+        LOG(debug) << "DP " << it.first << " not found in map";
+      } else {
+        LOG(debug) << "DP " << it.first << " found in map";
+      }
     }
   }
 
@@ -90,7 +92,7 @@ int TOFDCSProcessor::process(const gsl::span<const DPCOM> dps)
     // we process only the DPs defined in the configuration
     const auto& el = mPids.find(it.id);
     if (el == mPids.end()) {
-      LOG(INFO) << "DP " << it.id << " not found in TOFDCSProcessor, we will not process it";
+      LOG(info) << "DP " << it.id << " not found in TOFDCSProcessor, we will not process it";
       continue;
     }
     processDP(it);
@@ -118,22 +120,24 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
   auto& dpid = dpcom.id;
   const auto& type = dpid.get_type();
   auto& val = dpcom.data;
-  if (mVerbose) {
-    if (type == RAW_DOUBLE) {
-      LOG(INFO);
-      LOG(INFO) << "Processing DP = " << dpcom << ", with value = " << o2::dcs::getValue<double>(dpcom);
-    } else if (type == RAW_INT) {
-      LOG(INFO);
-      LOG(INFO) << "Processing DP = " << dpcom << ", with value = " << o2::dcs::getValue<int32_t>(dpcom);
+  if (mVerboseDP || mVerboseHVLV) {
+    if (type == DPVAL_DOUBLE) {
+      LOG(info);
+      LOG(info) << "Processing DP = " << dpcom << ", with value = " << o2::dcs::getValue<double>(dpcom) << ", epoch time = " << val.get_epoch_time();
+    } else if (type == DPVAL_INT) {
+      LOG(info);
+      LOG(info) << "Processing DP = " << dpcom << ", with value = " << o2::dcs::getValue<int32_t>(dpcom);
     }
   }
   auto flags = val.get_flags();
   if (processFlags(flags, dpid.get_alias()) == 0) {
     // now I need to access the correct element
-    if (type == RAW_DOUBLE) {
+    if (type == DPVAL_DOUBLE) {
       // for these DPs, we will store the first, last, mid value, plus the value where the maximum variation occurred
       auto& dvect = mDpsdoublesmap[dpid];
-      LOG(DEBUG) << "mDpsdoublesmap[dpid].size() = " << dvect.size();
+      if (mVerboseDP) {
+        LOG(debug) << "mDpsdoublesmap[dpid].size() = " << dvect.size();
+      }
       auto etime = val.get_epoch_time();
       if (dvect.size() == 0 ||
           etime != dvect.back().get_epoch_time()) { // we check
@@ -144,7 +148,7 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
       }
     }
 
-    if (type == RAW_INT) {
+    if (type == DPVAL_INT) {
       // for these DPs, we need some processing
       if (std::strstr(dpid.get_alias(), "FEACSTATUS") != nullptr) { // DP is FEACSTATUS
         std::string aliasStr(dpid.get_alias());
@@ -155,17 +159,17 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
         std::string ddlStr = aliasStr.substr(nn, mm != std::string::npos ? mm - nn : mm);
         auto iddl = std::stoi(ddlStr);
         std::bitset<8> feacstatus(o2::dcs::getValue<int32_t>(dpcom));
-        if (mVerbose) {
-          LOG(INFO) << "DDL: " << iddl << ": Prev FEAC = " << mPrevFEACstatus[iddl] << ", new = " << feacstatus;
+        if (mVerboseHVLV) {
+          LOG(info) << "DDL: " << iddl << ": Prev FEAC = " << mPrevFEACstatus[iddl] << ", new = " << feacstatus;
         }
         if (feacstatus == mPrevFEACstatus[iddl]) {
-          if (mVerbose) {
-            LOG(INFO) << "Same FEAC status as before, we do nothing";
+          if (mVerboseHVLV) {
+            LOG(info) << "Same FEAC status as before, we do nothing";
           }
           return 0;
         }
-        if (mVerbose) {
-          LOG(INFO) << "Something changed in LV for DDL " << iddl << ", we need to check what";
+        if (mVerboseHVLV) {
+          LOG(info) << "Something changed in LV for DDL " << iddl << ", we need to check what";
         }
         mUpdateFeacStatus = true;
         int plate = -1, strip = -1;
@@ -178,16 +182,16 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
             }
             for (int ipadz = 0; ipadz < Geo::NPADZ; ++ipadz) {
               for (int ipadx = mFeacInfo[iddl][ifeac].firstPadX; ipadx <= mFeacInfo[iddl][ifeac].lastPadX; ++ipadx) {
-                if (mVerbose) {
-                  LOG(INFO) << "mFeacInfo[" << iddl << "][" << ifeac << "].stripInSM[" << istrip << "] = " << mFeacInfo[iddl][ifeac].stripInSM[istrip];
+                if (mVerboseHVLV) {
+                  LOG(info) << "mFeacInfo[" << iddl << "][" << ifeac << "].stripInSM[" << istrip << "] = " << mFeacInfo[iddl][ifeac].stripInSM[istrip];
                 }
                 Geo::getStripAndModule(mFeacInfo[iddl][ifeac].stripInSM[istrip], plate, strip);
                 det[1] = plate;
                 det[2] = strip;
                 det[3] = ipadz;
                 det[4] = ipadx;
-                if (mVerbose) {
-                  LOG(INFO) << "det[0] = " << det[0] << ", det[1] = " << det[1] << ", det[2] = " << det[2] << ", det[3] = " << det[3] << ", det[4] = " << det[4];
+                if (mVerboseHVLV) {
+                  LOG(info) << "det[0] = " << det[0] << ", det[1] = " << det[1] << ", det[2] = " << det[2] << ", det[3] = " << det[3] << ", det[4] = " << det[4];
                 }
                 int channelIdx = Geo::getIndex(det);
                 if (mFeac[channelIdx] != singlefeacstatus) {
@@ -197,8 +201,8 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
             }
           }
         } // end loop on FEACs
-        if (mVerbose) {
-          LOG(INFO) << "Updating previous FEAC status for DDL " << iddl;
+        if (mVerboseHVLV) {
+          LOG(info) << "Updating previous FEAC status for DDL " << iddl;
         }
         mPrevFEACstatus[iddl] = feacstatus;
       } // end processing current DP, when it is of type FEACSTATUS
@@ -216,18 +220,18 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
         std::string plateStr = aliasStr.substr(oo, pp != std::string::npos ? pp - oo : pp);
         auto iplat = std::stoi(plateStr);
         std::bitset<19> hvstatus(o2::dcs::getValue<int32_t>(dpcom));
-        if (mVerbose) {
-          LOG(INFO) << "Sector: " << isect << ", plate = " << iplat << ": Prev HV = "
+        if (mVerboseHVLV) {
+          LOG(info) << "Sector: " << isect << ", plate = " << iplat << ": Prev HV = "
                     << mPrevHVstatus[iplat][isect] << ", new = " << hvstatus;
         }
         if (hvstatus == mPrevHVstatus[iplat][isect]) {
-          if (mVerbose) {
-            LOG(INFO) << "Same HV status as before, we do nothing";
+          if (mVerboseHVLV) {
+            LOG(info) << "Same HV status as before, we do nothing";
           }
           return 0;
         }
-        if (mVerbose) {
-          LOG(INFO) << "Something changed in HV for Sect " << isect << " and plate "
+        if (mVerboseHVLV) {
+          LOG(info) << "Something changed in HV for Sect " << isect << " and plate "
                     << iplat << ", we need to check what";
         }
         mUpdateHVStatus = true;
@@ -247,8 +251,8 @@ int TOFDCSProcessor::processDP(const DPCOM& dpcom)
             }
           }
         } // end loop on strips
-        if (mVerbose) {
-          LOG(INFO) << "Updating previous HV status for Sector: " << isect << ", plate = " << iplat;
+        if (mVerboseHVLV) {
+          LOG(info) << "Updating previous HV status for Sector: " << isect << ", plate = " << iplat;
         }
         mPrevHVstatus[iplat][isect] = hvstatus;
       } //end processing current DP, when it is of type HVSTATUS
@@ -266,54 +270,56 @@ uint64_t TOFDCSProcessor::processFlags(const uint64_t flags, const char* pid)
   // anything else means that there was an issue
 
   // for now, I don't know how to use the flags, so I do nothing
-
+  if (!mVerboseDP) {
+    return 0;
+  }
   if (flags & DataPointValue::KEEP_ALIVE_FLAG) {
-    LOG(DEBUG) << "KEEP_ALIVE_FLAG active for DP " << pid;
+    LOG(debug) << "KEEP_ALIVE_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::END_FLAG) {
-    LOG(DEBUG) << "END_FLAG active for DP " << pid;
+    LOG(debug) << "END_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::FBI_FLAG) {
-    LOG(DEBUG) << "FBI_FLAG active for DP " << pid;
+    LOG(debug) << "FBI_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::NEW_FLAG) {
-    LOG(DEBUG) << "NEW_FLAG active for DP " << pid;
+    LOG(debug) << "NEW_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::DIRTY_FLAG) {
-    LOG(DEBUG) << "DIRTY_FLAG active for DP " << pid;
+    LOG(debug) << "DIRTY_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::TURN_FLAG) {
-    LOG(DEBUG) << "TURN_FLAG active for DP " << pid;
+    LOG(debug) << "TURN_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::WRITE_FLAG) {
-    LOG(DEBUG) << "WRITE_FLAG active for DP " << pid;
+    LOG(debug) << "WRITE_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::READ_FLAG) {
-    LOG(DEBUG) << "READ_FLAG active for DP " << pid;
+    LOG(debug) << "READ_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::OVERWRITE_FLAG) {
-    LOG(DEBUG) << "OVERWRITE_FLAG active for DP " << pid;
+    LOG(debug) << "OVERWRITE_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::VICTIM_FLAG) {
-    LOG(DEBUG) << "VICTIM_FLAG active for DP " << pid;
+    LOG(debug) << "VICTIM_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::DIM_ERROR_FLAG) {
-    LOG(DEBUG) << "DIM_ERROR_FLAG active for DP " << pid;
+    LOG(debug) << "DIM_ERROR_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::BAD_DPID_FLAG) {
-    LOG(DEBUG) << "BAD_DPID_FLAG active for DP " << pid;
+    LOG(debug) << "BAD_DPID_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::BAD_FLAGS_FLAG) {
-    LOG(DEBUG) << "BAD_FLAGS_FLAG active for DP " << pid;
+    LOG(debug) << "BAD_FLAGS_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::BAD_TIMESTAMP_FLAG) {
-    LOG(DEBUG) << "BAD_TIMESTAMP_FLAG active for DP " << pid;
+    LOG(debug) << "BAD_TIMESTAMP_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::BAD_PAYLOAD_FLAG) {
-    LOG(DEBUG) << "BAD_PAYLOAD_FLAG active for DP " << pid;
+    LOG(debug) << "BAD_PAYLOAD_FLAG active for DP " << pid;
   }
   if (flags & DataPointValue::BAD_FBI_FLAG) {
-    LOG(DEBUG) << "BAD_FBI_FLAG active for DP " << pid;
+    LOG(debug) << "BAD_FBI_FLAG active for DP " << pid;
   }
 
   return 0;
@@ -325,17 +331,22 @@ void TOFDCSProcessor::updateDPsCCDB()
 {
 
   // here we create the object to then be sent to CCDB
-  LOG(INFO) << "Finalizing";
+  LOG(info) << "Finalizing";
   union Converter {
     uint64_t raw_data;
     double double_value;
   } converter0, converter1;
 
-  for (const auto& it : mPids) {
+  for (auto& it : mPids) {
     const auto& type = it.first.get_type();
-    if (type == o2::dcs::RAW_DOUBLE) {
+    if (type == o2::dcs::DPVAL_DOUBLE) {
       auto& tofdcs = mTOFDCS[it.first];
-      if (it.second == true) { // we processed the DP at least 1x
+      if (it.second) {     // we processed the DP at least 1x
+        if (mVerboseDP) {
+          LOG(info) << "Processing DP " << it.first.get_alias();
+        }
+        it.second = false; // reset for the next period
+        tofdcs.updated = true;
         auto& dpvect = mDpsdoublesmap[it.first];
         tofdcs.firstValue.first = dpvect[0].get_epoch_time();
         converter0.raw_data = dpvect[0].payload_pt1;
@@ -343,6 +354,18 @@ void TOFDCSProcessor::updateDPsCCDB()
         tofdcs.lastValue.first = dpvect.back().get_epoch_time();
         converter0.raw_data = dpvect.back().payload_pt1;
         tofdcs.lastValue.second = converter0.double_value;
+        // find min and max
+        for (const auto& el : dpvect) {
+          converter0.raw_data = el.payload_pt1;
+          if (converter0.double_value < tofdcs.minValue.second) {
+            tofdcs.minValue.first = el.get_epoch_time();
+            tofdcs.minValue.second = converter0.double_value;
+          }
+          if (converter0.double_value > tofdcs.maxValue.second) {
+            tofdcs.maxValue.first = el.get_epoch_time();
+            tofdcs.maxValue.second = converter0.double_value;
+          }
+        }
         // now I will look for the max change
         if (dpvect.size() > 1) {
           auto deltatime = dpvect.back().get_epoch_time() - dpvect[0].get_epoch_time();
@@ -351,19 +374,21 @@ void TOFDCSProcessor::updateDPsCCDB()
             // max variation is defined as the difference between first and last value
             converter0.raw_data = dpvect[0].payload_pt1;
             converter1.raw_data = dpvect.back().payload_pt1;
-            double delta = std::abs(converter0.double_value - converter1.double_value);
-            tofdcs.maxChange.first = deltatime; // is it ok to do like this, as in Run 2?
+            double delta = converter0.double_value - converter1.double_value;
+            tofdcs.maxChange.first[0] = dpvect[0].get_epoch_time();
+            tofdcs.maxChange.first[1] = dpvect.back().get_epoch_time();
             tofdcs.maxChange.second = delta;
           } else {
             for (auto i = 0; i < dpvect.size() - 1; ++i) {
               for (auto j = i + 1; j < dpvect.size(); ++j) {
                 auto deltatime = dpvect[j].get_epoch_time() - dpvect[i].get_epoch_time();
-                if (deltatime >= 60000) { // we check every min; epoch_time in ms
+                if (deltatime >= 60000) { // we compare to values coming from at least 1 minute later; epoch_time in ms
                   converter0.raw_data = dpvect[i].payload_pt1;
                   converter1.raw_data = dpvect[j].payload_pt1;
-                  double delta = std::abs(converter0.double_value - converter1.double_value);
-                  if (delta > tofdcs.maxChange.second) {
-                    tofdcs.maxChange.first = deltatime; // is it ok to do like this, as in Run 2?
+                  double delta = converter0.double_value - converter1.double_value;
+                  if (std::abs(delta) > std::abs(tofdcs.maxChange.second)) {
+                    tofdcs.maxChange.first[0] = dpvect[i].get_epoch_time();
+                    tofdcs.maxChange.first[1] = dpvect[j].get_epoch_time();
                     tofdcs.maxChange.second = delta;
                   }
                 }
@@ -376,23 +401,39 @@ void TOFDCSProcessor::updateDPsCCDB()
           converter0.raw_data = dpvect[midIdx].payload_pt1;
           tofdcs.midValue.second = converter0.double_value;
         } else {
-          tofdcs.maxChange.first = dpvect[0].get_epoch_time();
+          tofdcs.maxChange.first[0] = dpvect[0].get_epoch_time();
+          tofdcs.maxChange.first[1] = dpvect[0].get_epoch_time();
           converter0.raw_data = dpvect[0].payload_pt1;
           tofdcs.maxChange.second = converter0.double_value;
           tofdcs.midValue.first = dpvect[0].get_epoch_time();
           converter0.raw_data = dpvect[0].payload_pt1;
           tofdcs.midValue.second = converter0.double_value;
         }
+      } else {
+        tofdcs.updated = false;
       }
-      if (mVerbose) {
-        LOG(INFO) << "PID = " << it.first.get_alias();
+      if (mVerboseDP) {
+        LOG(info) << "PID " << it.first.get_alias() << " was updated to:";
         tofdcs.print();
       }
     }
   }
+  if (mVerboseDP) {
+    LOG(info) << "Printing object to be sent to CCDB";
+    for (auto& it : mPids) {
+      const auto& type = it.first.get_type();
+      if (type == o2::dcs::DPVAL_DOUBLE) {
+        LOG(info) << "PID = " << it.first.get_alias();
+        auto& tofdcs = mTOFDCS[it.first];
+        tofdcs.print();
+      }
+    }
+    LOG(info) << "done";
+  }
+
   std::map<std::string, std::string> md;
   md["responsible"] = "Chiara Zampolli";
-  prepareCCDBobjectInfo(mTOFDCS, mccdbDPsInfo, "TOF/Calib/DCSDPs", mTF, md);
+  o2::calibration::Utils::prepareCCDBobjectInfo(mTOFDCS, mccdbDPsInfo, "TOF/Calib/DCSDPs", md, mStartValidityDPs, mStartValidityDPs + 3 * o2::ccdb::CcdbObjectInfo::DAY);
 
   return;
 }
@@ -404,12 +445,12 @@ void TOFDCSProcessor::updateFEACCCDB()
 
   // we need to update a CCDB for the FEAC status --> let's prepare the CCDBInfo
 
-  if (mVerbose) {
-    LOG(INFO) << "At least one FEAC changed status --> we will update CCDB";
+  if (mVerboseHVLV) {
+    LOG(info) << "At least one FEAC changed status --> we will update CCDB";
   }
   std::map<std::string, std::string> md;
   md["responsible"] = "Chiara Zampolli";
-  prepareCCDBobjectInfo(mFeac, mccdbLVInfo, "TOF/Calib/LVStatus", mTF, md);
+  o2::calibration::Utils::prepareCCDBobjectInfo(mFeac, mccdbLVInfo, "TOF/Calib/LVStatus", md, mStartValidityLV, mStartValidityLV + o2::ccdb::CcdbObjectInfo::MONTH);
   return;
 }
 
@@ -420,12 +461,12 @@ void TOFDCSProcessor::updateHVCCDB()
 
   // we need to update a CCDB for the HV status --> let's prepare the CCDBInfo
 
-  if (mVerbose) {
-    LOG(INFO) << "At least one HV changed status --> we will update CCDB";
+  if (mVerboseHVLV) {
+    LOG(info) << "At least one HV changed status --> we will update CCDB";
   }
   std::map<std::string, std::string> md;
   md["responsible"] = "Chiara Zampolli";
-  prepareCCDBobjectInfo(mHV, mccdbHVInfo, "TOF/Calib/HVStatus", mTF, md);
+  o2::calibration::Utils::prepareCCDBobjectInfo(mHV, mccdbHVInfo, "TOF/Calib/HVStatus", md, mStartValidityHV, mStartValidityHV + o2::ccdb::CcdbObjectInfo::MONTH);
   return;
 }
 
@@ -568,9 +609,9 @@ void TOFDCSProcessor::getStripsConnectedToFEAC(int nDDL, int nFEAC, TOFFEACinfo&
 
       break;
   }
-  if (mVerbose) {
+  if (mVerboseHVLV) {
     for (int ii = 0; ii < 6; ++ii) {
-      LOG(INFO) << "nDDL = " << nDDL << ", nFEAC = " << nFEAC << ", stripInSM[" << ii << "] = " << info.stripInSM[ii];
+      LOG(info) << "nDDL = " << nDDL << ", nFEAC = " << nFEAC << ", stripInSM[" << ii << "] = " << info.stripInSM[ii];
     }
   }
 }

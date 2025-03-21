@@ -9,7 +9,7 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 
 #include "DataFormatsTPC/TrackCuts.h"
 #include "DataFormatsTPC/TrackTPC.h"
@@ -18,9 +18,12 @@ ClassImp(o2::tpc::TrackCuts);
 
 using namespace o2::tpc;
 
-TrackCuts::TrackCuts(float PMin, float PMax, float NClusMin) : mPMin(PMin),
-                                                               mPMax(PMax),
-                                                               mNClusMin(NClusMin)
+TrackCuts::TrackCuts(float PMin, float PMax, float NClusMin, float dEdxMin, float dEdxMax)
+  : mPMin(PMin),
+    mPMax(PMax),
+    mNClusMin(NClusMin),
+    mdEdxMin(dEdxMin),
+    mdEdxMax(dEdxMax)
 {
 }
 
@@ -28,7 +31,8 @@ TrackCuts::TrackCuts(float PMin, float PMax, float NClusMin) : mPMin(PMin),
 bool TrackCuts::goodTrack(o2::tpc::TrackTPC const& track)
 {
   const auto p = track.getP();
-  const auto nclusters = track.getNClusterReferences();
+  const auto nClusters = track.getNClusterReferences();
+  const auto dEdx = track.getdEdx().dEdxTotTPC;
 
   if (p > mPMax) {
     return false;
@@ -36,7 +40,16 @@ bool TrackCuts::goodTrack(o2::tpc::TrackTPC const& track)
   if (p < mPMin) {
     return false;
   }
-  if (nclusters < mNClusMin) {
+  if (nClusters < mNClusMin) {
+    return false;
+  }
+  if (dEdx > mdEdxMax) {
+    return false;
+  }
+  if (dEdx < mdEdxMin) {
+    return false;
+  }
+  if ((std::abs(track.getOuterParam().getZ()) - std::abs(track.getZ())) < -10) {
     return false;
   }
   return true;

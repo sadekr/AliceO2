@@ -8,10 +8,14 @@
 # In applying this license CERN does not waive the privileges and immunities
 # granted to it by virtue of its status as an Intergovernmental Organization
 # or submit itself to any jurisdiction.
-
+add_subdirectory(Align)
 add_subdirectory(Base)
+add_subdirectory(Constants)
 add_subdirectory(Contour)
 add_subdirectory(Mapping)
+add_subdirectory(DigitFiltering)
+add_subdirectory(ROFFiltering)
+add_subdirectory(Triggering)
 add_subdirectory(TimeClustering)
 add_subdirectory(PreClustering)
 add_subdirectory(Geometry)
@@ -24,3 +28,7 @@ add_subdirectory(Workflow)
 add_subdirectory(Conditions)
 add_subdirectory(Calibration)
 add_subdirectory(DevIO)
+add_subdirectory(GlobalMapping)
+add_subdirectory(IO)
+add_subdirectory(Evaluation)
+add_subdirectory(Status)

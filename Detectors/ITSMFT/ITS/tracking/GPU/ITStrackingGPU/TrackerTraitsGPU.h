@@ -9,41 +9,62 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 ///
-/// \file TrackerTraitsNV.h
-/// \brief
-///
 
 #ifndef ITSTRACKINGGPU_TRACKERTRAITSGPU_H_
 #define ITSTRACKINGGPU_TRACKERTRAITSGPU_H_
 
-#ifndef GPUCA_GPUCODE_GENRTC
-#include <cub/cub.cuh>
-#include <cstdint>
-#endif
 #include "ITStracking/Configuration.h"
 #include "ITStracking/Definitions.h"
 #include "ITStracking/TrackerTraits.h"
+#include "ITStrackingGPU/TimeFrameGPU.h"
 
 namespace o2
 {
 namespace its
 {
 
-class PrimaryVertexContext;
-
-class TrackerTraitsNV : public TrackerTraits
+template <int nLayers = 7>
+class TrackerTraitsGPU : public TrackerTraits
 {
  public:
-  TrackerTraitsNV() = default;
-  ~TrackerTraitsNV() override = default;
+  TrackerTraitsGPU() = default;
+  ~TrackerTraitsGPU() override = default;
 
-  void computeLayerCells() final;
-  void computeLayerTracklets() final;
-  void refitTracks(const std::vector<std::vector<TrackingFrameInfo>>& tf, std::vector<TrackITSExt>& tracks) override;
+  // void computeLayerCells() final;
+  void adoptTimeFrame(TimeFrame* tf) override;
+  void initialiseTimeFrame(const int iteration) override;
+  void computeLayerTracklets(const int iteration, int, int) final;
+  void computeLayerCells(const int iteration) override;
+  void setBz(float) override;
+  void findCellsNeighbours(const int iteration) override;
+  void findRoads(const int iteration) override;
+
+  // Methods to get CPU execution from traits
+  void initialiseTimeFrameHybrid(const int iteration) override { initialiseTimeFrame(iteration); };
+  void computeTrackletsHybrid(const int iteration, int, int) override;
+  void computeCellsHybrid(const int iteration) override;
+  void findCellsNeighboursHybrid(const int iteration) override;
+
+  void extendTracks(const int iteration) override;
+
+  // TimeFrameGPU information forwarding
+  int getTFNumberOfClusters() const override;
+  int getTFNumberOfTracklets() const override;
+  int getTFNumberOfCells() const override;
+
+ private:
+  IndexTableUtils* mDeviceIndexTableUtils;
+  gpu::TimeFrameGPU<7>* mTimeFrameGPU;
+  gpu::StaticTrackingParameters<nLayers>* mStaticTrkPars;
 };
 
-extern "C" TrackerTraits* createTrackerTraitsNV();
+template <int nLayers>
+inline void TrackerTraitsGPU<nLayers>::adoptTimeFrame(TimeFrame* tf)
+{
+  mTimeFrameGPU = static_cast<gpu::TimeFrameGPU<nLayers>*>(tf);
+  mTimeFrame = static_cast<TimeFrame*>(tf);
+}
 } // namespace its
 } // namespace o2
 
-#endif /* TRACKINGITSU_INCLUDE_TRACKERTRAITS_H_ */
+#endif

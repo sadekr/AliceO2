@@ -31,7 +31,7 @@ namespace hmpid
 {
 
 const int MAXERRORS = 13;
-const int MAXHMPIDERRORS = 6;
+const int MAXHMPIDERRORS = 5;
 
 const int ERR_NOTKNOWN = 0;
 const int ERR_ROWMARKEMPTY = 1;
@@ -47,7 +47,7 @@ const int ERR_WRONGSIZESEGMENTMARK = 10;
 const int ERR_LOSTEOSMARK = 11;
 const int ERR_HMPID = 12;
 
-// ---- HMPID error def -------
+// ---- HMPID TRY errors def -------
 const int TH_FILENOTEXISTS = 9;
 const int TH_OPENFILE = 8;
 const int TH_CREATEFILE = 7;
@@ -59,6 +59,7 @@ const int TH_WRONGFILELEN = 14;
 const int TH_NULLBUFFERPOINTER = 13;
 const int TH_BUFFEREMPTY = 12;
 const int TH_WRONGBUFFERDIM = 11;
+const int TH_BUFFERPOINTERTOEND = 16;
 
 const uint64_t OUTRANGEEVENTNUMBER = 0x1FFFFFFFFFFF;
 
@@ -116,6 +117,14 @@ class HmpidEquipment
     return (mEquipmentId);
   };
   int getEquipmentId(int cru, int link);
+  int getCruId()
+  {
+    return (mCruId);
+  };
+  int getLinkId()
+  {
+    return (mLinkId);
+  };
 
   void init();
   void resetPadMap();

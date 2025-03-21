@@ -26,7 +26,7 @@ void ZDCEnergyParam::setEnergyCalib(uint32_t ich, float val)
   if (in_list) {
     energy_calib[ich] = val;
   } else {
-    LOG(FATAL) << __func__ << " channel " << ich << " not in allowed range";
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
     for (int il = 0; il < ChEnergyCalib.size(); il++) {
       LOG(info) << __func__ << " channel " << ChEnergyCalib[il] << " " << ChannelNames[ChEnergyCalib[il]];
     }
@@ -38,16 +38,48 @@ float ZDCEnergyParam::getEnergyCalib(uint32_t ich) const
   if (ich >= 0 && ich < NChannels) {
     return energy_calib[ich];
   } else {
-    LOG(FATAL) << __func__ << " channel " << ich << " not in allowed range";
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
     return 0;
   }
 }
 
-void ZDCEnergyParam::print()
+void ZDCEnergyParam::setOffset(uint32_t ich, float val)
+{
+  bool in_list = false;
+  for (int il = 0; il < ChEnergyCalib.size(); il++) {
+    if (ich == ChEnergyCalib[il]) {
+      in_list = true;
+      break;
+    }
+  }
+  if (in_list) {
+    adc_offset[ich] = val;
+  } else {
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
+    for (int il = 0; il < ChEnergyCalib.size(); il++) {
+      LOG(info) << __func__ << " channel " << ChEnergyCalib[il] << " " << ChannelNames[ChEnergyCalib[il]];
+    }
+  }
+}
+
+float ZDCEnergyParam::getOffset(uint32_t ich) const
+{
+  if (ich >= 0 && ich < NChannels) {
+    return adc_offset[ich];
+  } else {
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
+    return 0;
+  }
+}
+
+void ZDCEnergyParam::print() const
 {
   for (Int_t ich = 0; ich < NChannels; ich++) {
     if (energy_calib[ich] > 0) {
-      LOG(INFO) << ChannelNames[ich] << " calibration factor = " << energy_calib[ich];
+      LOG(info) << ChannelNames[ich] << " calibration factor = " << energy_calib[ich];
+    }
+    if (adc_offset[ich] > 0) {
+      LOG(info) << ChannelNames[ich] << " adc offset = " << adc_offset[ich];
     }
   }
 }

@@ -13,8 +13,18 @@ o2_add_library(GlobalTrackingWorkflowReaders
                SOURCES src/TrackCosmicsReaderSpec.cxx
                        src/SecondaryVertexReaderSpec.cxx
                        src/PrimaryVertexReaderSpec.cxx
+                       src/StrangenessTrackingReaderSpec.cxx
                        src/TrackTPCITSReaderSpec.cxx
                        src/GlobalFwdTrackReaderSpec.cxx
+                       src/MatchedMFTMCHReaderSpec.cxx
+                       src/MatchedMCHMIDReaderSpec.cxx
+                       src/IRFrameReaderSpec.cxx
                PUBLIC_LINK_LIBRARIES O2::ReconstructionDataFormats
-                                     O2::GlobalTracking
+                                     O2::DataFormatsITSMFT
                                      O2::SimulationDataFormat)
+
+o2_add_executable(reader-workflow
+                  COMPONENT_NAME irframe
+                  SOURCES src/irframe-reader-workflow.cxx
+                  PUBLIC_LINK_LIBRARIES O2::GlobalTrackingWorkflowReaders
+                                        O2::DetectorsRaw)

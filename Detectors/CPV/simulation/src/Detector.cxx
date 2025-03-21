@@ -29,7 +29,7 @@
 #include "CPVSimulation/GeometryParams.h"
 
 #include "DetectorsBase/GeometryManager.h"
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/irange.hpp>
@@ -123,13 +123,13 @@ Bool_t Detector::ProcessHits(FairVolume* v)
   // ported from AliRoot 2019
   // ------------------------------------------------------------------------
 
-  //analyze only charged
+  // analyze only charged
   if (fMC->TrackCharge() == 0) {
     fMC->SetMaxStep(1.e10);
     return false;
   }
 
-  if (!fMC->IsTrackEntering()) { //simulate once per track
+  if (!fMC->IsTrackEntering()) { // simulate once per track
     return false;
   }
 
@@ -156,7 +156,7 @@ Bool_t Detector::ProcessHits(FairVolume* v)
   auto& cpvparam = o2::cpv::CPVSimParams::Instance();
   // Digitize the current CPV hit:
   // find pad response
-  float hitX = xyzd[0]; //hit coordinate in daugter frame
+  float hitX = xyzd[0]; // hit coordinate in daugter frame
   float hitZ = xyzd[2]; // z-coordinate of track in daugter frame
   float pX = pd[0];
   float pZ = pd[2];
@@ -229,7 +229,8 @@ Bool_t Detector::ProcessHits(FairVolume* v)
   int nz3 = (cpvparam.mNgamz + 1) / 2;
   int nx3 = (cpvparam.mNgamx + 1) / 2;
 
-  TVirtualMCStack* stack = fMC->GetStack();
+  o2::data::Stack* stack = static_cast<o2::data::Stack*>(fMC->GetStack());
+  stack->addHit(GetDetId());
   const int partID = stack->GetCurrentTrackNumber();
 
   for (int iter = 0; iter < nIter; iter++) {
@@ -241,7 +242,7 @@ Bool_t Detector::ProcessHits(FairVolume* v)
     float xcell = xhit / cpvparam.mPadSizeX;
     if (zcell <= 0 || xcell <= 0 ||
         zcell >= cpvparam.mnCellZ || xcell >= cpvparam.mnCellX) {
-      return true; //beyond CPV
+      return true; // beyond CPV
     }
     int izcell = (int)zcell;
     int ixcell = (int)xcell;
@@ -321,7 +322,7 @@ float Detector::CPVCumulPadResponse(float x, float y)
 
 void Detector::addHit(int trackID, short detID, const math_utils::Point3D<float>& pos, double time, float qdep)
 {
-  LOG(DEBUG) << "Adding hit for track " << trackID << " in a pad " << detID << " with position (" << pos.X() << ", "
+  LOG(debug) << "Adding hit for track " << trackID << " in a pad " << detID << " with position (" << pos.X() << ", "
              << pos.Y() << ", " << pos.Z() << "), time" << time << ", qdep =" << qdep << std::endl;
   mHits->emplace_back(trackID, detID, pos, time, qdep);
   // register hit creation with MCStack
@@ -337,7 +338,7 @@ void Detector::ConstructGeometry()
   cpv::GeometryParams* geomParams = cpv::GeometryParams::GetInstance("CPVRun3Params");
 
   if (!geomParams) {
-    LOG(ERROR) << "ConstructGeometry: CPV Geometry class has not been set up.\n";
+    LOG(error) << "ConstructGeometry: CPV Geometry class has not been set up.\n";
   }
 
   if (!fMC) {
@@ -367,8 +368,6 @@ void Detector::ConstructGeometry()
 
   // --- Position  CPV modules in ALICE setup ---
   int idrotm[5];
-  int iXYZ, iAngle;
-  char im[5];
   for (int iModule = 0; iModule < 5; iModule++) {
     if (!mActiveModule[iModule]) {
       continue;
@@ -383,16 +382,16 @@ void Detector::ConstructGeometry()
     fMC->Gspos("CPV", iModule, "barrel", pos[0], pos[1] + 30., pos[2], idrotm[iModule], "ONLY");
   }
 
-  //start filling CPV moodules
-  // Gassiplex board
+  // start filling CPV moodules
+  //  Gassiplex board
   par[0] = geomParams->GetGassiplexChipSize(0) / 2.;
   par[1] = geomParams->GetGassiplexChipSize(1) / 2.;
   par[2] = geomParams->GetGassiplexChipSize(2) / 2.;
-  fMC->Gsvolu("CPVG", "BOX ", ID_TEXTOLIT, par, 3);
+  fMC->Gsvolu("CPVG", "BOX ", getMediumID(ID_TEXTOLIT), par, 3);
 
   // Cu+Ni foil covers Gassiplex board
   par[1] = geomParams->GetCPVCuNiFoilThickness() / 2;
-  fMC->Gsvolu("CPVC", "BOX ", ID_CU, par, 3);
+  fMC->Gsvolu("CPVC", "BOX ", getMediumID(ID_CU), par, 3);
   y = -(geomParams->GetGassiplexChipSize(1) / 2 - par[1]);
   fMC->Gspos("CPVC", 1, "CPVG", 0, y, 0, 0, "ONLY");
 
@@ -415,11 +414,11 @@ void Detector::ConstructGeometry()
   par[0] = geomParams->GetCPVActiveSize(0) / 2;
   par[1] = geomParams->GetCPVTextoliteThickness() / 2;
   par[2] = geomParams->GetCPVActiveSize(1) / 2;
-  fMC->Gsvolu("CPVF", "BOX ", ID_TEXTOLIT, par, 3);
+  fMC->Gsvolu("CPVF", "BOX ", getMediumID(ID_TEXTOLIT), par, 3);
 
   // Argon gas volume
   par[1] = (geomParams->GetFTPosition(2) - geomParams->GetFTPosition(1) - geomParams->GetCPVTextoliteThickness()) / 2;
-  fMC->Gsvolu("CPVAr", "BOX ", ID_AR, par, 3);
+  fMC->Gsvolu("CPVAr", "BOX ", getMediumID(ID_AR), par, 3);
 
   for (int i = 0; i < 4; i++) {
     y = geomParams->GetCPVFrameSize(1) / 2 - geomParams->GetFTPosition(i) + geomParams->GetCPVTextoliteThickness() / 2;
@@ -432,12 +431,12 @@ void Detector::ConstructGeometry()
 
   // Dummy sensitive plane in the middle of argone gas volume
   par[1] = 0.001;
-  fMC->Gsvolu("CPVQ", "BOX ", ID_AR, par, 3);
+  fMC->Gsvolu("CPVQ", "BOX ", getMediumID(ID_AR), par, 3);
   fMC->Gspos("CPVQ", 1, "CPVAr", 0, 0, 0, 0, "ONLY");
 
   // Cu+Ni foil covers textolite
   par[1] = geomParams->GetCPVCuNiFoilThickness() / 2;
-  fMC->Gsvolu("CPVP1", "BOX ", ID_CU, par, 3);
+  fMC->Gsvolu("CPVP1", "BOX ", getMediumID(ID_CU), par, 3);
   y = geomParams->GetCPVTextoliteThickness() / 2 - par[1];
   fMC->Gspos("CPVP1", 1, "CPVF", 0, y, 0, 0, "ONLY");
 
@@ -445,12 +444,12 @@ void Detector::ConstructGeometry()
   par[0] = geomParams->GetCPVFrameSize(0) / 2;
   par[1] = geomParams->GetCPVFrameSize(1) / 2;
   par[2] = geomParams->GetCPVBoxSize(2) / 2;
-  fMC->Gsvolu("CPVF1", "BOX ", ID_AL, par, 3);
+  fMC->Gsvolu("CPVF1", "BOX ", getMediumID(ID_AL), par, 3);
 
   par[0] = geomParams->GetCPVBoxSize(0) / 2 - geomParams->GetCPVFrameSize(0);
   par[1] = geomParams->GetCPVFrameSize(1) / 2;
   par[2] = geomParams->GetCPVFrameSize(2) / 2;
-  fMC->Gsvolu("CPVF2", "BOX ", ID_AL, par, 3);
+  fMC->Gsvolu("CPVF2", "BOX ", getMediumID(ID_AL), par, 3);
 
   for (int j = 0; j <= 1; j++) {
     x = TMath::Sign(1, 2 * j - 1) * (geomParams->GetCPVBoxSize(0) - geomParams->GetCPVFrameSize(0)) / 2;
@@ -499,8 +498,8 @@ void Detector::CreateMaterials()
   //  float aCO[2] = {12.0, 16.0} ;
   // float zCO[2] = {6.0, 8.0} ;
   //  float wCO[2] = {1.0, 2.0} ;
-  float dCO = 0.001977; //Co2 density
-  float dAr = 0.001782; //Argon density
+  float dCO = 0.001977; // Co2 density
+  float dAr = 0.001782; // Argon density
 
   float arContent = 0.80; // Ar-content of the ArCO2-mixture
   float aArCO[3] = {39.948, 12.0, 16.0};
@@ -536,7 +535,7 @@ void Detector::defineSensitiveVolumes()
     if (vsense) {
       AddSensitiveVolume(vsense);
     } else {
-      LOG(ERROR) << "CPV Sensitive volume CPVQ not found ... No hit creation!\n";
+      LOG(error) << "CPV Sensitive volume CPVQ not found ... No hit creation!\n";
     }
   }
 }
@@ -571,24 +570,24 @@ void Detector::addAlignableVolumes() const
 
     int modUID = o2::base::GeometryManager::getSensID(idCPV, iModule);
 
-    LOG(DEBUG) << "--------------------------------------------"
+    LOG(debug) << "--------------------------------------------"
                << "\n";
-    LOG(DEBUG) << "Alignable object" << iModule << "\n";
-    LOG(DEBUG) << "volPath=" << volPath << "\n";
-    LOG(DEBUG) << "symName=" << symName << "\n";
-    LOG(DEBUG) << "--------------------------------------------"
+    LOG(debug) << "Alignable object" << iModule << "\n";
+    LOG(debug) << "volPath=" << volPath << "\n";
+    LOG(debug) << "symName=" << symName << "\n";
+    LOG(debug) << "--------------------------------------------"
                << "\n";
 
-    LOG(DEBUG) << "Check for alignable entry: " << symName;
+    LOG(debug) << "Check for alignable entry: " << symName;
 
     if (!gGeoManager->SetAlignableEntry(symName.Data(), volPath.Data(), modUID)) {
-      LOG(ERROR) << "Alignable entry " << symName << " NOT set";
+      LOG(error) << "Alignable entry " << symName << " NOT set";
     }
-    LOG(DEBUG) << "Alignable entry " << symName << " set";
+    LOG(debug) << "Alignable entry " << symName << " set";
 
     // Create the Tracking to Local transformation matrix for PHOS modules
     TGeoPNEntry* alignableEntry = gGeoManager->GetAlignableEntryByUID(modUID);
-    LOG(DEBUG) << "Got TGeoPNEntry " << alignableEntry;
+    LOG(debug) << "Got TGeoPNEntry " << alignableEntry;
 
     if (alignableEntry) {
       Float_t angle = geom->GetCPVAngle(iModule);

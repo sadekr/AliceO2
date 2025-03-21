@@ -12,6 +12,7 @@
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/Task.h"
 #include "DataFormatsGlobalTracking/RecoContainer.h"
+#include "DetectorsBase/GRPGeomHelper.h"
 
 #include "TRDBase/TrackletTransformer.h"
 
@@ -23,15 +24,19 @@ namespace trd
 class TRDTrackletTransformerSpec : public o2::framework::Task
 {
  public:
-  TRDTrackletTransformerSpec(std::shared_ptr<o2::globaltracking::DataRequest> dataRequest, bool trigRecFilterActive) : mDataRequest(dataRequest), mTrigRecFilterActive(trigRecFilterActive){};
+  TRDTrackletTransformerSpec(std::shared_ptr<o2::globaltracking::DataRequest> dataRequest, std::shared_ptr<o2::base::GRPGeomRequest> gr, bool trigRecFilterActive) : mDataRequest(dataRequest), mGGCCDBRequest(gr), mTrigRecFilterActive(trigRecFilterActive){};
   ~TRDTrackletTransformerSpec() override = default;
   void init(o2::framework::InitContext& ic) override;
   void run(o2::framework::ProcessingContext& pc) override;
+  void finaliseCCDB(framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
-  TrackletTransformer mTransformer;
-  bool mTrigRecFilterActive; ///< if true, transform only TRD tracklets for which ITS data is available
+  void updateTimeDependentParams(framework::ProcessingContext& pc);
+
   std::shared_ptr<o2::globaltracking::DataRequest> mDataRequest;
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
+  bool mTrigRecFilterActive = false; ///< if true, transform only TRD tracklets for which ITS data is available
+  TrackletTransformer mTransformer;
 };
 
 o2::framework::DataProcessorSpec getTRDTrackletTransformerSpec(bool trigRecFilterActive);

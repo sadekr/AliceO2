@@ -16,15 +16,15 @@
 #pragma link off all functions;
 
 #pragma link C++ class o2::ft0::Digit + ;
-#pragma link C++ class o2::ft0::DigitsTemp + ;
+#pragma link C++ class o2::ft0::DigitFilterParam + ;
+#pragma link C++ class o2::ft0::ChannelFilterParam + ;
+#pragma link C++ class o2::ft0::TimeFilterParam + ;
+#pragma link C++ class o2::ft0::CalibParam + ;
 #pragma link C++ class o2::ft0::ChannelData + ;
-#pragma link C++ class o2::ft0::Triggers + ;
 #pragma link C++ class o2::ft0::DetTrigInput + ;
 #pragma link C++ class o2::ft0::TriggersExt + ;
 #pragma link C++ class vector < o2::ft0::ChannelData> + ;
 #pragma link C++ class vector < o2::ft0::Digit> + ;
-#pragma link C++ class vector < o2::ft0::DigitsTemp> + ;
-#pragma link C++ class vector < o2::ft0::Triggers> + ;
 #pragma link C++ class vector < o2::ft0::DetTrigInput> + ;
 #pragma link C++ class vector < o2::ft0::TriggersExt> + ;
 
@@ -40,19 +40,20 @@
 #pragma link C++ class o2::ft0::HitType + ;
 #pragma link C++ class vector < o2::ft0::HitType> + ;
 
-#pragma link C++ class o2::ft0::RawEventData + ;
-#pragma link C++ class o2::ft0::Topo + ;
-#pragma link C++ class o2::ft0::HVchannel + ;
-#pragma link C++ class vector < o2::ft0::HVchannel> + ;
-
 #pragma link C++ class o2::ft0::CTFHeader + ;
 #pragma link C++ class o2::ft0::CompressedDigits + ;
 #pragma link C++ class o2::ft0::CTF + ;
 #pragma link C++ class o2::ctf::EncodedBlocks < o2::ft0::CTFHeader, 9, uint32_t> + ;
 
+#pragma link C++ class o2::ft0::FT0CalibrationInfoObject + ;
+#pragma link C++ class o2::ft0::FT0ChannelTimeCalibrationObject + ;
+#pragma link C++ class o2::ft0::SpectraInfoObject + ;
+#pragma link C++ class o2::ft0::TimeSpectraInfoObject + ;
+#pragma link C++ class o2::ft0::AmpSpectraInfoObject + ;
 #pragma link C++ class o2::ft0::GlobalOffsetsCalibrationObject + ;
-#pragma link C++ class o2::ft0::GlobalOffsetsContainer + ;
 #pragma link C++ class o2::ft0::RecoCalibInfoObject + ;
-#include "DetectorsCalibration/TimeSlotCalibration.h"
-#pragma link C++ class o2::calibration::TimeSlotCalibration < o2::ft0::RecoCalibInfoObject, o2::ft0::GlobalOffsetsContainer> + ;
+#pragma link C++ class o2::ft0::GlobalOffsetsInfoObject + ;
+#pragma link C++ class std::pair < std::vector < double>, std::vector < double>> + ;
+#pragma link C++ class o2::ft0::SlewingCoef + ;
+
 #endif

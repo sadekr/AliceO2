@@ -14,10 +14,10 @@
 ///
 /// \author Philippe Pillot, Subatech
 
-#ifndef ALICEO2_MCH_TRACKFITTER_H_
-#define ALICEO2_MCH_TRACKFITTER_H_
+#ifndef O2_MCH_TRACKFITTER_H_
+#define O2_MCH_TRACKFITTER_H_
 
-#include "MCHTracking/Cluster.h"
+#include "DataFormatsMCH/Cluster.h"
 #include "MCHTracking/Track.h"
 #include "MCHTracking/TrackParam.h"
 
@@ -56,7 +56,8 @@ class TrackFitter
   void setChamberResolution(double ex, double ey);
 
   void fit(Track& track, bool smooth = true, bool finalize = true,
-           std::list<TrackParam>::reverse_iterator* itStartingParam = nullptr);
+           std::list<TrackParam>::reverse_iterator* itStartingParam = nullptr,
+           bool skipLocalChi2Calculation = false);
 
   void runKalmanFilter(TrackParam& trackParam);
 
@@ -66,8 +67,8 @@ class TrackFitter
  private:
   void initTrack(const Cluster& cl1, const Cluster& cl2, TrackParam& param);
   void addCluster(const TrackParam& startingParam, const Cluster& cl, TrackParam& param);
-  void smoothTrack(Track& track, bool finalize);
-  void runSmoother(const TrackParam& previousParam, TrackParam& param);
+  void smoothTrack(Track& track, bool finalize, bool skipLocalChi2Calculation);
+  void runSmoother(const TrackParam& previousParam, TrackParam& param, bool skipLocalChi2Calculation);
 
   static constexpr double SMaxChi2 = 2.e10; ///< maximum chi2 above which the track can be considered as abnormal
   /// z position of the chambers
@@ -97,4 +98,4 @@ inline void TrackFitter::setChamberResolution(double ex, double ey)
 } // namespace mch
 } // namespace o2
 
-#endif // ALICEO2_MCH_TRACKFITTER_H_
+#endif // O2_MCH_TRACKFITTER_H_

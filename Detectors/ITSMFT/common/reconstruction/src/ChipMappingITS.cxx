@@ -12,7 +12,7 @@
 // \file ChipMappingITS.cxx
 // \brief Autimatically generated ITS chip <-> module mapping
 
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
 #include "ITSMFTReconstruction/ChipMappingITS.h"
 #include <cassert>
 #include <sstream>
@@ -155,6 +155,28 @@ ChipMappingITS::ChipMappingITS()
       chipCount += NChipsPerStaveSB[sInfo.ruType];
     }
   }
+
+  // MB lookup
+  for (int ichw = 0; ichw <= MaxHWCableID[MB]; ichw++) { // loop over HW cables
+    for (int ihw = 0; ihw < 15; ihw++) {                 // init with invalid IDs
+      HWCableHWChip2ChipOnRU_MB[ichw][ihw] = 0xff;
+    }
+  }
+  for (int ichip = 0; ichip < NChipsPerStaveSB[MB]; ichip++) {
+    const auto& chInfo = mChipsInfo[NChipsPerStaveSB[IB] + ichip];
+    HWCableHWChip2ChipOnRU_MB[chInfo.cableHW][chInfo.chipOnModuleHW] = uint8_t(ichip);
+  }
+
+  // OB lookup
+  for (int ichw = 0; ichw <= MaxHWCableID[OB]; ichw++) { // loop over HW cables
+    for (int ihw = 0; ihw < 15; ihw++) {                 // init with invalid IDs
+      HWCableHWChip2ChipOnRU_OB[ichw][ihw] = 0xff;
+    }
+  }
+  for (int ichip = 0; ichip < NChipsPerStaveSB[OB]; ichip++) {
+    const auto& chInfo = mChipsInfo[NChipsPerStaveSB[IB] + NChipsPerStaveSB[MB] + ichip];
+    HWCableHWChip2ChipOnRU_OB[chInfo.cableHW][chInfo.chipOnModuleHW] = uint8_t(ichip);
+  }
   assert(ctrStv == getNRUs());
 }
 
@@ -184,7 +206,7 @@ void ChipMappingITS::expandChipInfoSW(int idSW, int& lay, int& sta, int& ssta, i
   sta = staveInfo->idSW;
   mod = chi.chOnRU->moduleSW;
   chipInMod = chi.chOnRU->chipOnModuleSW;
-  ssta = lay < 3 || (mod < (NModulesPerStaveSB[chi.ruType] >> 2)) ? 0 : 1;
+  ssta = lay < 3 || (mod < NModulesAlongStaveSB[chi.ruType]) ? 0 : 1;
 }
 
 //______________________________________________
@@ -224,11 +246,46 @@ void ChipMappingITS::imposeFEEId2RUSW(uint16_t feeID, uint16_t ruSW)
   uint16_t lr, ruOnLr, link;
   expandFEEId(feeID, lr, ruOnLr, link);
   if (lr >= NLayers || ruOnLr >= NStavesOnLr[lr] || link >= NLinks) {
-    LOG(FATAL) << "Invalid FEE#0x" << std::hex << feeID << std::dec << ": corresponds to Lr#" << lr
+    LOG(fatal) << "Invalid FEE#0x" << std::hex << feeID << std::dec << ": corresponds to Lr#" << lr
                << " StaveOnLr#" << ruOnLr << " GBTLinkOnRU#" << link;
   }
   if (ruSW >= getNRUs()) {
-    LOG(FATAL) << "Invalid SW RUid " << ruSW << " (cannot exceed " << getNRUs() << ")";
+    LOG(fatal) << "Invalid SW RUid " << ruSW << " (cannot exceed " << getNRUs() << ")";
   }
   mFEEId2RUSW[feeID] = ruSW;
+}
+
+std::vector<ChipMappingITS::Overlaps> ChipMappingITS::getOverlapsInfo() const
+{
+  std::vector<ChipMappingITS::Overlaps> v(getNChips());
+  for (int id = 0; id < getNChips(); id++) {
+    auto& vval = v[id];
+    int lay, sta, ssta, mod, chip;
+    expandChipInfoSW(id, lay, sta, ssta, mod, chip);
+    int ruTp = getRUType(sta);
+    if (ruTp == IB) {
+      int chOnLr = id - getFirstChipsOnLayer(lay), chPerSStave = getNChipsOnRUType(ruTp);
+      vval.rowSide[ChipMappingITS::Overlaps::LowRow] = getFirstChipsOnLayer(lay) + (chOnLr - chPerSStave + getNChipsOnLayer(lay)) % getNChipsOnLayer(lay);  // chips overlapping from rowMin side with other chips high row side
+      vval.rowSide[ChipMappingITS::Overlaps::HighRow] = getFirstChipsOnLayer(lay) + (chOnLr + chPerSStave + getNChipsOnLayer(lay)) % getNChipsOnLayer(lay); // chips overlapping from rowMax side with other chips low row side
+      vval.rowSideOverlap[ChipMappingITS::Overlaps::LowRow] = ChipMappingITS::Overlaps::HighRow;
+      vval.rowSideOverlap[ChipMappingITS::Overlaps::HighRow] = ChipMappingITS::Overlaps::LowRow;
+    } else {
+      int staOv = sta, modOv = mod;
+      auto NChipsModule = NChipsPerModuleSB[ruTp];
+      if (ssta == 0) {
+        modOv += getNModulesPerStave(ruTp) / 2;
+        if (chip >= NChipsModule / 2) {                                                                                      // overlap is possible only with ssta=1 of previous stave, otherwise only with ssta=1 of the same stave;  only from high row side with other chips high row side
+          staOv = getFirstStavesOnLr(lay) + (sta - getFirstStavesOnLr(lay) - 1 + getNStavesOnLr(lay)) % getNStavesOnLr(lay); // stave below
+        }
+      } else {
+        modOv -= getNModulesPerStave(ruTp) / 2;
+        if (chip < NChipsModule / 2) {                                                                                       // overlap is possible only with ssta=0 of the next stave, otherwise only with ssta=0 of the same stave and only from high row side with other chips high row side
+          staOv = getFirstStavesOnLr(lay) + (sta - getFirstStavesOnLr(lay) + 1 + getNStavesOnLr(lay)) % getNStavesOnLr(lay); // stave above
+        }
+      }
+      vval.rowSide[ChipMappingITS::Overlaps::HighRow] = getGlobalChipIDSW(lay, staOv, modOv, NChipsModule - 1 - chip);
+      vval.rowSideOverlap[ChipMappingITS::Overlaps::HighRow] = ChipMappingITS::Overlaps::HighRow;
+    }
+  }
+  return v;
 }

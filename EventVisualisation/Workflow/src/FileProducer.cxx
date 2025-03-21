@@ -13,58 +13,47 @@
 /// \file    FileProducer.cxx
 /// \author julian.myrcha@cern.ch
 
+#include "EventVisualisationBase/DirectoryLoader.h"
 #include "EveWorkflow/FileProducer.h"
+#include "CommonUtils/FileSystemUtils.h"
 
 #include <deque>
-#include <iostream>
 #include <chrono>
-#include <cstdio>
 #include <filesystem>
 #include <algorithm>
+#include <climits>
+#include <fmt/core.h>
 
-using namespace std;
 using namespace o2::event_visualisation;
 
-using std::cout;
-using std::endl;
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
-using std::chrono::seconds;
 using std::chrono::system_clock;
 
-std::deque<std::string> FileProducer::load(const std::string& path)
-{
-  deque<string> result;
-
-  for (const auto& entry : std::filesystem::directory_iterator(path)) {
-    if (entry.path().extension() == ".json") {
-      result.push_back(entry.path().filename());
-    }
-  }
-  return result;
-}
-
-FileProducer::FileProducer(const std::string& path, int filesInFolder, const std::string& name)
+FileProducer::FileProducer(const std::string& path, const std::string& ext, int filesInFolder, const std::string& name)
 {
   this->mFilesInFolder = filesInFolder;
   this->mPath = path;
   this->mName = name;
-  std::filesystem::create_directories(this->mPath); // create folder if not exists (fails if no rights)
+  this->mExt = ext;
+  o2::utils::createDirectoriesIfAbsent(path); // create folder if not exists (fails if no rights)
 }
 
 std::string FileProducer::newFileName() const
 {
-  string pholder = "{}";
-  string result = this->mName;
-  auto millisec_since_epoch = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-  string stamp = std::to_string(millisec_since_epoch);
-  result.replace(result.find(pholder), pholder.length(), stamp);
-  auto files = this->load(this->mPath);
-  std::sort(files.begin(), files.end());
-  while (files.size() > this->mFilesInFolder) {
-    string front = files.front();
-    files.pop_front();
-    std::remove((this->mPath + "/" + front).c_str()); // delete file
-  }
+  const auto millisec_since_epoch = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+
+  char hostname[_POSIX_HOST_NAME_MAX];
+  gethostname(hostname, _POSIX_HOST_NAME_MAX);
+
+  const auto pid = getpid();
+  const auto result = fmt::format(fmt::runtime(this->mName),
+                                  fmt::arg("hostname", hostname),
+                                  fmt::arg("pid", pid),
+                                  fmt::arg("timestamp", millisec_since_epoch),
+                                  fmt::arg("ext", this->mExt));
+  const std::vector<std::string> ext = {".json", ".root", ".eve"};
+  DirectoryLoader::reduceNumberOfFiles(this->mPath, DirectoryLoader::load(this->mPath, "_", ext), this->mFilesInFolder);
+
   return this->mPath + "/" + result;
 }

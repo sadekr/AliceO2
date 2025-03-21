@@ -50,10 +50,12 @@ class Detector : public o2::base::DetImpl<Detector>
   void IdealPositionCradle(int iCh, TGeoHMatrix* pMatrix);
   void createMaterials();
   void ConstructGeometry() override;
+  void ConstructOpGeometry() override;
   void defineOpticalProperties();
   void EndOfEvent() override { Reset(); }
 
   // for the geometry sub-parts
+  TGeoVolume* createAbsorber(float tickness);
   TGeoVolume* createChamber(int number);
   TGeoVolume* CreateCradle();
   TGeoVolume* CradleBaseVolume(TGeoMedium* med, double l[7], const char* name);
@@ -78,6 +80,23 @@ class Detector : public o2::base::DetImpl<Detector>
   };
 
   std::vector<TGeoVolume*> mSensitiveVolumes; //!
+
+  // Define volume IDs
+  int mHpad0VolID = -1;
+  int mHpad1VolID = -1;
+  int mHpad2VolID = -1;
+  int mHpad3VolID = -1;
+  int mHpad4VolID = -1;
+  int mHpad5VolID = -1;
+  int mHpad6VolID = -1;
+
+  int mHcel0VolID = -1;
+  int mHcel1VolID = -1;
+  int mHcel2VolID = -1;
+  int mHcel3VolID = -1;
+  int mHcel4VolID = -1;
+  int mHcel5VolID = -1;
+  int mHcel6VolID = -1;
 
   template <typename Det>
   friend class o2::base::DetImpl;

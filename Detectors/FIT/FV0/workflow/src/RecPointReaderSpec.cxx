@@ -17,7 +17,7 @@
 #include "Framework/ControlService.h"
 #include "Framework/Logger.h"
 #include "FV0Workflow/RecPointReaderSpec.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 using namespace o2::fv0;
@@ -31,7 +31,7 @@ RecPointReader::RecPointReader(bool useMC)
 {
   mUseMC = useMC;
   if (useMC) {
-    LOG(WARNING) << "FV0 RecPoint reader at the moment does not process MC";
+    LOG(warning) << "FV0 RecPoint reader at the moment does not process MC";
   }
 }
 
@@ -48,9 +48,9 @@ void RecPointReader::run(ProcessingContext& pc)
   assert(ent < mTree->GetEntries()); // this should not happen
   mTree->GetEntry(ent);
 
-  LOG(INFO) << "FV0 RecPointReader pushes " << mRecPoints->size() << " recpoints with " << mChannelData->size() << " channels at entry " << ent;
-  pc.outputs().snapshot(Output{mOrigin, "RECPOINTS", 0, Lifetime::Timeframe}, *mRecPoints);
-  pc.outputs().snapshot(Output{mOrigin, "RECCHDATA", 0, Lifetime::Timeframe}, *mChannelData);
+  LOG(debug) << "FV0 RecPointReader pushes " << mRecPoints->size() << " recpoints with " << mChannelData->size() << " channels at entry " << ent;
+  pc.outputs().snapshot(Output{mOrigin, "RECPOINTS", 0}, *mRecPoints);
+  pc.outputs().snapshot(Output{mOrigin, "RECCHDATA", 0}, *mChannelData);
 
   if (mTree->GetReadEntry() + 1 >= mTree->GetEntries()) {
     pc.services().get<ControlService>().endOfStream();
@@ -69,11 +69,11 @@ void RecPointReader::connectTree(const std::string& filename)
   mTree->SetBranchAddress(mRecPointBranchName.c_str(), &mRecPoints);
   mTree->SetBranchAddress(mChannelDataBranchName.c_str(), &mChannelData);
   if (mUseMC) {
-    LOG(WARNING) << "MC-truth is not supported for FV0 recpoints currently";
+    LOG(warning) << "MC-truth is not supported for FV0 recpoints currently";
     mUseMC = false;
   }
 
-  LOG(INFO) << "Loaded FV0 RecPoints tree from " << filename << " with " << mTree->GetEntries() << " entries";
+  LOG(info) << "Loaded FV0 RecPoints tree from " << filename << " with " << mTree->GetEntries() << " entries";
 }
 
 DataProcessorSpec getRecPointReaderSpec(bool useMC)
@@ -82,7 +82,7 @@ DataProcessorSpec getRecPointReaderSpec(bool useMC)
   outputSpec.emplace_back(o2::header::gDataOriginFV0, "RECPOINTS", 0, Lifetime::Timeframe);
   outputSpec.emplace_back(o2::header::gDataOriginFV0, "RECCHDATA", 0, Lifetime::Timeframe);
   if (useMC) {
-    LOG(WARNING) << "MC-truth is not supported for FV0 recpoints currently";
+    LOG(warning) << "MC-truth is not supported for FV0 recpoints currently";
   }
 
   return DataProcessorSpec{

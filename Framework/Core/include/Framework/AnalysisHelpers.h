@@ -11,37 +11,91 @@
 #ifndef o2_framework_AnalysisHelpers_H_DEFINED
 #define o2_framework_AnalysisHelpers_H_DEFINED
 
-#include "Framework/Traits.h"
-#include "Framework/TableBuilder.h"
-#include "Framework/AnalysisDataModel.h"
-#include "Framework/OutputSpec.h"
-#include "Framework/OutputRef.h"
+#include "Framework/ASoA.h"
+#include "Framework/DataAllocator.h"
+#include "Framework/ExpressionHelpers.h"
+#include "Framework/IndexBuilderHelpers.h"
 #include "Framework/InputSpec.h"
-#include "Framework/OutputObjHeader.h"
-#include "Framework/StringHelpers.h"
 #include "Framework/Output.h"
+#include "Framework/OutputObjHeader.h"
+#include "Framework/OutputRef.h"
+#include "Framework/OutputSpec.h"
+#include "Framework/Plugins.h"
+#include "Framework/StringHelpers.h"
+#include "Framework/TableBuilder.h"
+#include "Framework/Traits.h"
+
 #include <string>
+namespace o2::soa
+{
+template <TableRef R>
+constexpr auto tableRef2InputSpec()
+{
+  return framework::InputSpec{
+    o2::aod::label<R>(),
+    o2::aod::origin<R>(),
+    o2::aod::description(o2::aod::signature<R>()),
+    R.version};
+}
+
+template <TableRef R>
+constexpr auto tableRef2OutputSpec()
+{
+  return framework::OutputSpec{
+    framework::OutputLabel{o2::aod::label<R>()},
+    o2::aod::origin<R>(),
+    o2::aod::description(o2::aod::signature<R>()),
+    R.version};
+}
+
+template <TableRef R>
+constexpr auto tableRef2Output()
+{
+  return framework::Output{
+    o2::aod::origin<R>(),
+    o2::aod::description(o2::aod::signature<R>()),
+    R.version};
+}
+
+template <TableRef R>
+constexpr auto tableRef2OutputRef()
+{
+  return framework::OutputRef{
+    o2::aod::label<R>(),
+    R.version};
+}
+
+template <TableRef R>
+constexpr auto tableRef2ConfigParamSpec()
+{
+  return o2::framework::ConfigParamSpec{
+    std::string{"input:"} + o2::aod::label<R>(),
+    framework::VariantType::String,
+    aod::sourceSpec<R>(),
+    {"\"\""}};
+}
+}  // namespace o2::soa
 
 namespace o2::framework
 {
 class TableConsumer;
 
-template <typename T>
-struct WritingCursor {
-  static_assert(always_static_assert_v<T>, "Type must be a o2::soa::Table");
-};
 /// Helper class actually implementing the cursor which can write to
 /// a table. The provided template arguments are if type Column and
 /// therefore refer only to the persisted columns.
-template <typename... PC>
-struct WritingCursor<soa::Table<PC...>> {
-  using persistent_table_t = soa::Table<PC...>;
+template <typename T>
+concept is_producable = soa::has_metadata<aod::MetadataTrait<T>> || soa::has_metadata<aod::MetadataTrait<typename T::parent_t>>;
+
+template <is_producable T>
+struct WritingCursor {
+ public:
+  using persistent_table_t = decltype([]() { if constexpr (soa::is_iterator<T>) { return typename T::parent_t{nullptr}; } else { return T{nullptr}; } }());
   using cursor_t = decltype(std::declval<TableBuilder>().cursor<persistent_table_t>());
 
-  template <typename... T>
-  void operator()(T... args)
+  template <typename... Ts>
+  void operator()(Ts... args)
   {
-    static_assert(sizeof...(PC) == sizeof...(T), "Argument number mismatch");
+    static_assert(sizeof...(Ts) == framework::pack_size(typename persistent_table_t::persistent_columns_t{}), "Argument number mismatch");
     ++mCount;
     cursor(0, extract(args)...);
   }
@@ -52,10 +106,10 @@ struct WritingCursor<soa::Table<PC...>> {
     return mCount;
   }
 
-  bool resetCursor(TableBuilder& builder)
+  bool resetCursor(LifetimeHolder<TableBuilder> builder)
   {
-    mBuilder = &builder;
-    cursor = std::move(FFL(builder.cursor<persistent_table_t>()));
+    mBuilder = std::move(builder);
+    cursor = std::move(FFL(mBuilder->cursor<persistent_table_t>()));
     mCount = -1;
     return true;
   }
@@ -72,129 +126,154 @@ struct WritingCursor<soa::Table<PC...>> {
     mBuilder->reserve(typename persistent_table_t::column_types{}, size);
   }
 
+  void release()
+  {
+    mBuilder.release();
+  }
+
   decltype(FFL(std::declval<cursor_t>())) cursor;
 
  private:
-  template <typename T>
-  static decltype(auto) extract(T const& arg)
+  template <typename A>
+    requires requires { &A::globalIndex; }
+  static decltype(auto) extract(A const& arg)
   {
-    if constexpr (soa::is_soa_iterator_t<T>::value) {
-      return arg.globalIndex();
-    } else {
-      static_assert(!framework::has_type_v<T, framework::pack<PC...>>, "Argument type mismatch");
-      return arg;
-    }
+    return arg.globalIndex();
+  }
+
+  template <typename A>
+  static decltype(auto) extract(A const& arg)
+  {
+    return arg;
   }
 
   /// The table builder which actually performs the
   /// construction of the table. We keep it around to be
   /// able to do all-columns methods like reserve.
-  TableBuilder* mBuilder = nullptr;
+  LifetimeHolder<TableBuilder> mBuilder = nullptr;
   int64_t mCount = -1;
 };
 
+/// Helper to define output for a Table
+template <soa::is_table T>
+consteval auto typeWithRef() -> T
+{
+}
+
+template <soa::is_iterator T>
+consteval auto typeWithRef() -> typename T::parent_t
+{
+}
+
 template <typename T>
-struct Produces {
-  static_assert(always_static_assert_v<T>, "Type must be a o2::soa::Table");
+  requires soa::is_table<T> || soa::is_iterator<T>
+struct OutputForTable {
+  using table_t = decltype(typeWithRef<T>());
+  using metadata = aod::MetadataTrait<o2::aod::Hash<table_t::ref.desc_hash>>::metadata;
+
+  static OutputSpec const spec()
+  {
+    return OutputSpec{OutputLabel{aod::label<table_t::ref>()}, o2::aod::origin<table_t::ref>(), o2::aod::description(o2::aod::signature<table_t::ref>()), table_t::ref.version};
+  }
+
+  static OutputRef ref()
+  {
+    return OutputRef{aod::label<table_t::ref>(), table_t::ref.version};
+  }
 };
 
 /// This helper class allows you to declare things which will be created by a
 /// given analysis task. Notice how the actual cursor is implemented by the
 /// means of the WritingCursor helper class, from which produces actually
 /// derives.
-template <typename... C>
-struct Produces<soa::Table<C...>> : WritingCursor<typename soa::PackToTable<typename soa::Table<C...>::persistent_columns_t>::table> {
-  using table_t = soa::Table<C...>;
-  using metadata = typename aod::MetadataTrait<table_t>::metadata;
-
-  // @return the associated OutputSpec
-  OutputSpec const spec()
-  {
-    return OutputSpec{OutputLabel{metadata::tableLabel()}, metadata::origin(), metadata::description()};
-  }
-
-  OutputRef ref()
-  {
-    return OutputRef{metadata::tableLabel(), 0};
-  }
+template <is_producable T>
+struct Produces : WritingCursor<T> {
 };
 
+template <typename T>
+concept is_produces = requires(T t) { typename T::cursor_t; typename T::persistent_table_t; &T::cursor; };
+
+/// Use this to group together produces. Useful to separate them logically
+/// or simply to stay within the 100 elements per Task limit.
+/// Use as:
+///
+/// struct MySetOfProduces : ProducesGroup {
+/// } products;
+///
+/// Notice the label MySetOfProduces is just a mnemonic and can be omitted.
+struct ProducesGroup {
+};
+
+template <typename T>
+concept is_produces_group = std::derived_from<T, ProducesGroup>;
+
 /// Helper template for table transformations
-template <typename METADATA>
+template <soa::is_metadata M, soa::TableRef Ref>
 struct TableTransform {
-  using SOURCES = typename METADATA::sources;
-  using ORIGINALS = typename METADATA::originals;
+  using metadata = M;
+  constexpr static auto sources = M::sources;
 
-  using metadata = METADATA;
-  using sources = SOURCES;
-
-  constexpr auto sources_pack() const
+  template <soa::TableRef R>
+  static constexpr auto base_spec()
   {
-    return SOURCES{};
+    return soa::tableRef2InputSpec<R>();
   }
 
-  constexpr auto originals_pack() const
+  static auto base_specs()
   {
-    return ORIGINALS{};
-  }
-
-  template <typename Oi>
-  constexpr auto base_spec() const
-  {
-    using o_metadata = typename aod::MetadataTrait<Oi>::metadata;
-    return InputSpec{
-      o_metadata::tableLabel(),
-      header::DataOrigin{o_metadata::origin()},
-      header::DataDescription{o_metadata::description()}};
-  }
-
-  template <typename... Os>
-  std::vector<InputSpec> base_specs_impl(framework::pack<Os...>) const
-  {
-    return {base_spec<Os>()...};
-  }
-
-  std::vector<InputSpec> base_specs() const
-  {
-    return base_specs_impl(sources_pack());
+    return []<size_t... Is>(std::index_sequence<Is...>) -> std::vector<InputSpec> {
+      return {base_spec<sources[Is]>()...};
+    }(std::make_index_sequence<sources.size()>{});
   }
 
   constexpr auto spec() const
   {
-    return OutputSpec{OutputLabel{METADATA::tableLabel()}, METADATA::origin(), METADATA::description()};
+    return soa::tableRef2OutputSpec<Ref>();
   }
 
   constexpr auto output() const
   {
-    return Output{METADATA::origin(), METADATA::description()};
+    return soa::tableRef2Output<Ref>();
   }
 
   constexpr auto ref() const
   {
-    return OutputRef{METADATA::tableLabel(), 0};
+    return soa::tableRef2OutputRef<Ref>();
   }
 };
 
 /// This helper struct allows you to declare extended tables which should be
 /// created by the task (as opposed to those pre-defined by data model)
 template <typename T>
-struct Spawns : TableTransform<typename aod::MetadataTrait<framework::pack_head_t<typename T::originals>>::metadata> {
-  using extension_t = framework::pack_head_t<typename T::originals>;
-  using base_table_t = typename aod::MetadataTrait<extension_t>::metadata::base_table_t;
-  using expression_pack_t = typename aod::MetadataTrait<extension_t>::metadata::expression_pack_t;
+concept is_spawnable = soa::has_metadata<aod::MetadataTrait<o2::aod::Hash<T::ref.desc_hash>>> && soa::has_extension<typename aod::MetadataTrait<o2::aod::Hash<T::ref.desc_hash>>::metadata>;
+
+template <is_spawnable T>
+constexpr auto transformBase()
+{
+  using metadata = typename aod::MetadataTrait<o2::aod::Hash<T::ref.desc_hash>>::metadata;
+  return TableTransform<metadata, metadata::extension_table_t::ref>{};
+}
+
+template <is_spawnable T>
+struct Spawns : decltype(transformBase<T>()) {
+  using spawnable_t = T;
+  using metadata = decltype(transformBase<T>())::metadata;
+  using extension_t = typename metadata::extension_table_t;
+  using base_table_t = typename metadata::base_table_t;
+  using expression_pack_t = typename metadata::expression_pack_t;
 
   constexpr auto pack()
   {
     return expression_pack_t{};
   }
 
-  T* operator->()
+  typename T::table_t* operator->()
   {
     return table.get();
   }
-  T& operator*()
+  typename T::table_t const& operator*() const
   {
-    return *table.get();
+    return *table;
   }
 
   auto asArrowTable()
@@ -205,163 +284,170 @@ struct Spawns : TableTransform<typename aod::MetadataTrait<framework::pack_head_
   std::shared_ptr<extension_t> extension = nullptr;
 };
 
+template <typename T>
+concept is_spawns = requires(T t) {
+  typename T::metadata;
+  requires std::same_as<decltype(t.pack()), typename T::expression_pack_t>;
+};
+
 /// Policy to control index building
 /// Exclusive index: each entry in a row has a valid index
-struct IndexExclusive {
-  /// Generic builder for in index table
-  template <typename... Cs, typename Key, typename T1, typename... T>
-  static auto indexBuilder(const char* label, framework::pack<Cs...>, Key const&, std::tuple<T1, T...> tables)
-  {
-    static_assert(sizeof...(Cs) == sizeof...(T) + 1, "Number of columns does not coincide with number of supplied tables");
-    using tables_t = framework::pack<T...>;
-    using first_t = T1;
-    auto tail = tuple_tail(tables);
-    TableBuilder builder;
-    auto cursor = framework::FFL(builder.cursor<o2::soa::Table<Cs...>>());
-
-    std::array<int32_t, sizeof...(T)> values;
-    iterator_tuple_t<std::decay_t<T>...> iterators = std::apply(
-      [](auto&&... x) {
-        return std::make_tuple(x.begin()...);
-      },
-      tail);
-
-    using rest_it_t = decltype(pack_from_tuple(iterators));
-
-    auto setValue = [&](auto& x, int idx) -> bool {
-      using type = std::decay_t<decltype(x)>;
-      constexpr auto position = framework::has_type_at_v<type>(rest_it_t{});
-
-      if constexpr (std::is_same_v<framework::pack_element_t<position, framework::pack<std::decay_t<T>...>>, Key>) {
-        values[position] = idx;
-        return true;
-      } else {
-        lowerBound<Key>(idx, x);
-        if (x == soa::RowViewSentinel{static_cast<uint64_t>(x.mMaxRow)}) {
-          return false;
-        } else if (x.template getId<Key>() != idx) {
-          return false;
-        } else {
-          values[position] = x.globalIndex();
-          ++x;
-          return true;
-        }
-      }
-    };
-
-    auto first = std::get<first_t>(tables);
-    for (auto& row : first) {
-      auto idx = -1;
-      if constexpr (std::is_same_v<first_t, Key>) {
-        idx = row.globalIndex();
-      } else {
-        idx = row.template getId<Key>();
-      }
-      if (std::apply(
-            [](auto&... x) {
-              return ((x == soa::RowViewSentinel{static_cast<uint64_t>(x.mMaxRow)}) && ...);
-            },
-            iterators)) {
-        break;
-      }
-
-      auto result = std::apply(
-        [&](auto&... x) {
-          std::array<bool, sizeof...(T)> results{setValue(x, idx)...};
-          return (results[framework::has_type_at_v<std::decay_t<decltype(x)>>(rest_it_t{})] && ...);
-        },
-        iterators);
-
-      if (result) {
-        cursor(0, row.globalIndex(), values[framework::has_type_at_v<T>(tables_t{})]...);
-      }
-    }
-    builder.setLabel(label);
-    return builder.finalize();
-  }
-};
 /// Sparse index: values in a row can be (-1), index table is isomorphic (joinable)
 /// to T1
-struct IndexSparse {
-  template <typename... Cs, typename Key, typename T1, typename... T>
-  static auto indexBuilder(const char* label, framework::pack<Cs...>, Key const&, std::tuple<T1, T...> tables)
+struct Exclusive {
+};
+struct Sparse {
+};
+
+namespace
+{
+template <typename T, typename Key>
+inline std::shared_ptr<arrow::ChunkedArray> getIndexToKey(arrow::Table* table)
+{
+  using IC = framework::pack_element_t<framework::has_type_at_conditional_v<soa::is_binding_compatible, Key>(typename T::external_index_columns_t{}), typename T::external_index_columns_t>;
+  return table->column(framework::has_type_at_v<IC>(typename T::persistent_columns_t{}));
+}
+
+template <soa::is_column C>
+struct ColumnTrait {
+  using column_t = C;
+
+  static consteval auto listSize()
   {
-    static_assert(sizeof...(Cs) == sizeof...(T) + 1, "Number of columns does not coincide with number of supplied tables");
-    using tables_t = framework::pack<T...>;
-    using first_t = T1;
-    auto tail = tuple_tail(tables);
-    TableBuilder builder;
-    auto cursor = framework::FFL(builder.cursor<o2::soa::Table<Cs...>>());
+    if constexpr (std::same_as<typename C::type, std::vector<int>>) {
+      return -1;
+    } else if constexpr (std::same_as<int[2], typename C::type>) {
+      return 2;
+    } else {
+      return 1;
+    }
+  }
 
-    std::array<int32_t, sizeof...(T)> values;
+  template <typename T, typename Key>
+  static std::shared_ptr<SelfIndexColumnBuilder> makeColumnBuilder(arrow::Table* table, arrow::MemoryPool* pool)
+  {
+    if constexpr (!std::same_as<T, Key>) {
+      return std::make_shared<IndexColumnBuilder>(getIndexToKey<T, Key>(table), C::columnLabel(), listSize(), pool);
+    } else {
+      return std::make_shared<SelfIndexColumnBuilder>(C::columnLabel(), pool);
+    }
+  }
+};
 
-    iterator_tuple_t<std::decay_t<T>...> iterators = std::apply(
-      [](auto&&... x) {
-        return std::make_tuple(x.begin()...);
-      },
-      tail);
+template <typename Key, typename C>
+struct Reduction {
+  using type = typename std::conditional<soa::is_binding_compatible_v<Key, typename C::binding_t>(), SelfIndexColumnBuilder, IndexColumnBuilder>::type;
+};
 
-    using rest_it_t = decltype(pack_from_tuple(iterators));
+template <typename Key, typename C>
+using reduced_t = Reduction<Key, C>::type;
+}  // namespace
 
-    auto setValue = [&](auto& x, int idx) -> bool {
-      using type = std::decay_t<decltype(x)>;
-      constexpr auto position = framework::has_type_at_v<type>(rest_it_t{});
+template <typename Kind>
+struct IndexBuilder {
+  template <typename Key, size_t N, std::array<soa::TableRef, N> refs, typename C1, typename... Cs>
+  static auto indexBuilder(const char* label, std::vector<std::shared_ptr<arrow::Table>>&& tables, framework::pack<C1, Cs...>)
+  {
+    auto pool = arrow::default_memory_pool();
+    SelfIndexColumnBuilder self{C1::columnLabel(), pool};
+    std::unique_ptr<ChunkedArrayIterator> keyIndex = nullptr;
+    if constexpr (!Key::template hasOriginal<refs[0]>()) {
+      keyIndex = std::make_unique<ChunkedArrayIterator>(tables[0]->column(o2::aod::MetadataTrait<o2::aod::Hash<refs[0].desc_hash>>::metadata::template getIndexPosToKey<Key>()));
+    }
 
-      if constexpr (std::is_same_v<framework::pack_element_t<position, framework::pack<std::decay_t<T>...>>, Key>) {
-        values[position] = idx;
-        return true;
-      } else {
-        lowerBound<Key>(idx, x);
-        if (x == soa::RowViewSentinel{static_cast<uint64_t>(x.mMaxRow)}) {
-          values[position] = -1;
-          return false;
-        } else if (x.template getId<Key>() != idx) {
-          values[position] = -1;
-          return false;
+    auto sq = std::make_index_sequence<sizeof...(Cs)>();
+
+    auto columnBuilders = [&tables, &pool ]<size_t... Is>(std::index_sequence<Is...>) -> std::array<std::shared_ptr<framework::SelfIndexColumnBuilder>, sizeof...(Cs)>
+    {
+      return {[](arrow::Table* table, arrow::MemoryPool* pool) {
+        using T = framework::pack_element_t<Is, framework::pack<Cs...>>;
+        if constexpr (!Key::template hasOriginal<refs[Is + 1]>()) {
+          constexpr auto pos = o2::aod::MetadataTrait<o2::aod::Hash<refs[Is + 1].desc_hash>>::metadata::template getIndexPosToKey<Key>();
+          return std::make_shared<IndexColumnBuilder>(table->column(pos), T::columnLabel(), ColumnTrait<T>::listSize(), pool);
         } else {
-          values[position] = x.globalIndex();
-          ++x;
-          return true;
+          return std::make_shared<SelfIndexColumnBuilder>(T::columnLabel(), pool);
+        }
+      }(tables[Is + 1].get(), pool)...};
+    }
+    (sq);
+
+    std::array<bool, sizeof...(Cs)> finds;
+
+    for (int64_t counter = 0; counter < tables[0]->num_rows(); ++counter) {
+      int64_t idx = -1;
+      if constexpr (Key::template hasOriginal<refs[0]>()) {
+        idx = counter;
+      } else {
+        idx = keyIndex->valueAt(counter);
+      }
+      finds = [&idx, &columnBuilders]<size_t... Is>(std::index_sequence<Is...>) {
+        return std::array{
+          [&idx, &columnBuilders]() {
+            using T = typename framework::pack_element_t<Is, framework::pack<Cs...>>;
+            return std::static_pointer_cast<reduced_t<Key, T>>(columnBuilders[Is])->template find<T>(idx);
+          }()...};
+      }(sq);
+      if constexpr (std::same_as<Kind, Sparse>) {
+        [&idx, &columnBuilders]<size_t... Is>(std::index_sequence<Is...>) {
+          ([&idx, &columnBuilders]() {
+            using T = typename framework::pack_element_t<Is, framework::pack<Cs...>>;
+            return std::static_pointer_cast<reduced_t<Key, T>>(columnBuilders[Is])->template fill<T>(idx); }(), ...);
+        }(sq);
+        self.fill<C1>(counter);
+      } else if constexpr (std::same_as<Kind, Exclusive>) {
+        if (std::none_of(finds.begin(), finds.end(), [](bool const x) { return x == false; })) {
+          [&idx, &columnBuilders]<size_t... Is>(std::index_sequence<Is...>) {
+            ([&idx, &columnBuilders]() {
+              using T = typename framework::pack_element_t<Is, framework::pack<Cs...>>;
+              return std::static_pointer_cast<reduced_t<Key, T>>(columnBuilders[Is])->template fill<T>(idx);
+            }(),
+             ...);
+          }(sq);
+          self.fill<C1>(counter);
         }
       }
-    };
-
-    auto first = std::get<first_t>(tables);
-    for (auto& row : first) {
-      auto idx = -1;
-      if constexpr (std::is_same_v<first_t, Key>) {
-        idx = row.globalIndex();
-      } else {
-        idx = row.template getId<Key>();
-      }
-      std::apply(
-        [&](auto&... x) {
-          (setValue(x, idx), ...);
-        },
-        iterators);
-
-      cursor(0, row.globalIndex(), values[framework::has_type_at_v<T>(tables_t{})]...);
     }
-    builder.setLabel(label);
-    return builder.finalize();
+
+    return [&label, &columnBuilders, &self]<size_t... Is>(std::index_sequence<Is...>) {
+      return makeArrowTable(label,
+                            {self.template result<C1>(), [&columnBuilders]() {
+                               using T = typename framework::pack_element_t<Is, framework::pack<Cs...>>;
+                               return std::static_pointer_cast<reduced_t<Key, T>>(columnBuilders[Is])->template result<T>();
+                             }()...},
+                            {self.field(), [&columnBuilders]() {
+                               using T = typename framework::pack_element_t<Is, framework::pack<Cs...>>;
+                               return std::static_pointer_cast<reduced_t<Key, T>>(columnBuilders[Is])->field();
+                             }()...});
+    }(sq);
   }
 };
 
 /// This helper struct allows you to declare index tables to be created in a task
-template <typename T, typename IP = IndexSparse>
-struct Builds : TableTransform<typename aod::MetadataTrait<T>::metadata> {
-  using Key = typename T::indexing_t;
+
+template <soa::is_index_table T>
+constexpr auto transformBase()
+{
+  using metadata = typename aod::MetadataTrait<o2::aod::Hash<T::ref.desc_hash>>::metadata;
+  return TableTransform<metadata, T::ref>{};
+}
+
+template <soa::is_index_table T>
+struct Builds : decltype(transformBase<T>()) {
+  using buildable_t = T;
+  using metadata = decltype(transformBase<T>())::metadata;
+  using IP = std::conditional_t<metadata::exclusive, IndexBuilder<Exclusive>, IndexBuilder<Sparse>>;
+  using Key = metadata::Key;
   using H = typename T::first_t;
   using Ts = typename T::rest_t;
-  using index_pack_t = typename aod::MetadataTrait<T>::metadata::index_pack_t;
+  using index_pack_t = metadata::index_pack_t;
 
   T* operator->()
   {
     return table.get();
   }
-  T& operator*()
+  T const& operator*() const
   {
-    return *table.get();
+    return *table;
   }
 
   auto asArrowTable()
@@ -375,16 +461,20 @@ struct Builds : TableTransform<typename aod::MetadataTrait<T>::metadata> {
     return index_pack_t{};
   }
 
-  template <typename... Cs, typename Key, typename T1, typename... Ts>
-  auto build(framework::pack<Cs...>, Key const& key, std::tuple<T1, Ts...> tables)
+  template <typename Key, typename... Cs>
+  auto build(framework::pack<Cs...>, std::vector<std::shared_ptr<arrow::Table>>&& tables)
   {
-    this->table = std::make_shared<T>(IP::indexBuilder(aod::MetadataTrait<T>::metadata::tableLabel(), framework::pack<Cs...>{}, key, tables));
+    this->table = std::make_shared<T>(IP::template indexBuilder<Key, metadata::sources.size(), metadata::sources>(o2::aod::label<T::ref>(), std::forward<std::vector<std::shared_ptr<arrow::Table>>>(tables), framework::pack<Cs...>{}));
     return (this->table != nullptr);
   }
 };
 
 template <typename T>
-using BuildsExclusive = Builds<T, IndexExclusive>;
+concept is_builds = requires(T t) {
+  typename T::metadata;
+  typename T::Key;
+  requires std::same_as<decltype(t.pack()), typename T::index_pack_t>;
+};
 
 /// This helper class allows you to declare things which will be created by a
 /// given analysis task. Currently wrapped objects are limited to be TNamed
@@ -448,7 +538,7 @@ struct OutputObj {
   OutputSpec const spec()
   {
     header::DataDescription desc{};
-    auto lhash = compile_time_hash(label.c_str());
+    auto lhash = runtime_hash(label.c_str());
     std::memset(desc.str, '_', 16);
     std::stringstream s;
     s << std::hex << lhash;
@@ -468,10 +558,10 @@ struct OutputObj {
     return *object.get();
   }
 
-  OutputRef ref()
+  OutputRef ref(uint16_t index, uint16_t max)
   {
     return OutputRef{std::string{label}, 0,
-                     o2::header::Stack{OutputObjHeader{policy, sourceType, mTaskHash}}};
+                     o2::header::Stack{OutputObjHeader{policy, sourceType, mTaskHash, index, max}}};
   }
 
   std::shared_ptr<T> object;
@@ -481,54 +571,76 @@ struct OutputObj {
   uint32_t mTaskHash;
 };
 
+template <typename T>
+concept is_outputobj = requires(T t) {
+  &T::setHash;
+  &T::spec;
+  &T::ref;
+  requires std::same_as<decltype(t.operator->()), typename T::obj_t*>;
+  requires std::same_as<decltype(t.object), std::shared_ptr<typename T::obj_t>>;
+};
+
 /// This helper allows you to fetch a Sevice from the context or
 /// by using some singleton. This hopefully will hide the Singleton and
 /// We will be able to retrieve it in a more thread safe manner later on.
 template <typename T>
 struct Service {
+  using service_t = T;
   T* service;
 
-  T* operator->() const
+  decltype(auto) operator->() const
   {
-    return service;
+    if constexpr (base_of_template<LoadableServicePlugin, T>) {
+      return service->get();
+    } else {
+      return service;
+    }
   }
 };
 
 template <typename T>
-o2::soa::Filtered<T>* getTableFromFilter(const T& table, const expressions::Filter& filter)
-{
-  auto schema = table.asArrowTable()->schema();
-  expressions::Operations ops = createOperations(filter);
-  gandiva::NodePtr tree = nullptr;
-  if (isSchemaCompatible(schema, ops)) {
-    tree = createExpressionTree(ops, schema);
-  } else {
-    throw std::runtime_error("Partition filter does not match declared table type");
-  }
+concept is_service = requires(T t) {
+  requires std::same_as<decltype(t.service), typename T::service_t*>;
+  &T::operator->;
+};
 
-  if constexpr (soa::is_soa_filtered_t<std::decay_t<T>>::value) {
-    return new o2::soa::Filtered<T>{{table}, tree};
-  } else {
-    return new o2::soa::Filtered<T>{{table.asArrowTable()}, tree};
-  }
+auto getTableFromFilter(soa::is_filtered_table auto const& table, soa::SelectionVector&& selection)
+{
+  return std::make_unique<o2::soa::Filtered<std::decay_t<decltype(table)>>>(std::vector{table}, std::forward<soa::SelectionVector>(selection));
 }
+
+auto getTableFromFilter(soa::is_not_filtered_table auto const& table, soa::SelectionVector&& selection)
+{
+  return std::make_unique<o2::soa::Filtered<std::decay_t<decltype(table)>>>(std::vector{table.asArrowTable()}, std::forward<soa::SelectionVector>(selection));
+}
+
+void initializePartitionCaches(std::set<uint32_t> const& hashes, std::shared_ptr<arrow::Schema> const& schema, expressions::Filter const& filter, gandiva::NodePtr& tree, gandiva::FilterPtr& gfilter);
 
 template <typename T>
 struct Partition {
-  Partition(expressions::Node&& filter_) : filter{std::move(filter_)}
+  using content_t = T;
+  Partition(expressions::Node&& filter_) : filter{std::forward<expressions::Node>(filter_)}
   {
   }
 
-  void bindTable(T& table)
+  Partition(expressions::Node&& filter_, T const& table)
+    : filter{std::forward<expressions::Node>(filter_)}
   {
-    mFiltered.reset(getTableFromFilter(table, filter));
-    bindExternalIndices(&table);
-    getBoundToExternalIndices(table);
+    setTable(table);
   }
 
-  void setTable(const T& table)
+  void intializeCaches(std::set<uint32_t> const& hashes, std::shared_ptr<arrow::Schema> const& schema)
   {
-    mFiltered.reset(getTableFromFilter(table, filter));
+    initializePartitionCaches(hashes, schema, filter, tree, gfilter);
+  }
+
+  void bindTable(T const& table)
+  {
+    intializeCaches(T::table_t::hashes(), table.asArrowTable()->schema());
+    if (dataframeChanged) {
+      mFiltered = getTableFromFilter(table, soa::selectionToVector(framework::expressions::createSelection(table.asArrowTable(), gfilter)));
+      dataframeChanged = false;
+    }
   }
 
   template <typename... Ts>
@@ -536,13 +648,6 @@ struct Partition {
   {
     if (mFiltered != nullptr) {
       mFiltered->bindExternalIndices(tables...);
-    }
-  }
-
-  void bindInternalIndices()
-  {
-    if (mFiltered != nullptr) {
-      mFiltered->bindInternalIndices();
     }
   }
 
@@ -554,21 +659,48 @@ struct Partition {
     }
   }
 
-  template <typename T2>
-  void getBoundToExternalIndices(T2& table)
-  {
-    if (mFiltered != nullptr) {
-      table.bindExternalIndices(mFiltered.get());
-    }
-  }
-
   void updatePlaceholders(InitContext& context)
   {
     expressions::updatePlaceholders(filter, context);
   }
 
+  [[nodiscard]] std::shared_ptr<arrow::Table> asArrowTable() const
+  {
+    return mFiltered->asArrowTable();
+  }
+
+  o2::soa::Filtered<T>* operator->()
+  {
+    return mFiltered.get();
+  }
+
+  template <typename T1>
+  [[nodiscard]] auto rawSliceBy(o2::framework::Preslice<T1> const& container, int value) const
+  {
+    return mFiltered->rawSliceBy(container, value);
+  }
+
+  [[nodiscard]] auto sliceByCached(framework::expressions::BindingNode const& node, int value, o2::framework::SliceCache& cache) const
+  {
+    return mFiltered->sliceByCached(node, value, cache);
+  }
+
+  [[nodiscard]] auto sliceByCachedUnsorted(framework::expressions::BindingNode const& node, int value, o2::framework::SliceCache& cache) const
+  {
+    return mFiltered->sliceByCachedUnsorted(node, value, cache);
+  }
+
+  template <typename T1, typename Policy, bool OPT>
+  [[nodiscard]] auto sliceBy(o2::framework::PresliceBase<T1, Policy, OPT> const& container, int value) const
+  {
+    return mFiltered->sliceBy(container, value);
+  }
+
   expressions::Filter filter;
   std::unique_ptr<o2::soa::Filtered<T>> mFiltered = nullptr;
+  gandiva::NodePtr tree = nullptr;
+  gandiva::FilterPtr gfilter = nullptr;
+  bool dataframeChanged = true;
 
   using iterator = typename o2::soa::Filtered<T>::iterator;
   using const_iterator = typename o2::soa::Filtered<T>::const_iterator;
@@ -597,28 +729,32 @@ struct Partition {
   }
 };
 
-} // namespace o2::framework
+template <typename T>
+concept is_partition = requires(T t) {
+  &T::updatePlaceholders;
+  requires std::same_as<decltype(t.filter), expressions::Filter>;
+  requires std::same_as<decltype(t.mFiltered), std::unique_ptr<o2::soa::Filtered<typename T::content_t>>>;
+};
+}  // namespace o2::framework
 
 namespace o2::soa
 {
 /// On-the-fly adding of expression columns
-template <typename T, typename... Cs>
+template <soa::is_table T, soa::is_spawnable_column... Cs>
 auto Extend(T const& table)
 {
-  static_assert((soa::is_type_spawnable_v<Cs> && ...), "You can only extend a table with expression columns");
-  using output_t = Join<T, soa::Table<Cs...>>;
-  return output_t{{o2::framework::spawner(framework::pack<Cs...>{}, table.asArrowTable().get(), "dynamic extension"), table.asArrowTable()}, 0};
+  using output_t = Join<T, soa::Table<o2::aod::Hash<"JOIN"_h>, o2::aod::Hash<"JOIN/0"_h>, o2::aod::Hash<"JOIN"_h>, Cs...>>;
+  return output_t{{o2::framework::spawner(framework::pack<Cs...>{}, {table.asArrowTable()}, "dynamicExtension"), table.asArrowTable()}, 0};
 }
 
 /// Template function to attach dynamic columns on-the-fly (e.g. inside
 /// process() function). Dynamic columns need to be compatible with the table.
-template <typename T, typename... Cs>
+template <soa::is_table T, soa::is_dynamic_column... Cs>
 auto Attach(T const& table)
 {
-  static_assert((framework::is_base_of_template<o2::soa::DynamicColumn, Cs>::value && ...), "You can only attach dynamic columns");
-  using output_t = Join<T, o2::soa::Table<Cs...>>;
+  using output_t = Join<T, o2::soa::Table<o2::aod::Hash<"JOIN"_h>, o2::aod::Hash<"JOIN/0"_h>, o2::aod::Hash<"JOIN"_h>, Cs...>>;
   return output_t{{table.asArrowTable()}, table.offset()};
 }
-} // namespace o2::soa
+}  // namespace o2::soa
 
-#endif // o2_framework_AnalysisHelpers_H_DEFINED
+#endif  // o2_framework_AnalysisHelpers_H_DEFINED

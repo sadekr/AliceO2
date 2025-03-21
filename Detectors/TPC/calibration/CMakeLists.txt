@@ -22,24 +22,51 @@ o2_add_library(TPCCalibration
                        src/DigitDump.cxx
                        src/DigitDumpParam.cxx
                        src/CalibPadGainTracks.cxx
+                       src/CalibPadGainTracksBase.cxx
                        src/CalibLaserTracks.cxx
                        src/LaserTracksCalibrator.cxx
+                       src/SACDecoder.cxx
                        src/IDCAverageGroup.cxx
+                       src/IDCAverageGroupBase.cxx
+                       src/IDCAverageGroupHelper.cxx
                        src/IDCGroup.cxx
                        src/IDCGroupHelperRegion.cxx
+                       src/IDCGroupHelperSector.cxx
                        src/IDCGroupingParameter.cxx
                        src/IDCFactorization.cxx
                        src/IDCFourierTransformBase.cxx
                        src/IDCFourierTransform.cxx
+                       src/IDCDrawHelper.cxx
                        src/RobustAverage.cxx
                        src/IDCCCDBHelper.cxx
-                       src/dEdxHistos.cxx
                        src/CalibdEdx.cxx
+                       src/CalibratordEdx.cxx
+                       src/TrackDump.cxx
+                       src/CalibratorPadGainTracks.cxx
+                       src/TPCVDriftTglCalibration.cxx
+                       src/SACFactorization.cxx
+                       src/SACParameter.cxx
+                       src/SACDrawHelper.cxx
+                       src/VDriftHelper.cxx
+                       src/CorrectionMapsLoader.cxx
+                       src/SACCCDBHelper.cxx
+                       src/TPCFastSpaceChargeCorrectionHelper.cxx
+                       src/CalculatedEdx.cxx
+                       src/TPCScaler.cxx
+                       src/CorrMapParam.cxx
+                       src/TPCMShapeCorrection.cxx
+                       src/DigitAdd.cxx
+                       src/CorrectdEdxDistortions.cxx
                PUBLIC_LINK_LIBRARIES O2::DataFormatsTPC O2::TPCBase
                                      O2::TPCReconstruction ROOT::Minuit
                                      Microsoft.GSL::GSL
                                      O2::DetectorsCalibration
-                                     O2::CCDB)
+                                     O2::GPUO2Interface
+                                     O2::GPUDataTypes
+                                     O2::TPCFastTransformation
+                                     O2::DataFormatsCTP
+                                     O2::CCDB
+                                     O2::SpacePoints)
 
 o2_target_root_dictionary(TPCCalibration
                           HEADERS include/TPCCalibration/CalibRawBase.h
@@ -51,10 +78,14 @@ o2_target_root_dictionary(TPCCalibration
                                   include/TPCCalibration/DigitDump.h
                                   include/TPCCalibration/DigitDumpParam.h
                                   include/TPCCalibration/CalibPadGainTracks.h
+                                  include/TPCCalibration/CalibPadGainTracksBase.h
                                   include/TPCCalibration/FastHisto.h
                                   include/TPCCalibration/CalibLaserTracks.h
                                   include/TPCCalibration/LaserTracksCalibrator.h
+                                  include/TPCCalibration/SACDecoder.h
                                   include/TPCCalibration/IDCAverageGroup.h
+                                  include/TPCCalibration/IDCAverageGroupBase.h
+                                  include/TPCCalibration/IDCAverageGroupHelper.h
                                   include/TPCCalibration/IDCGroup.h
                                   include/TPCCalibration/IDCGroupHelperRegion.h
                                   include/TPCCalibration/IDCGroupHelperSector.h
@@ -65,13 +96,24 @@ o2_target_root_dictionary(TPCCalibration
                                   include/TPCCalibration/IDCFourierTransformBase.h
                                   include/TPCCalibration/IDCFourierTransform.h
                                   include/TPCCalibration/IDCCCDBHelper.h
-                                  include/TPCCalibration/dEdxHistos.h
-                                  include/TPCCalibration/CalibdEdx.h)
-
-o2_add_executable(dcs-sim-workflow
-                  COMPONENT_NAME tpc
-                  SOURCES testWorkflow/tpc-dcs-sim-workflow.cxx
-                  PUBLIC_LINK_LIBRARIES O2::DCStestWorkflow)
+                                  include/TPCCalibration/CalibdEdx.h
+                                  include/TPCCalibration/CalibratordEdx.h
+                                  include/TPCCalibration/TrackDump.h
+                                  include/TPCCalibration/IDCDrawHelper.h
+                                  include/TPCCalibration/CalibratorPadGainTracks.h
+                                  include/TPCCalibration/TPCVDriftTglCalibration.h
+                                  include/TPCCalibration/SACFactorization.h
+                                  include/TPCCalibration/SACParameter.h
+                                  include/TPCCalibration/SACDrawHelper.h
+                                  include/TPCCalibration/VDriftHelper.h
+                                  include/TPCCalibration/SACCCDBHelper.h
+                                  include/TPCCalibration/TPCFastSpaceChargeCorrectionHelper.h
+                                  include/TPCCalibration/CalculatedEdx.h
+                                  include/TPCCalibration/TPCScaler.h
+                                  include/TPCCalibration/CorrMapParam.h
+                                  include/TPCCalibration/TPCMShapeCorrection.h
+                                  include/TPCCalibration/DigitAdd.h
+                                  include/TPCCalibration/CorrectdEdxDistortions.h)
 
 o2_add_test_root_macro(macro/comparePedestalsAndNoise.C
                        PUBLIC_LINK_LIBRARIES O2::TPCBase
@@ -97,15 +139,17 @@ o2_add_test_root_macro(macro/dumpDigits.C
                        PUBLIC_LINK_LIBRARIES O2::TPCCalibration
                        LABELS tpc
                        ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage)
-o2_add_test_root_macro(macro/extractGainMap.C
-                       PUBLIC_LINK_LIBRARIES O2::TPCCalibration
-                       LABELS tpc
-                       ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage)
 o2_add_test_root_macro(macro/preparePedestalFiles.C
+                       COMPILE_ONLY
                        PUBLIC_LINK_LIBRARIES O2::TPCCalibration
                        LABELS tpc)
-o2_add_test_root_macro(macro/makeTPCCCDBEntryForDCS.C
-                       PUBLIC_LINK_LIBRARIES O2::DetectorsDCS
+o2_add_test_root_macro(macro/prepareCMFiles.C
+                       COMPILE_ONLY
+                       PUBLIC_LINK_LIBRARIES O2::TPCCalibration
+                       LABELS tpc)
+o2_add_test_root_macro(macro/prepareITFiles.C
+                       COMPILE_ONLY
+                       PUBLIC_LINK_LIBRARIES O2::TPCCalibration
                        LABELS tpc)
 
 o2_add_test(IDCFourierTransform
@@ -114,7 +158,15 @@ o2_add_test(IDCFourierTransform
             SOURCES test/testO2TPCIDCFourierTransform.cxx
             ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
             LABELS tpc
-            CONFIGURATIONS RelWithDebInfo Release MinRelSize)
+            CONFIGURATIONS RelWithDebInfo Release MinSizeRel)
+
+o2_add_test(IDCAverageGroup
+            LABELS tpc
+            PUBLIC_LINK_LIBRARIES O2::TPCCalibration
+            COMPONENT_NAME tpc
+            SOURCES test/testO2TPCIDCAverageGroup.cxx
+            ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
+            CONFIGURATIONS RelWithDebInfo Release MinSizeRel)
 
 if (OpenMP_CXX_FOUND)
     target_compile_definitions(${targetName} PRIVATE WITH_OPENMP)

@@ -19,6 +19,7 @@
 #include <boost/test/unit_test.hpp>
 #include <memory>
 #include <vector>
+#include <fmt/format.h>
 #include "DataFormatsTPC/Digit.h"
 #include "TPCSimulation/DigitContainer.h"
 #include "TPCSimulation/SAMPAProcessing.h"
@@ -36,7 +37,7 @@ BOOST_AUTO_TEST_CASE(DigitContainer_test1)
 {
   auto& cdb = CDBInterface::instance();
   cdb.setUseDefaults();
-  o2::conf::ConfigurableParam::updateFromString("TPCEleParam.DigiMode=3"); // propagate the ADC values, otherwise the computation get complicated
+  o2::conf::ConfigurableParam::updateFromString(fmt::format("TPCEleParam.DigiMode={}", (int)o2::tpc::DigitzationMode::PropagateADC)); // propagate the ADC values, otherwise the computation get complicated
   const Mapper& mapper = Mapper::instance();
   const SAMPAProcessing& sampa = SAMPAProcessing::instance();
   DigitContainer digitContainer;
@@ -67,7 +68,7 @@ BOOST_AUTO_TEST_CASE(DigitContainer_test1)
     const CRU cru = digit.getCRU();
     const auto gemStack = cru.gemStack();
     const float nPads = mapper.getNumberOfPads(GEMstack(gemStack));
-    BOOST_CHECK_CLOSE(commonMode[i].getCommonMode(), digit.getChargeFloat() / nPads, 1E-6);
+    BOOST_CHECK_CLOSE(commonMode[i].getCommonMode(), digit.getChargeFloat() * 0.5f / nPads, 1E-6);
   }
 
   BOOST_CHECK(cru.size() == mDigitsArray.size());
@@ -96,7 +97,7 @@ BOOST_AUTO_TEST_CASE(DigitContainer_test2)
 {
   auto& cdb = CDBInterface::instance();
   cdb.setUseDefaults();
-  o2::conf::ConfigurableParam::updateFromString("TPCEleParam.DigiMode=3"); // propagate the ADC values, otherwise the computation get complicated
+  o2::conf::ConfigurableParam::updateFromString(fmt::format("TPCEleParam.DigiMode={}", (int)o2::tpc::DigitzationMode::PropagateADC)); // propagate the ADC values, otherwise the computation get complicated
   const Mapper& mapper = Mapper::instance();
   const SAMPAProcessing& sampa = SAMPAProcessing::instance();
   DigitContainer digitContainer;
@@ -157,7 +158,7 @@ BOOST_AUTO_TEST_CASE(DigitContainer_test2)
 
     const CRU cru = digit.getCRU();
     const auto gemStack = cru.gemStack();
-    chargeSum[gemStack] += digit.getChargeFloat();
+    chargeSum[gemStack] += digit.getChargeFloat() * 0.5f;
     ++digits;
   }
 

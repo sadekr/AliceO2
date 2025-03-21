@@ -11,7 +11,9 @@
 
 #include "RawFileReaderWorkflow.h"
 #include "DetectorsRaw/RawFileReader.h"
+#include "CommonUtils/NameConf.h"
 #include "CommonUtils/ConfigurableParam.h"
+#include "Framework/ChannelSpecHelpers.h"
 #include "Framework/Logger.h"
 #include <string>
 #include <bitset>
@@ -25,8 +27,10 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
   // option allowing to set parameters
   std::vector<o2::framework::ConfigParamSpec> options;
   options.push_back(ConfigParamSpec{"input-conf", VariantType::String, "", {"configuration file with input (obligatory)"}});
+  options.push_back(ConfigParamSpec{"onlyDet", VariantType::String, "all", {"list of dectors"}});
   options.push_back(ConfigParamSpec{"min-tf", VariantType::Int64, 0L, {"min TF ID to process"}});
   options.push_back(ConfigParamSpec{"max-tf", VariantType::Int64, 0xffffffffL, {"max TF ID to process"}});
+  options.push_back(ConfigParamSpec{"run-number", VariantType::Int, 0, {"impose run number"}});
   options.push_back(ConfigParamSpec{"loop", VariantType::Int, 1, {"loop N times (infinite for N<0)"}});
   options.push_back(ConfigParamSpec{"delay", VariantType::Float, 0.f, {"delay in seconds between consecutive TFs sending"}});
   options.push_back(ConfigParamSpec{"buffer-size", VariantType::Int64, 5 * 1024L, {"buffer size for files preprocessing"}});
@@ -38,6 +42,10 @@ void customize(std::vector<o2::framework::ConfigParamSpec>& workflowOptions)
   options.push_back(ConfigParamSpec{"calculate-tf-start", VariantType::Bool, false, {"calculate TF start instead of using TType"}});
   options.push_back(ConfigParamSpec{"drop-tf", VariantType::String, "none", {"Drop each TFid%(1)==(2) of detector, e.g. ITS,2,4;TPC,4[,0];..."}});
   options.push_back(ConfigParamSpec{"configKeyValues", VariantType::String, "", {"semicolon separated key=value strings"}});
+  options.push_back(ConfigParamSpec{"send-diststf-0xccdb", VariantType::Bool, false, {"send explicit FLP/DISTSUBTIMEFRAME/0xccdb output"}});
+  options.push_back(ConfigParamSpec{"hbfutils-config", VariantType::String, std::string(o2::base::NameConf::DIGITIZATIONCONFIGFILE), {"configKeyValues ini file for HBFUtils (used if exists)"}});
+  options.push_back(ConfigParamSpec{"timeframes-shm-limit", VariantType::String, "0", {"Minimum amount of SHM required in order to publish data"}});
+  options.push_back(ConfigParamSpec{"metric-feedback-channel-format", VariantType::String, "name=metric-feedback,type=pull,method=connect,address=ipc://{}metric-feedback-{},transport=shmem,rateLogging=0", {"format for the metric-feedback channel for TF rate limiting"}});
   // options for error-check suppression
 
   for (int i = 0; i < RawFileReader::NErrorsDefined; i++) {
@@ -56,8 +64,10 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
   ReaderInp rinp;
   rinp.inifile = configcontext.options().get<std::string>("input-conf");
   rinp.loop = configcontext.options().get<int>("loop");
+  rinp.onlyDet = configcontext.options().get<std::string>("onlyDet");
   rinp.maxTF = uint32_t(configcontext.options().get<int64_t>("max-tf"));
   rinp.minTF = uint32_t(configcontext.options().get<int64_t>("min-tf"));
+  rinp.runNumber = configcontext.options().get<int>("run-number");
   rinp.bufferSize = uint64_t(configcontext.options().get<int64_t>("buffer-size"));
   rinp.spSize = uint64_t(configcontext.options().get<int64_t>("super-page-size"));
   rinp.partPerSP = configcontext.options().get<bool>("part-per-sp");
@@ -67,6 +77,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
   rinp.rawChannelConfig = configcontext.options().get<std::string>("raw-channel-config");
   rinp.delay_us = uint32_t(1e6 * configcontext.options().get<float>("delay")); // delay in microseconds
   rinp.dropTF = configcontext.options().get<std::string>("drop-tf");
+  rinp.sup0xccdb = !configcontext.options().get<bool>("send-diststf-0xccdb");
   rinp.errMap = 0;
   for (int i = RawFileReader::NErrorsDefined; i--;) {
     auto ei = RawFileReader::ErrTypes(i);
@@ -75,7 +86,16 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
       rinp.errMap |= 0x1 << i;
     }
   }
+  rinp.minSHM = std::stoul(configcontext.options().get<std::string>("timeframes-shm-limit"));
+  int rateLimitingIPCID = std::stoi(configcontext.options().get<std::string>("timeframes-rate-limit-ipcid"));
+  std::string chanFmt = configcontext.options().get<std::string>("metric-feedback-channel-format");
+  if (rateLimitingIPCID > -1 && !chanFmt.empty()) {
+    rinp.metricChannel = fmt::format(fmt::runtime(chanFmt), o2::framework::ChannelSpecHelpers::defaultIPCFolder(), rateLimitingIPCID);
+  }
   o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
-
+  auto hbfini = configcontext.options().get<std::string>("hbfutils-config");
+  if (!hbfini.empty() && o2::conf::ConfigurableParam::configFileExists(hbfini)) {
+    o2::conf::ConfigurableParam::updateFromFile(hbfini, "HBFUtils", true); // update only those values which were not touched yet (provenance == kCODE)
+  }
   return std::move(o2::raw::getRawFileReaderWorkflow(rinp));
 }

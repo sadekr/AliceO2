@@ -23,9 +23,11 @@
 #include "ReconstructionDataFormats/TrackTPCITS.h"
 #include "DetectorsBase/GeometryManager.h"
 #include "DetectorsBase/Propagator.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "DetectorsBase/GRPGeomHelper.h"
+#include "CommonUtils/NameConf.h"
 #include <gsl/span>
 #include "TStopwatch.h"
+#include "TPCCalibration/VDriftHelper.h"
 
 // from FIT
 #include "DataFormatsFT0/RecPoints.h"
@@ -51,23 +53,11 @@ class TOFDPLRecoWorkflowTask
   bool mUseFIT = false;
 
  public:
-  explicit TOFDPLRecoWorkflowTask(bool useMC, bool useFIT) : mUseMC(useMC), mUseFIT(useFIT) {}
+  explicit TOFDPLRecoWorkflowTask(std::shared_ptr<o2::base::GRPGeomRequest> gr, bool useMC, bool useFIT) : mGGCCDBRequest(gr), mUseMC(useMC), mUseFIT(useFIT) {}
 
   void init(framework::InitContext& ic)
   {
-    // nothing special to be set up
-    o2::base::GeometryManager::loadGeometry();
-    o2::base::Propagator::initFieldFromGRP();
-    std::string matLUTPath = ic.options().get<std::string>("material-lut-path");
-    std::string matLUTFile = o2::base::NameConf::getMatLUTFileName(matLUTPath);
-    if (o2::utils::Str::pathExists(matLUTFile)) {
-      auto* lut = o2::base::MatLayerCylSet::loadFromFile(matLUTFile);
-      o2::base::Propagator::Instance()->setMatLUT(lut);
-      LOG(INFO) << "Loaded material LUT from " << matLUTFile;
-    } else {
-      LOG(INFO) << "Material LUT " << matLUTFile << " file is absent, only TGeo can be used";
-    }
-
+    o2::base::GRPGeomHelper::instance().setRequest(mGGCCDBRequest);
     mTimer.Stop();
     mTimer.Reset();
   }
@@ -75,6 +65,7 @@ class TOFDPLRecoWorkflowTask
   void run(framework::ProcessingContext& pc)
   {
     mTimer.Start(false);
+    updateTimeDependentParams(pc);
     //>>>---------- attach input data --------------->>>
     const auto clustersRO = pc.inputs().get<gsl::span<o2::tof::Cluster>>("tofcluster");
     const auto tracksRO = pc.inputs().get<gsl::span<o2::dataformats::TrackTPCITS>>("globaltrack");
@@ -84,7 +75,7 @@ class TOFDPLRecoWorkflowTask
       // worker and the underlying memory is valid throughout the whole computation
       auto recPoints = std::move(pc.inputs().get<gsl::span<o2::ft0::RecPoints>>("fitrecpoints"));
       mMatcher.setFITRecPoints(recPoints);
-      LOG(INFO) << "TOF Reco Workflow pulled " << recPoints.size() << " FIT RecPoints";
+      LOG(info) << "TOF Reco Workflow pulled " << recPoints.size() << " FIT RecPoints";
     }
 
     // we do a copy of the input but we are looking for a way to avoid it (current problem in conversion form unique_ptr to *)
@@ -102,26 +93,56 @@ class TOFDPLRecoWorkflowTask
     // in run_match_tof aggiugnere esplicitamente la chiamata a fill del tree (nella classe MatchTOF) e il metodo per leggere i vettori di output
 
     //...
-    // LOG(INFO) << "TOF CLUSTERER : TRANSFORMED " << digits->size()
+    // LOG(info) << "TOF CLUSTERER : TRANSFORMED " << digits->size()
     //           << " DIGITS TO " << mClustersArray.size() << " CLUSTERS";
 
     // send matching-info
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "MTC_ITSTPC", 0, Lifetime::Timeframe}, mMatcher.getMatchedTrackVector());
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "MTC_ITSTPC", 0}, mMatcher.getMatchedTrackVector());
     if (mUseMC) {
-      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "MCMATCHTOF", 0, Lifetime::Timeframe}, mMatcher.getMatchedTOFLabelsVector());
+      pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "MCMATCHTOF", 0}, mMatcher.getMatchedTOFLabelsVector());
     }
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CALIBDATA", 0, Lifetime::Timeframe}, mMatcher.getCalibVector());
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTOF, "CALIBDATA", 0}, mMatcher.getCalibVector());
     mTimer.Stop();
   }
 
   void endOfStream(EndOfStreamContext& ec)
   {
-    LOGF(INFO, "TOF Matching total timing: Cpu: %.3e Real: %.3e s in %d slots",
+    LOGF(info, "TOF Matching total timing: Cpu: %.3e Real: %.3e s in %d slots",
          mTimer.CpuTime(), mTimer.RealTime(), mTimer.Counter() - 1);
+  }
+
+  void updateTimeDependentParams(ProcessingContext& pc)
+  {
+    o2::base::GRPGeomHelper::instance().checkUpdates(pc);
+    mTPCVDriftHelper.extractCCDBInputs(pc);
+    static bool initOnceDone = false;
+    if (!initOnceDone) { // this params need to be queried only once
+      initOnceDone = true;
+      // put here init-once stuff
+    }
+    // we may have other params which need to be queried regularly
+    if (mTPCVDriftHelper.isUpdated()) {
+      LOGP(info, "Updating TPC fast transform map with new VDrift factor of {} wrt reference {} from source {}",
+           mTPCVDriftHelper.getVDriftObject().corrFact, mTPCVDriftHelper.getVDriftObject().refVDrift, mTPCVDriftHelper.getSourceName());
+      mMatcher.setTPCVDrift(mTPCVDriftHelper.getVDriftObject());
+      mTPCVDriftHelper.acknowledgeUpdate();
+    }
+  }
+
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj)
+  {
+    if (o2::base::GRPGeomHelper::instance().finaliseCCDB(matcher, obj)) {
+      return;
+    }
+    if (mTPCVDriftHelper.accountCCDBInputs(matcher, obj)) {
+      return;
+    }
   }
 
  private:
   o2::globaltracking::MatchTOF mMatcher; ///< Cluster finder
+  std::shared_ptr<o2::base::GRPGeomRequest> mGGCCDBRequest;
+  o2::tpc::VDriftHelper mTPCVDriftHelper{};
   TStopwatch mTimer;
 };
 
@@ -139,6 +160,15 @@ o2::framework::DataProcessorSpec getTOFRecoWorkflowSpec(bool useMC, bool useFIT)
   if (useFIT) {
     inputs.emplace_back("fitrecpoints", o2::header::gDataOriginFT0, "RECPOINTS", 0, Lifetime::Timeframe);
   }
+  auto ggRequest = std::make_shared<o2::base::GRPGeomRequest>(false,                             // orbitResetTime
+                                                              true,                              // GRPECS=true
+                                                              false,                             // GRPLHCIF
+                                                              true,                              // GRPMagField
+                                                              true,                              // askMatLUT
+                                                              o2::base::GRPGeomRequest::Aligned, // geometry
+                                                              inputs,
+                                                              true);
+  o2::tpc::VDriftHelper::requestCCDBInputs(inputs);
 
   outputs.emplace_back(o2::header::gDataOriginTOF, "MTC_ITSTPC", 0, Lifetime::Timeframe);
   if (useMC) {
@@ -150,7 +180,7 @@ o2::framework::DataProcessorSpec getTOFRecoWorkflowSpec(bool useMC, bool useFIT)
     "TOFRecoWorkflow",
     inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<TOFDPLRecoWorkflowTask>(useMC, useFIT)},
+    AlgorithmSpec{adaptFromTask<TOFDPLRecoWorkflowTask>(ggRequest, useMC, useFIT)},
     Options{
       {"material-lut-path", VariantType::String, "", {"Path of the material LUT file"}}}};
 }

@@ -12,7 +12,9 @@
 #ifndef ALICEO2_MCCOMPLABEL_H
 #define ALICEO2_MCCOMPLABEL_H
 
+#include <cstdint>
 #include "GPUCommonRtypes.h"
+#include <string>
 
 namespace o2
 {
@@ -65,8 +67,10 @@ class MCCompLabel
   bool isSet() const { return mLabel != NotSet; }
   // check if label was not assigned
   bool isEmpty() const { return mLabel == NotSet; }
-  // check if label corresponds to real particle
-  bool isNoise() const { return mLabel == Noise; }
+  // check if label comes from QED contrib
+  bool isQED() const { return getSourceID() == 99; }
+  // check if label corresponds to real particle (for the moment QED is not included)
+  bool isNoise() const { return mLabel == Noise || isQED(); }
   // check if label was assigned as for correctly identified particle
   bool isValid() const { return isSet() && !isNoise(); }
 
@@ -125,7 +129,7 @@ class MCCompLabel
   int getEventID() const { return (mLabel >> nbitsTrackID) & maskEvID; }
   int getSourceID() const { return (mLabel >> (nbitsTrackID + nbitsEvID)) & maskSrcID; }
   uint64_t getTrackEventSourceID() const { return static_cast<uint64_t>(mLabel & maskFull); }
-  void get(int& trackID, int& evID, int& srcID, bool& fake)
+  void get(int& trackID, int& evID, int& srcID, bool& fake) const
   {
     /// parse label
     trackID = getTrackID();
@@ -135,6 +139,7 @@ class MCCompLabel
   }
 
   void print() const;
+  std::string asString() const;
 
   static constexpr int maxSourceID() { return maskSrcID; }
   static constexpr int maxEventID() { return maskEvID; }

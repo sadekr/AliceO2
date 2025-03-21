@@ -23,7 +23,6 @@
 #include "DataFormatsZDC/CTF.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "DetectorsBase/CTFCoderBase.h"
-#include "rANS/rans.h"
 #include "ZDCReconstruction/CTFHelper.h"
 
 class TTree;
@@ -36,45 +35,83 @@ namespace zdc
 class CTFCoder : public o2::ctf::CTFCoderBase
 {
  public:
-  CTFCoder() : o2::ctf::CTFCoderBase(CTF::getNBlocks(), o2::detectors::DetID::ZDC) {}
-  ~CTFCoder() = default;
+  CTFCoder(o2::ctf::CTFCoderBase::OpType op) : o2::ctf::CTFCoderBase(op, CTF::getNBlocks(), o2::detectors::DetID::ZDC) {}
+  ~CTFCoder() final = default;
 
   /// entropy-encode data to buffer with CTF
   template <typename VEC>
-  void encode(VEC& buff, const gsl::span<const BCData>& trgData, const gsl::span<const ChannelData>& chanData, const gsl::span<const OrbitData>& pedData);
+  o2::ctf::CTFIOSize encode(VEC& buff, const gsl::span<const BCData>& trgData, const gsl::span<const ChannelData>& chanData, const gsl::span<const OrbitData>& pedData);
 
   /// entropy decode data from buffer with CTF
   template <typename VTRG, typename VCHAN, typename VPED>
-  void decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& pedVec);
+  o2::ctf::CTFIOSize decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& pedVec);
 
-  void createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::OpType op);
+  void createCoders(const std::vector<char>& bufVec, o2::ctf::CTFCoderBase::OpType op) final;
+
+  void setBCShiftOrbits(long v) { mBCShiftOrbits = v; }
+  auto getBCShiftOrbits() const { return mBCShiftOrbits; }
 
  private:
+  template <typename VEC>
+  o2::ctf::CTFIOSize encode_impl(VEC& buff, const gsl::span<const BCData>& trgData, const gsl::span<const ChannelData>& chanData, const gsl::span<const OrbitData>& pedData);
   void appendToTree(TTree& tree, CTF& ec);
   void readFromTree(TTree& tree, int entry, std::vector<BCData>& trigVec, std::vector<ChannelData>& chanVec, std::vector<OrbitData>& pedVec);
+  std::vector<BCData> mTrgDataFilt;
+  std::vector<ChannelData> mChanDataFilt;
+  std::vector<OrbitData> mPedDataFilt;
+  int64_t mBCShiftOrbits = 0; // integer orbit shift (in BCs) corresponding to mBCShift. Since BCs 0 and 3563 should not be changed, this value will be used for them
 };
 
 /// entropy-encode clusters to buffer with CTF
 template <typename VEC>
-void CTFCoder::encode(VEC& buff, const gsl::span<const BCData>& trigData, const gsl::span<const ChannelData>& chanData, const gsl::span<const OrbitData>& pedData)
+o2::ctf::CTFIOSize CTFCoder::encode(VEC& buff, const gsl::span<const BCData>& trigData, const gsl::span<const ChannelData>& chanData, const gsl::span<const OrbitData>& pedData)
+{
+  if (mIRFrameSelector.isSet()) { // preselect data
+    std::unordered_map<uint32_t, int> orbitSaved;
+    mTrgDataFilt.clear();
+    mChanDataFilt.clear();
+    mPedDataFilt.clear();
+    for (const auto& trig : trigData) {
+      if (mIRFrameSelector.check(trig.ir) >= 0) {
+        mTrgDataFilt.push_back(trig);
+        auto chanIt = chanData.begin() + trig.ref.getFirstEntry();
+        auto& trigC = mTrgDataFilt.back();
+        trigC.ref.set((int)mChanDataFilt.size(), trig.ref.getEntries());
+        std::copy(chanIt, chanIt + trig.ref.getEntries(), std::back_inserter(mChanDataFilt));
+        orbitSaved[trig.ir.orbit]++;
+      }
+    }
+    // collect saved orbits data
+    for (const auto& ped : pedData) {
+      if (orbitSaved.find(ped.ir.orbit) != orbitSaved.end()) {
+        mPedDataFilt.push_back(ped);
+      }
+    }
+    return encode_impl(buff, mTrgDataFilt, mChanDataFilt, mPedDataFilt);
+  }
+  return encode_impl(buff, trigData, chanData, pedData);
+}
+
+template <typename VEC>
+o2::ctf::CTFIOSize CTFCoder::encode_impl(VEC& buff, const gsl::span<const BCData>& trigData, const gsl::span<const ChannelData>& chanData, const gsl::span<const OrbitData>& pedData)
 {
   using MD = o2::ctf::Metadata::OptStore;
   // what to do which each field: see o2::ctd::Metadata explanation
   constexpr MD optField[CTF::getNBlocks()] = {
-    MD::EENCODE, // _bcIncTrig
-    MD::EENCODE, // _orbitIncTrig,
-    MD::EENCODE, // _moduleTrig,
-    MD::EENCODE, // _channelsHL,
-    MD::EENCODE, // _triggersHL,
-    MD::EENCODE, // _extTriggers,
-    MD::EENCODE, // _nchanTrig,
+    MD::EENCODE_OR_PACK, // _bcIncTrig
+    MD::EENCODE_OR_PACK, // _orbitIncTrig,
+    MD::EENCODE_OR_PACK, // _moduleTrig,
+    MD::EENCODE_OR_PACK, // _channelsHL,
+    MD::EENCODE_OR_PACK, // _triggersHL,
+    MD::EENCODE_OR_PACK, // _extTriggers,
+    MD::EENCODE_OR_PACK, // _nchanTrig,
     //
-    MD::EENCODE, // _chanID,
-    MD::EENCODE, // _chanData,
+    MD::EENCODE_OR_PACK, // _chanID,
+    MD::EENCODE_OR_PACK, // _chanData,
     //
-    MD::EENCODE, // _orbitIncEOD,
-    MD::EENCODE, // _pedData
-    MD::EENCODE, // _sclInc
+    MD::EENCODE_OR_PACK, // _orbitIncEOD,
+    MD::EENCODE_OR_PACK, // _pedData
+    MD::EENCODE_OR_PACK, // _sclInc
   };
 
   CTFHelper helper(trigData, chanData, pedData);
@@ -88,57 +125,62 @@ void CTFCoder::encode(VEC& buff, const gsl::span<const BCData>& trigData, const 
 
   ec->setHeader(helper.createHeader());
   assignDictVersion(static_cast<o2::ctf::CTFDictHeader&>(ec->getHeader()));
-  ec->getANSHeader().majorVersion = 0;
-  ec->getANSHeader().minorVersion = 1;
+  ec->setANSHeader(mANSVersion);
   // at every encoding the buffer might be autoexpanded, so we don't work with fixed pointer ec
-#define ENCODEZDC(beg, end, slot, bits) CTF::get(buff.data())->encode(beg, end, int(slot), bits, optField[int(slot)], &buff, mCoders[int(slot)].get(), getMemMarginFactor());
+  o2::ctf::CTFIOSize iosize;
+#define ENCODEZDC(beg, end, slot, bits) CTF::get(buff.data())->encode(beg, end, int(slot), bits, optField[int(slot)], &buff, mCoders[int(slot)], getMemMarginFactor());
   // clang-format off
-  ENCODEZDC(helper.begin_bcIncTrig(),    helper.end_bcIncTrig(),     CTF::BLC_bcIncTrig,    0);
-  ENCODEZDC(helper.begin_orbitIncTrig(), helper.end_orbitIncTrig(),  CTF::BLC_orbitIncTrig, 0);
-  ENCODEZDC(helper.begin_moduleTrig(),   helper.end_moduleTrig(),    CTF::BLC_moduleTrig,   0);
-  ENCODEZDC(helper.begin_channelsHL(),   helper.end_channelsHL(),    CTF::BLC_channelsHL,   0);
-  ENCODEZDC(helper.begin_triggersHL(),   helper.end_triggersHL(),    CTF::BLC_triggersHL,   0);
-  ENCODEZDC(helper.begin_extTriggers(),  helper.end_extTriggers(),   CTF::BLC_extTriggers,  0);
-  ENCODEZDC(helper.begin_nchanTrig(),    helper.end_nchanTrig(),     CTF::BLC_nchanTrig,    0);
+  iosize += ENCODEZDC(helper.begin_bcIncTrig(),    helper.end_bcIncTrig(),     CTF::BLC_bcIncTrig,    0);
+  iosize += ENCODEZDC(helper.begin_orbitIncTrig(), helper.end_orbitIncTrig(),  CTF::BLC_orbitIncTrig, 0);
+  iosize += ENCODEZDC(helper.begin_moduleTrig(),   helper.end_moduleTrig(),    CTF::BLC_moduleTrig,   0);
+  iosize += ENCODEZDC(helper.begin_channelsHL(),   helper.end_channelsHL(),    CTF::BLC_channelsHL,   0);
+  iosize += ENCODEZDC(helper.begin_triggersHL(),   helper.end_triggersHL(),    CTF::BLC_triggersHL,   0);
+  iosize += ENCODEZDC(helper.begin_extTriggers(),  helper.end_extTriggers(),   CTF::BLC_extTriggers,  0);
+  iosize += ENCODEZDC(helper.begin_nchanTrig(),    helper.end_nchanTrig(),     CTF::BLC_nchanTrig,    0);
   //
-  ENCODEZDC(helper.begin_chanID(),       helper.end_chanID(),        CTF::BLC_chanID,       0);
-  ENCODEZDC(helper.begin_chanData(),     helper.end_chanData(),      CTF::BLC_chanData,     0);
+  iosize += ENCODEZDC(helper.begin_chanID(),       helper.end_chanID(),        CTF::BLC_chanID,       0);
+  iosize += ENCODEZDC(helper.begin_chanData(),     helper.end_chanData(),      CTF::BLC_chanData,     0);
   //
-  ENCODEZDC(helper.begin_orbitIncEOD(),  helper.end_orbitIncEOD(),   CTF::BLC_orbitIncEOD,  0);
-  ENCODEZDC(helper.begin_pedData(),      helper.end_pedData(),       CTF::BLC_pedData,      0);
-  ENCODEZDC(helper.begin_sclInc(),       helper.end_sclInc(),        CTF::BLC_sclInc,       0);
+  iosize += ENCODEZDC(helper.begin_orbitIncEOD(),  helper.end_orbitIncEOD(),   CTF::BLC_orbitIncEOD,  0);
+  iosize += ENCODEZDC(helper.begin_pedData(),      helper.end_pedData(),       CTF::BLC_pedData,      0);
+  iosize += ENCODEZDC(helper.begin_sclInc(),       helper.end_sclInc(),        CTF::BLC_sclInc,       0);
 
   // clang-format on
-  CTF::get(buff.data())->print(getPrefix());
+  CTF::get(buff.data())->print(getPrefix(), mVerbosity);
+  finaliseCTFOutput<CTF>(buff);
+  iosize.rawIn = sizeof(BCData) * trigData.size() + sizeof(ChannelData) * chanData.size() + sizeof(OrbitData) * pedData.size();
+  return iosize;
 }
 
 /// decode entropy-encoded clusters to standard compact clusters
 template <typename VTRG, typename VCHAN, typename VPED>
-void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& pedVec)
+o2::ctf::CTFIOSize CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& pedVec)
 {
   auto header = ec.getHeader();
   checkDictVersion(static_cast<const o2::ctf::CTFDictHeader&>(header));
-  ec.print(getPrefix());
-  std::vector<uint16_t> bcIncTrig, moduleTrig, nchanTrig, chanData, pedData, scalerInc, triggersHL, channelsHL;
-  std::vector<uint32_t> orbitIncTrig, orbitIncEOD;
+  ec.print(getPrefix(), mVerbosity);
+  std::vector<int16_t> bcIncTrig, scalerInc;
+  std::vector<int32_t> orbitIncTrig, orbitIncEOD;
+  std::vector<uint16_t> moduleTrig, nchanTrig, chanData, pedData, triggersHL, channelsHL;
   std::vector<uint8_t> extTriggers, chanID;
 
-#define DECODEZDC(part, slot) ec.decode(part, int(slot), mCoders[int(slot)].get())
+  o2::ctf::CTFIOSize iosize;
+#define DECODEZDC(part, slot) ec.decode(part, int(slot), mCoders[int(slot)])
   // clang-format off
-  DECODEZDC(bcIncTrig,      CTF::BLC_bcIncTrig);
-  DECODEZDC(orbitIncTrig,   CTF::BLC_orbitIncTrig);
-  DECODEZDC(moduleTrig,     CTF::BLC_moduleTrig);
-  DECODEZDC(channelsHL,     CTF::BLC_channelsHL);
-  DECODEZDC(triggersHL,     CTF::BLC_triggersHL);
-  DECODEZDC(extTriggers,    CTF::BLC_extTriggers);
-  DECODEZDC(nchanTrig,      CTF::BLC_nchanTrig);
+  iosize += DECODEZDC(bcIncTrig,      CTF::BLC_bcIncTrig);
+  iosize += DECODEZDC(orbitIncTrig,   CTF::BLC_orbitIncTrig);
+  iosize += DECODEZDC(moduleTrig,     CTF::BLC_moduleTrig);
+  iosize += DECODEZDC(channelsHL,     CTF::BLC_channelsHL);
+  iosize += DECODEZDC(triggersHL,     CTF::BLC_triggersHL);
+  iosize += DECODEZDC(extTriggers,    CTF::BLC_extTriggers);
+  iosize += DECODEZDC(nchanTrig,      CTF::BLC_nchanTrig);
   //
-  DECODEZDC(chanID,         CTF::BLC_chanID);
-  DECODEZDC(chanData,       CTF::BLC_chanData);
+  iosize += DECODEZDC(chanID,         CTF::BLC_chanID);
+  iosize += DECODEZDC(chanData,       CTF::BLC_chanData);
   //
-  DECODEZDC(orbitIncEOD,    CTF::BLC_orbitIncEOD);
-  DECODEZDC(pedData,        CTF::BLC_pedData);
-  DECODEZDC(scalerInc,      CTF::BLC_sclInc);
+  iosize += DECODEZDC(orbitIncEOD,    CTF::BLC_orbitIncEOD);
+  iosize += DECODEZDC(pedData,        CTF::BLC_pedData);
+  iosize += DECODEZDC(scalerInc,      CTF::BLC_sclInc);
   // clang-format on
   //
   trigVec.clear();
@@ -159,7 +201,7 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& 
   auto channelsHLIt = channelsHL.begin();
   auto triggersHLIt = triggersHL.begin();
   auto scalers = header.firstScaler;
-
+  bool checkIROK = (mBCShift == 0); // need to check if CTP offset correction does not make the local time negative ?
   for (uint32_t itrig = 0; itrig < header.nTriggers; itrig++) {
     // restore TrigRecord
     if (orbitIncTrig[itrig]) {  // non-0 increment => new orbit
@@ -168,7 +210,19 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& 
     } else {
       ir.bc += bcIncTrig[itrig];
     }
-
+    long bcshift = 0;
+    if (mBCShift) {
+      bcshift = (ir.bc == 0 || ir.bc == o2::constants::lhc::LHCMaxBunches - 1) ? mBCShiftOrbits : mBCShift; // we should never touch the BC of BC=0 or 3563
+    }
+    if (checkIROK || canApplyBCShift(ir, bcshift)) { // correction will be ok
+      checkIROK = true;
+    } else { // correction would make IR prior to mFirstTFOrbit, skip
+      chanDataIt += NTimeBinsPerBC * nchanTrig[itrig];
+      chanIdIt += nchanTrig[itrig];
+      channelsHLIt += 2;
+      triggersHLIt += 2;
+      continue;
+    }
     auto firstChanEntry = chanVec.size();
     for (uint16_t ic = 0; ic < nchanTrig[itrig]; ic++) {
       auto& chan = chanVec.emplace_back();
@@ -179,7 +233,7 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& 
     uint32_t chHL = (uint32_t(*channelsHLIt++) << 16) + *channelsHLIt++;
     uint32_t trHL = (uint32_t(*triggersHLIt++) << 16) + *triggersHLIt++;
 
-    auto& bcTrig = trigVec.emplace_back(firstChanEntry, chanVec.size() - firstChanEntry, ir, chHL, trHL, extTriggers[itrig]);
+    auto& bcTrig = trigVec.emplace_back(firstChanEntry, chanVec.size() - firstChanEntry, ir - bcshift, chHL, trHL, extTriggers[itrig]);
     std::copy_n(modTrigIt, NModules, bcTrig.moduleTriggers.begin());
     modTrigIt += NModules;
   }
@@ -188,10 +242,21 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& 
   ir = {o2::constants::lhc::LHCMaxBunches - 1, header.firstOrbitEOData};
   for (uint32_t ip = 0; ip < header.nEOData; ip++) {
     ir.orbit += orbitIncEOD[ip];
+    long bcshift = 0;
+    if (mBCShift) {
+      bcshift = (ir.bc == 0 || ir.bc == o2::constants::lhc::LHCMaxBunches - 1) ? mBCShiftOrbits : mBCShift; // we should never touch the BC of BC=0 or 3563
+    }
+    if (checkIROK || canApplyBCShift(ir, bcshift)) { // correction will be ok
+      checkIROK = true;
+    } else { // correction would make IR prior to mFirstTFOrbit, skip
+      sclIncIt += NChannels;
+      pedValIt += NChannels;
+      continue;
+    }
     for (uint32_t ic = 0; ic < NChannels; ic++) {
       scalers[ic] += *sclIncIt++; // increment scaler
     }
-    auto& ped = pedVec.emplace_back(OrbitData{ir, {}, scalers});
+    auto& ped = pedVec.emplace_back(OrbitData{ir - bcshift, {}, scalers});
     std::copy_n(pedValIt, NChannels, ped.data.begin());
     pedValIt += NChannels;
   }
@@ -203,6 +268,8 @@ void CTFCoder::decode(const CTF::base& ec, VTRG& trigVec, VCHAN& chanVec, VPED& 
   assert(channelsHLIt == channelsHL.end());
   assert(triggersHLIt == triggersHL.end());
   assert(sclIncIt == scalerInc.end());
+  iosize.rawIn = sizeof(BCData) * trigVec.size() + sizeof(ChannelData) * chanVec.size() + sizeof(OrbitData) * pedVec.size();
+  return iosize;
 }
 
 } // namespace zdc

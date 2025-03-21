@@ -14,7 +14,9 @@
 #include <DetectorsBase/GeometryManager.h>
 #include <DataFormatsParameters/GRPObject.h>
 #include <DetectorsBase/Propagator.h>
-#include <FairLogger.h>
+#include <fairlogger/Logger.h>
+#include <TGeoGlobalMagField.h>
+#include <TRandom.h>
 
 using namespace o2::base;
 
@@ -28,24 +30,34 @@ void BaseDPLDigitizer::init(o2::framework::InitContext& ic)
 {
   // init basic stuff when this was asked for
   if (mNeedGeom) {
-    LOG(INFO) << "Initializing geometry service";
-    o2::base::GeometryManager::loadGeometry(o2::conf::DigiParams::Instance().digitizationgeometry);
+    LOG(info) << "Initializing geometry service";
+    if (!gGeoManager) {
+      o2::base::GeometryManager::loadGeometry(o2::conf::DigiParams::Instance().digitizationgeometry_prefix, true, true /* read from existing aligned file */);
+    }
   }
 
   if (mNeedField) {
-    LOG(INFO) << "Initializing field service";
-    // load from GRP
-    auto inputGRP = o2::conf::DigiParams::Instance().grpfile;
-    if (inputGRP.empty()) {
-      LOG(ERROR) << "GRP filename not initialized in DigiParams";
+    if (TGeoGlobalMagField::Instance()->GetField() == nullptr) {
+      LOG(info) << "Initializing field service";
+      // load from GRP
+      auto inputGRP = o2::conf::DigiParams::Instance().grpfile;
+      if (inputGRP.empty()) {
+        LOG(error) << "GRP filename not initialized in DigiParams";
+      }
+      auto grp = o2::parameters::GRPObject::loadFrom(inputGRP);
+      if (!grp) {
+        LOG(error) << "This workflow needs a valid GRP file to start";
+      }
+      // init magnetic field
+      o2::base::Propagator::initFieldFromGRP(grp);
+    } else {
+      LOG(info) << "Field exists; Not reinitializing";
     }
-    auto grp = o2::parameters::GRPObject::loadFrom(inputGRP);
-    if (!grp) {
-      LOG(ERROR) << "This workflow needs a valid GRP file to start";
-    }
-    // init magnetic field
-    o2::base::Propagator::initFieldFromGRP(grp);
   }
+
+  // initialize the global ROOT random number generator (needed or not)
+  LOG(info) << "Initializing ROOT digitizer random with seed " << o2::conf::DigiParams::Instance().seed;
+  gRandom->SetSeed(o2::conf::DigiParams::Instance().seed);
 
   // finally call specific init
   this->initDigitizerTask(ic);

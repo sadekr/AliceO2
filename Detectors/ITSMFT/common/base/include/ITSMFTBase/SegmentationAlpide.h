@@ -25,7 +25,7 @@ namespace itsmft
 
 /// Segmentation and response for pixels in ITSMFT upgrade
 /// Questions to solve: are guardrings needed and do they belong to the sensor or to the chip in
-/// TGeo. At the moment assume that the local coord syst. is located at bottom left corner
+/// TGeo. At the moment assume that the local coord syst. is located in the middle
 /// of the ACTIVE matrix. If the guardring to be accounted in the local coords, in
 /// the Z and X conversions one needs to first subtract the  mGuardLeft and mGuardBottom
 /// from the local Z,X coordinates
@@ -77,14 +77,57 @@ class SegmentationAlpide
   /// center of the sensitive volulme.
   /// If iRow and or iCol is outside of the segmentation range a value of -0.5*Dx()
   /// or -0.5*Dz() is returned.
-  static bool detectorToLocal(int iRow, int iCol, float& xRow, float& zCol);
-  static bool detectorToLocal(float row, float col, float& xRow, float& zCol);
-  static bool detectorToLocal(float row, float col, math_utils::Point3D<float>& loc);
 
-  // same but w/o check for row/col range
-  static void detectorToLocalUnchecked(int iRow, int iCol, float& xRow, float& zCol);
-  static void detectorToLocalUnchecked(float row, float col, float& xRow, float& zCol);
-  static void detectorToLocalUnchecked(float row, float col, math_utils::Point3D<float>& loc);
+  // w/o check for row/col range
+  template <typename T = float, typename L = float>
+  static void detectorToLocalUnchecked(L row, L col, T& xRow, T& zCol)
+  {
+    xRow = getFirstRowCoordinate() - row * PitchRow;
+    zCol = col * PitchCol + getFirstColCoordinate();
+  }
+  template <typename T = float, typename L = float>
+  static void detectorToLocalUnchecked(L row, L col, math_utils::Point3D<T>& loc)
+  {
+    loc.SetCoordinates(getFirstRowCoordinate() - row * PitchRow, T(0.), col * PitchCol + getFirstColCoordinate());
+  }
+  template <typename T = float, typename L = float>
+  static void detectorToLocalUnchecked(L row, L col, std::array<T, 3>& loc)
+  {
+    loc[0] = getFirstRowCoordinate() - row * PitchRow;
+    loc[1] = T(0);
+    loc[2] = col * PitchCol + getFirstColCoordinate();
+  }
+
+  // same but with check for row/col range
+
+  template <typename T = float, typename L = float>
+  static bool detectorToLocal(L row, L col, T& xRow, T& zCol)
+  {
+    if (row < 0 || row >= NRows || col < 0 || col >= NCols) {
+      return false;
+    }
+    detectorToLocalUnchecked(row, col, xRow, zCol);
+    return true;
+  }
+
+  template <typename T = float, typename L = float>
+  static bool detectorToLocal(L row, L col, math_utils::Point3D<T>& loc)
+  {
+    if (row < 0 || row >= NRows || col < 0 || col >= NCols) {
+      return false;
+    }
+    detectorToLocalUnchecked(row, col, loc);
+    return true;
+  }
+  template <typename T = float, typename L = float>
+  static bool detectorToLocal(L row, L col, std::array<T, 3>& loc)
+  {
+    if (row < 0 || row >= NRows || col < 0 || col >= NCols) {
+      return false;
+    }
+    detectorToLocalUnchecked(row, col, loc);
+    return true;
+  }
 
   static constexpr float getFirstRowCoordinate()
   {
@@ -117,8 +160,8 @@ inline void SegmentationAlpide::localToDetectorUnchecked(float xRow, float zCol,
 inline bool SegmentationAlpide::localToDetector(float xRow, float zCol, int& iRow, int& iCol)
 {
   // convert to row/col
-  xRow = 0.5 * (ActiveMatrixSizeRows - PassiveEdgeTop + PassiveEdgeReadOut) - xRow; // coordinate wrt left edge of Active matrix
-  zCol += 0.5 * ActiveMatrixSizeCols;                                               // coordinate wrt bottom edge of Active matrix
+  xRow = 0.5 * (ActiveMatrixSizeRows - PassiveEdgeTop + PassiveEdgeReadOut) - xRow; // coordinate wrt top edge of Active matrix
+  zCol += 0.5 * ActiveMatrixSizeCols;                                               // coordinate wrt left edge of Active matrix
   if (xRow < 0 || xRow >= ActiveMatrixSizeRows || zCol < 0 || zCol >= ActiveMatrixSizeCols) {
     iRow = iCol = -1;
     return false;
@@ -128,55 +171,6 @@ inline bool SegmentationAlpide::localToDetector(float xRow, float zCol, int& iRo
   return true;
 }
 
-//_________________________________________________________________________________________________
-inline void SegmentationAlpide::detectorToLocalUnchecked(int iRow, int iCol, float& xRow, float& zCol)
-{
-  xRow = getFirstRowCoordinate() - iRow * PitchRow;
-  zCol = iCol * PitchCol + getFirstColCoordinate();
-}
-
-//_________________________________________________________________________________________________
-inline void SegmentationAlpide::detectorToLocalUnchecked(float row, float col, float& xRow, float& zCol)
-{
-  xRow = getFirstRowCoordinate() - row * PitchRow;
-  zCol = col * PitchCol + getFirstColCoordinate();
-}
-
-//_________________________________________________________________________________________________
-inline void SegmentationAlpide::detectorToLocalUnchecked(float row, float col, math_utils::Point3D<float>& loc)
-{
-  loc.SetCoordinates(getFirstRowCoordinate() - row * PitchRow, 0.f, col * PitchCol + getFirstColCoordinate());
-}
-
-//_________________________________________________________________________________________________
-inline bool SegmentationAlpide::detectorToLocal(int iRow, int iCol, float& xRow, float& zCol)
-{
-  if (iRow < 0 || iRow >= NRows || iCol < 0 || iCol >= NCols) {
-    return false;
-  }
-  detectorToLocalUnchecked(iRow, iCol, xRow, zCol);
-  return true;
-}
-
-//_________________________________________________________________________________________________
-inline bool SegmentationAlpide::detectorToLocal(float row, float col, float& xRow, float& zCol)
-{
-  if (row < 0 || row >= NRows || col < 0 || col >= NCols) {
-    return false;
-  }
-  detectorToLocalUnchecked(row, col, xRow, zCol);
-  return true;
-}
-
-//_________________________________________________________________________________________________
-inline bool SegmentationAlpide::detectorToLocal(float row, float col, math_utils::Point3D<float>& loc)
-{
-  if (row < 0 || row >= NRows || col < 0 || col >= NCols) {
-    return false;
-  }
-  detectorToLocalUnchecked(row, col, loc);
-  return true;
-}
 } // namespace itsmft
 } // namespace o2
 

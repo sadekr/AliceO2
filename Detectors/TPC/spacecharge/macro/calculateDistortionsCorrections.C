@@ -1,12 +1,25 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
 // g++ -o spacecharge ~/alice/O2/Detectors/TPC/spacecharge/macro/calculateDistortionsCorrections.C -I ~/alice/sw/osx_x86-64/FairLogger/latest/include -L ~/alice/sw/osx_x86-64/FairLogger/latest/lib -I$O2_ROOT/include -L$O2_ROOT/lib -lO2TPCSpacecharge -lO2CommonUtils -std=c++17 -I$ROOTSYS/include -L$ROOTSYS/lib -lCore  -L$VC_ROOT/lib -lVc -I$VC_ROOT/include -Xpreprocessor -fopenmp -I/usr/local/include -L/usr/local/lib -lomp -O3 -ffast-math -lFairLogger -lRIO
 #include "TPCSpaceCharge/SpaceCharge.h"
+#include "TPCBase/Mapper.h"
 #include <iostream>
 #include <chrono>
 #include <array>
 #include "CommonUtils/TreeStreamRedirector.h"
+#include "TFile.h"
 
 template <typename DataT>
-void calculateDistortionsAnalytical(const int sides = 0, const int globalEFieldTypeAna = 1, const int globalDistTypeAna = 1, const int eFieldTypeAna = 1, const int usePoissonSolverAna = 1, const int nSteps = 1, const int simpsonIterations = 3, const int nThreads = -1);
+void calculateDistortionsAnalytical(const int sides = 0, const bool staticDistGEMFrame = false, const int globalEFieldTypeAna = 1, const int globalDistTypeAna = 1, const int eFieldTypeAna = 1, const int usePoissonSolverAna = 1, const int nSteps = 1, const int simpsonIterations = 3, const int nThreads = -1);
 
 template <typename DataT>
 void calculateDistortionsFromHist(const char* path, const char* histoName, const int sides, const int globalEFieldType = 1, const int globalDistType = 1, const int nSteps = 1, const int simpsonIterations = 3, const int nThreads = -1);
@@ -14,7 +27,13 @@ void calculateDistortionsFromHist(const char* path, const char* histoName, const
 int getSideStart(const int sides);
 int getSideEnd(const int sides);
 
+int mNz = 129;
+int mNr = 129;
+int mNphi = 180;
+int mBField = 5;
+
 /// \param sides set which sides will be simulated. sides=0: A- and C-Side, sides=1: A-Side only, sides=2: C-Side only
+/// \param staticDistGEMFrame enable simulation of static distortions at GEM frame
 /// \param nZVertices number of vertices of the grid in z direction
 /// \param nRVertices number of vertices of the grid in z direction
 /// \param nPhiVertices number of vertices of the grid in z direction
@@ -26,10 +45,12 @@ int getSideEnd(const int sides);
 /// \param simpsonIterations number of iterations used in the simpson intergration
 /// \param nThreads number of threads which are used (if the value is -1 all threads should be used)
 template <typename DataT>
-void calcDistAna(const int sides = 0, const unsigned short nZVertices = 129, const unsigned short nRVertices = 129, const unsigned short nPhiVertices = 180, const int globalEFieldTypeAna = 1, const int globalDistTypeAna = 1, const int eFieldTypeAna = 1, const int usePoissonSolverAna = 1, const int nSteps = 1, const int simpsonIterations = 3, const int nThreads = -1)
+void calcDistAna(const int sides = 0, const bool staticDistGEMFrame = false, const unsigned short nZVertices = 129, const unsigned short nRVertices = 129, const unsigned short nPhiVertices = 180, const int globalEFieldTypeAna = 1, const int globalDistTypeAna = 1, const int eFieldTypeAna = 1, const int usePoissonSolverAna = 1, const int nSteps = 1, const int simpsonIterations = 3, const int nThreads = -1)
 {
-  o2::tpc::SpaceCharge<DataT>::setGrid(nZVertices, nRVertices, nPhiVertices);
-  calculateDistortionsAnalytical<DataT>(sides, globalEFieldTypeAna, globalDistTypeAna, eFieldTypeAna, usePoissonSolverAna, nSteps, simpsonIterations, nThreads);
+  mNz = nZVertices;
+  mNr = nRVertices;
+  mNphi = nPhiVertices;
+  calculateDistortionsAnalytical<DataT>(sides, staticDistGEMFrame, globalEFieldTypeAna, globalDistTypeAna, eFieldTypeAna, usePoissonSolverAna, nSteps, simpsonIterations, nThreads);
 }
 
 /// \param path path to the root file containing the 3D density histogram
@@ -44,7 +65,9 @@ void calcDistAna(const int sides = 0, const unsigned short nZVertices = 129, con
 /// \param nThreads number of threads which are used (if the value is -1 all threads should be used)
 void calcDistFromHist(const char* path, const char* histoName, const unsigned short nZVertices = 129, const unsigned short nRVertices = 129, const unsigned short nPhiVertices = 180, const int sides = 0, const int globalEFieldType = 1, const int globalDistType = 1, const int nSteps = 1, const int simpsonIterations = 3, const int nThreads = -1)
 {
-  o2::tpc::SpaceCharge<double>::setGrid(nZVertices, nRVertices, nPhiVertices);
+  mNz = nZVertices;
+  mNr = nRVertices;
+  mNphi = nPhiVertices;
   calculateDistortionsFromHist<double>(path, histoName, sides, globalEFieldType, globalDistType, nSteps, simpsonIterations, nThreads);
 }
 
@@ -57,7 +80,7 @@ void calcDistFromHist(const char* path, const char* histoName, const unsigned sh
 ///  \param eFieldType setting for the electric field: 0: use analytical formula for the eletrical field for all calculations, 1: use the tricubic interpolator for the electric field
 ///  \param usePoissonSolver use poisson solver to calculate the potential or get the potential from the analytical formula 0: use analytical formula, 1: use poisson solver to calculate the potential (also calculates Efields using the obtained potential)
 template <typename DataT>
-void calculateDistortionsCorrectionsAnalytical(o2::tpc::SpaceCharge<DataT>& spaceChargeCalc, o2::tpc::AnalyticalFields<DataT> anaFields, const int globalEFieldType, const int eFieldType, const int globalDistType, const int usePoissonSolver)
+void calculateDistortionsCorrectionsAnalytical(o2::tpc::SpaceCharge<DataT>& spaceChargeCalc, o2::tpc::AnalyticalFields<DataT> anaFields, const int globalEFieldType, const int eFieldType, const int globalDistType, const int usePoissonSolver, const bool staticDistGEMFrame)
 {
   using timer = std::chrono::high_resolution_clock;
 
@@ -86,6 +109,12 @@ void calculateDistortionsCorrectionsAnalytical(o2::tpc::SpaceCharge<DataT>& spac
 
   if (usePoissonSolver == 1) {
     spaceChargeCalc.setPotentialBoundaryFromFormula(anaFields);
+
+    if (staticDistGEMFrame) {
+      std::cout << "setting static distortions at GEM frame" << std::endl;
+      spaceChargeCalc.setDefaultStaticDistortionsGEMFrameChargeUp(side);
+    }
+
     auto start = timer::now();
     spaceChargeCalc.poissonSolver(side);
     auto stop = timer::now();
@@ -213,6 +242,14 @@ void writeToTree(o2::tpc::SpaceCharge<DataT>& spaceCharge3D, o2::utils::TreeStre
         int nphi = spaceCharge3D.getNPhiVertices();
         int iSide = side;
 
+        bool inVolume = true;
+        if (zDistorted < spaceCharge3D.getZMin(side) || zDistorted > spaceCharge3D.getZMax(side) || radiusDistorted < spaceCharge3D.getRMin(side) || radiusDistorted > spaceCharge3D.getRMax(side)) {
+          inVolume = false;
+        }
+
+        const auto& mapper = o2::tpc::Mapper::instance();
+        bool onPad = mapper.findDigitPosFromGlobalPosition(o2::tpc::GlobalPosition3D{static_cast<float>(spaceCharge3D.getXFromPolar(radius, phi)), static_cast<float>(spaceCharge3D.getYFromPolar(radius, phi)), static_cast<float>(z)}).isValid();
+
         pcstream << "distortions"
                  /// numer of bins
                  << "nR=" << nr
@@ -256,6 +293,8 @@ void writeToTree(o2::tpc::SpaceCharge<DataT>& spaceCharge3D, o2::utils::TreeStre
                  << "corrRDistortedPoint=" << corrRDistPoint
                  << "corrRPhiDistortedPoint=" << corrRPhiDistPoint
                  << "corrZDistortedPoint=" << corrZDistPoint
+                 << "inVolume=" << inVolume
+                 << "onPad=" << onPad
                  // electric fields etc.
                  << "Er=" << eR
                  << "Ez=" << eZ
@@ -276,11 +315,10 @@ void writeToTree(o2::tpc::SpaceCharge<DataT>& spaceCharge3D, o2::utils::TreeStre
 /// \param nSteps number of which are used for calculation of distortions/corrections per z-bin
 /// \param simpsonIterations number of iterations used in the simpson intergration
 template <typename DataT = double>
-void calculateDistortionsAnalytical(const int sides, const int globalEFieldTypeAna, const int globalDistTypeAna, const int eFieldTypeAna, const int usePoissonSolverAna, const int nSteps, const int simpsonIterations, const int nThreads)
+void calculateDistortionsAnalytical(const int sides, const bool staticDistGEMFrame, const int globalEFieldTypeAna, const int globalDistTypeAna, const int eFieldTypeAna, const int usePoissonSolverAna, const int nSteps, const int simpsonIterations, const int nThreads)
 {
-  const auto integrationStrategy = o2::tpc::SpaceCharge<DataT>::IntegrationStrategy::SimpsonIterative;
-  o2::tpc::SpaceCharge<DataT> spaceCharge3D;
-  spaceCharge3D.setOmegaTauT1T2(0.32f, 1, 1);
+  const auto integrationStrategy = o2::tpc::SpaceCharge<DataT>::IntegrationStrategy::Root;
+  o2::tpc::SpaceCharge<DataT> spaceCharge3D(mBField, mNz, mNr, mNphi);
   spaceCharge3D.setNStep(nSteps);
   spaceCharge3D.setSimpsonNIteratives(simpsonIterations);
   spaceCharge3D.setNumericalIntegrationStrategy(integrationStrategy);
@@ -295,7 +333,7 @@ void calculateDistortionsAnalytical(const int sides, const int globalEFieldTypeA
     std::cout << "side: " << iside << std::endl;
     o2::tpc::Side side = (iside == 0) ? o2::tpc::Side::A : o2::tpc::Side::C;
     o2::tpc::AnalyticalFields<DataT> anaFields(side);
-    calculateDistortionsCorrectionsAnalytical(spaceCharge3D, anaFields, globalEFieldTypeAna, eFieldTypeAna, globalDistTypeAna, usePoissonSolverAna);
+    calculateDistortionsCorrectionsAnalytical(spaceCharge3D, anaFields, globalEFieldTypeAna, eFieldTypeAna, globalDistTypeAna, usePoissonSolverAna, staticDistGEMFrame);
     pcstream.GetFile()->cd();
     writeToTree(spaceCharge3D, pcstream, side);
     spaceCharge3D.dumpToFile(*pcstream.GetFile(), side);
@@ -317,8 +355,7 @@ void calculateDistortionsFromHist(const char* path, const char* histoName, const
 {
   using SC = o2::tpc::SpaceCharge<DataT>;
   const auto integrationStrategy = o2::tpc::SpaceCharge<DataT>::IntegrationStrategy::SimpsonIterative;
-  SC spaceCharge3D;
-  spaceCharge3D.setOmegaTauT1T2(0.32f, 1, 1);
+  SC spaceCharge3D(mBField, mNz, mNr, mNphi);
   spaceCharge3D.setNStep(nSteps);
   spaceCharge3D.setSimpsonNIteratives(simpsonIterations);
   spaceCharge3D.setNumericalIntegrationStrategy(integrationStrategy);
@@ -349,16 +386,15 @@ void calculateDistortionsFromHist(const char* path, const char* histoName, const
   pcstream.Close();
 
   // write global corrections and distortions to file
-  TFile fOut("spacecharge.root", "RECREATE");
+  std::string_view file = "spacecharge.root";
   if (sides != 2) {
-    spaceCharge3D.dumpGlobalDistortions(fOut, o2::tpc::Side::A);
-    spaceCharge3D.dumpGlobalCorrections(fOut, o2::tpc::Side::A);
+    spaceCharge3D.dumpGlobalDistortions(file, o2::tpc::Side::A, "UPDATE");
+    spaceCharge3D.dumpGlobalCorrections(file, o2::tpc::Side::A, "UPDATE");
   }
   if (sides != 1) {
-    spaceCharge3D.dumpGlobalDistortions(fOut, o2::tpc::Side::C);
-    spaceCharge3D.dumpGlobalCorrections(fOut, o2::tpc::Side::C);
+    spaceCharge3D.dumpGlobalDistortions(file, o2::tpc::Side::C, "UPDATE");
+    spaceCharge3D.dumpGlobalCorrections(file, o2::tpc::Side::C, "UPDATE");
   }
-  fOut.Close();
 }
 
 /// helper function to set the loop over the sides for the tpc

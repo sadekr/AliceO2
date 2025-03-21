@@ -29,20 +29,24 @@
 #include "Framework/CompletionPolicyHelpers.h"
 #include "CommonUtils/ConfigurableParam.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
 #include "MCHWorkflow/DataDecoderSpec.h"
 
 using namespace o2::framework;
 
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
+
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
 {
   std::vector<ConfigParamSpec> options{
-    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}}};
-
+    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings"}},
+    {"dataspec", VariantType::String, "TF:MCH/RAWDATA", {"selection string for the input data"}},
+    {"ignore-dist-stf", o2::framework::VariantType::Bool, false, {"do not subscribe to FLP/DISTSUBTIMEFRAME/0 message (no lost TF recovery)"}}};
   o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
   std::swap(workflowOptions, options);
-  workflowOptions.push_back(ConfigParamSpec{"dataspec", VariantType::String, "TF:MCH/RAWDATA", {"selection string for the input data"}});
-  workflowOptions.push_back(o2::framework::ConfigParamSpec{"ignore-dist-stf", o2::framework::VariantType::Bool, false, {"do not subscribe to FLP/DISTSUBTIMEFRAME/0 message (no lost TF recovery)"}});
 }
 
 #include "Framework/runDataProcessing.h"
@@ -60,7 +64,7 @@ WorkflowSpec defineDataProcessing(const ConfigContext& configcontext)
 
   WorkflowSpec wf{o2::mch::raw::getDecodingSpec("mch-data-decoder", inputSpec, askSTFDist)};
 
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(configcontext, wf);
 
   return std::move(wf);

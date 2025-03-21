@@ -14,7 +14,6 @@
 
 #include "DataFormatsEMCAL/Digit.h"
 #include "DataFormatsEMCAL/Cluster.h"
-#include "DataFormatsEMCAL/EMCALBlockHeader.h"
 #include "DataFormatsEMCAL/TriggerRecord.h"
 #include "EMCALWorkflow/ClusterizerSpec.h"
 #include "Framework/ControlService.h"
@@ -25,10 +24,13 @@ using namespace o2::emcal::reco_workflow;
 template <class InputType>
 void ClusterizerSpec<InputType>::init(framework::InitContext& ctx)
 {
-  auto& ilctx = ctx.services().get<AliceO2::InfoLogger::InfoLoggerContext>();
-  ilctx.setField(AliceO2::InfoLogger::InfoLoggerContext::FieldName::Detector, "EMC");
+  // Check if InfoLoggerContext is active and if so set the Detector field
+  if (ctx.services().active<AliceO2::InfoLogger::InfoLoggerContext>()) {
+    auto& ilctx = ctx.services().get<AliceO2::InfoLogger::InfoLoggerContext>();
+    ilctx.setField(AliceO2::InfoLogger::InfoLoggerContext::FieldName::Detector, "EMC");
+  }
 
-  LOG(DEBUG) << "[EMCALClusterizer - init] Initialize clusterizer ...";
+  LOG(debug) << "[EMCALClusterizer - init] Initialize clusterizer ...";
 
   // FIXME: Placeholder configuration -> get config from CCDB object
   double timeCut = 10000, timeMin = 0, timeMax = 10000, gradientCut = 0.03, thresholdSeedEnergy = 0.1, thresholdCellEnergy = 0.05;
@@ -38,7 +40,7 @@ void ClusterizerSpec<InputType>::init(framework::InitContext& ctx)
   // Get default geometry object if not yet set
   mGeometry = Geometry::GetInstanceFromRunNumber(223409);
   if (!mGeometry) {
-    LOG(ERROR) << "Failure accessing geometry";
+    LOG(error) << "Failure accessing geometry";
   }
 
   // Initialize clusterizer and link geometry
@@ -56,7 +58,7 @@ void ClusterizerSpec<InputType>::init(framework::InitContext& ctx)
 template <class InputType>
 void ClusterizerSpec<InputType>::run(framework::ProcessingContext& ctx)
 {
-  LOG(DEBUG) << "[EMCALClusterizer - run] called";
+  LOG(debug) << "[EMCALClusterizer - run] called";
   mTimer.Start(false);
   std::string inputname;
   std::string TrigName;
@@ -70,10 +72,10 @@ void ClusterizerSpec<InputType>::run(framework::ProcessingContext& ctx)
   }
 
   auto Inputs = ctx.inputs().get<gsl::span<InputType>>(inputname.c_str());
-  LOG(DEBUG) << "[EMCALClusterizer - run]  Received " << Inputs.size() << " Cells/digits, running clusterizer ...";
+  LOG(debug) << "[EMCALClusterizer - run]  Received " << Inputs.size() << " Cells/digits, running clusterizer ...";
 
   auto InputTriggerRecord = ctx.inputs().get<gsl::span<TriggerRecord>>(TrigName.c_str());
-  LOG(DEBUG) << "[EMCALClusterizer - run]  Received " << InputTriggerRecord.size() << " Trigger Records, running clusterizer ...";
+  LOG(debug) << "[EMCALClusterizer - run]  Received " << InputTriggerRecord.size() << " Trigger Records, running clusterizer ...";
 
   mOutputClusters->clear();
   mOutputCellDigitIndices->clear();
@@ -104,19 +106,19 @@ void ClusterizerSpec<InputType>::run(framework::ProcessingContext& ctx)
     currentStartClusters = mOutputClusters->size();
     currentStartIndices = mOutputCellDigitIndices->size();
   }
-  LOG(DEBUG) << "[EMCALClusterizer - run] Writing " << mOutputClusters->size() << " clusters ...";
-  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "CLUSTERS", 0, o2::framework::Lifetime::Timeframe}, *mOutputClusters);
-  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "INDICES", 0, o2::framework::Lifetime::Timeframe}, *mOutputCellDigitIndices);
+  LOG(debug) << "[EMCALClusterizer - run] Writing " << mOutputClusters->size() << " clusters ...";
+  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "CLUSTERS", 0}, *mOutputClusters);
+  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "INDICES", 0}, *mOutputCellDigitIndices);
 
-  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "CLUSTERSTRGR", 0, o2::framework::Lifetime::Timeframe}, *mOutputTriggerRecord);
-  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "INDICESTRGR", 0, o2::framework::Lifetime::Timeframe}, *mOutputTriggerRecordIndices);
+  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "CLUSTERSTRGR", 0}, *mOutputTriggerRecord);
+  ctx.outputs().snapshot(o2::framework::Output{o2::header::gDataOriginEMC, "INDICESTRGR", 0}, *mOutputTriggerRecordIndices);
   mTimer.Stop();
 }
 
 template <class InputType>
 void ClusterizerSpec<InputType>::endOfStream(o2::framework::EndOfStreamContext& ec)
 {
-  LOG(INFO) << "EMCALClusterizer timing: CPU: " << mTimer.CpuTime() << " Real: " << mTimer.RealTime() << " in " << mTimer.Counter() - 1 << " TFs";
+  LOG(info) << "EMCALClusterizer timing: CPU: " << mTimer.CpuTime() << " Real: " << mTimer.RealTime() << " in " << mTimer.Counter() - 1 << " TFs";
 }
 
 o2::framework::DataProcessorSpec o2::emcal::reco_workflow::getClusterizerSpec(bool useDigits)

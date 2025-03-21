@@ -9,9 +9,13 @@
 # granted to it by virtue of its status as an Intergovernmental Organization
 # or submit itself to any jurisdiction.
 
+#add_compile_options(-O0 -g -fPIC -fno-omit-frame-pointer)
+
 o2_add_library(
   DataFormatsGlobalTracking
   SOURCES src/RecoContainer.cxx
+          src/FilteredRecoTF.cxx
+          src/TrackTuneParams.cxx
   PUBLIC_LINK_LIBRARIES
     O2::DataFormatsTPC
     O2::DataFormatsITSMFT
@@ -24,12 +28,21 @@ o2_add_library(
     O2::DataFormatsFDD
     O2::DataFormatsZDC
     O2::DataFormatsTOF
+    O2::DataFormatsHMP
+    O2::DataFormatsEMCAL
     O2::ReconstructionDataFormats
     O2::DataFormatsTRD
     O2::DataFormatsCTP
     O2::DataFormatsCPV
     O2::DataFormatsPHOS
     O2::DataFormatsEMCAL
-    O2::GPUDataTypeHeaders
+    O2::GPUDataTypes
+    $<$<BOOL:${ENABLE_UPGRADES}>:O2::ITS3Reconstruction>
   PRIVATE_LINK_LIBRARIES
     O2::Framework)
+
+o2_target_root_dictionary(
+  DataFormatsGlobalTracking
+  HEADERS include/DataFormatsGlobalTracking/FilteredRecoTF.h
+          include/DataFormatsGlobalTracking/TrackTuneParams.h
+)

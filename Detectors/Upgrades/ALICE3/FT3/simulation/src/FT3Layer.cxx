@@ -18,7 +18,7 @@
 #include "FT3Base/GeometryTGeo.h"
 #include "FT3Simulation/Detector.h"
 
-#include "FairLogger.h" // for LOG
+#include <fairlogger/Logger.h> // for LOG
 
 #include <TGeoManager.h>        // for TGeoManager, gGeoManager
 #include <TGeoMatrix.h>         // for TGeoCombiTrans, TGeoRotation, etc
@@ -54,9 +54,9 @@ FT3Layer::FT3Layer(Int_t layerDirection, Int_t layerNumber, std::string layerNam
   auto Si_X0 = 9.5;
   mChipThickness = Layerx2X0 * Si_X0;
 
-  LOG(INFO) << "Creating FT3 Layer " << mLayerNumber << " ; direction " << mDirection;
-  LOG(INFO) << "   Using silicon X0 = " << Si_X0 << " to emulate layer radiation length.";
-  LOG(INFO) << "   Layer z = " << mZ << " ; R_in = " << mInnerRadius << " ; R_out = " << mOuterRadius << " ; x2X0 = " << mx2X0 << " ; ChipThickness = " << mChipThickness;
+  LOG(info) << "Creating FT3 Layer " << mLayerNumber << " ; direction " << mDirection;
+  LOG(info) << "   Using silicon X0 = " << Si_X0 << " to emulate layer radiation length.";
+  LOG(info) << "   Layer z = " << mZ << " ; R_in = " << mInnerRadius << " ; R_out = " << mOuterRadius << " ; x2X0 = " << mx2X0 << " ; ChipThickness = " << mChipThickness;
 }
 
 void FT3Layer::createLayer(TGeoVolume* motherVolume)
@@ -70,24 +70,27 @@ void FT3Layer::createLayer(TGeoVolume* motherVolume)
     TGeoTube* chip = new TGeoTube(mInnerRadius, mOuterRadius, mChipThickness / 2);
     TGeoTube* layer = new TGeoTube(mInnerRadius, mOuterRadius, mChipThickness / 2);
 
-    TGeoMedium* medSi = gGeoManager->GetMedium("FT3_SI$");
+    TGeoMedium* medSi = gGeoManager->GetMedium("FT3_SILICON$");
     TGeoMedium* medAir = gGeoManager->GetMedium("FT3_AIR$");
 
     TGeoVolume* sensVol = new TGeoVolume(sensName.c_str(), sensor, medSi);
+    sensVol->SetLineColor(kYellow);
     TGeoVolume* chipVol = new TGeoVolume(chipName.c_str(), chip, medSi);
+    chipVol->SetLineColor(kYellow);
     TGeoVolume* layerVol = new TGeoVolume(mLayerName.c_str(), layer, medAir);
+    layerVol->SetLineColor(kYellow);
 
-    LOG(INFO) << "Inserting " << sensVol->GetName() << " inside " << chipVol->GetName();
+    LOG(info) << "Inserting " << sensVol->GetName() << " inside " << chipVol->GetName();
     chipVol->AddNode(sensVol, 1, nullptr);
 
-    LOG(INFO) << "Inserting " << chipVol->GetName() << " inside " << layerVol->GetName();
+    LOG(info) << "Inserting " << chipVol->GetName() << " inside " << layerVol->GetName();
     layerVol->AddNode(chipVol, 1, nullptr);
 
     // Finally put everything in the mother volume
     auto* FwdDiskRotation = new TGeoRotation("FwdDiskRotation", 0, 0, 180);
     auto* FwdDiskCombiTrans = new TGeoCombiTrans(0, 0, mZ, FwdDiskRotation);
 
-    LOG(INFO) << "Inserting " << layerVol->GetName() << " inside " << motherVolume->GetName();
+    LOG(info) << "Inserting " << layerVol->GetName() << " inside " << motherVolume->GetName();
     motherVolume->AddNode(layerVol, 1, FwdDiskCombiTrans);
 
     return;

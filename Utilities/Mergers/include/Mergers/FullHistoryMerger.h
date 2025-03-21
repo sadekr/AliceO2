@@ -46,6 +46,9 @@ class FullHistoryMerger : public framework::Task
   /// \brief FullHistoryMerger process callback.
   void run(framework::ProcessingContext& ctx) override;
 
+  /// \brief Callback for CallbackService::Id::EndOfStream
+  void endOfStream(framework::EndOfStreamContext& eosContext) override;
+
  private:
   header::DataHeader::SubSpecificationType mSubSpec;
 
@@ -68,6 +71,7 @@ class FullHistoryMerger : public framework::Task
   void mergeCache();
   void publish(framework::DataAllocator& allocator);
   void clear();
+  bool shouldFinishCycle(const framework::InputRecord& inputs) const;
 };
 
 } // namespace o2::mergers

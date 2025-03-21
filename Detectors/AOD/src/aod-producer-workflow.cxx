@@ -16,10 +16,17 @@
 #include "GlobalTrackingWorkflowHelpers/InputHelper.h"
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "DetectorsRaw/HBFUtilsInitializer.h"
+#include "Framework/CallbacksPolicy.h"
+#include "DetectorsBase/DPLWorkflowUtils.h"
 
 using namespace o2::framework;
 using GID = o2::dataformats::GlobalTrackID;
 using DetID = o2::detectors::DetID;
+
+void customize(std::vector<o2::framework::CallbacksPolicy>& policies)
+{
+  o2::raw::HBFUtilsInitializer::addNewTimeSliceCallback(policies);
+}
 
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
 {
@@ -28,11 +35,14 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
     {"disable-root-input", o2::framework::VariantType::Bool, false, {"disable root-files input reader"}},
     {"disable-root-output", o2::framework::VariantType::Bool, false, {"disable root-files output writer"}},
     {"disable-mc", o2::framework::VariantType::Bool, false, {"disable MC propagation"}},
+    {"disable-secondary-vertices", o2::framework::VariantType::Bool, false, {"disable filling secondary vertices"}},
+    {"disable-strangeness-tracker", o2::framework::VariantType::Bool, false, {"disable filling strangeness tracking"}},
+    {"enable-FIT-extra", o2::framework::VariantType::Bool, false, {"enable FIT extra output"}},
     {"info-sources", VariantType::String, std::string{GID::ALL}, {"comma-separated list of sources to use"}},
-    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings ..."}}};
-
+    {"configKeyValues", VariantType::String, "", {"Semicolon separated key=value strings ..."}},
+    {"combine-source-devices", o2::framework::VariantType::Bool, false, {"merge DPL source devices"}},
+    {"ctpconfig-run-independent", o2::framework::VariantType::Bool, false, {"Use CTP config w/o runNumber tag"}}};
   o2::raw::HBFUtilsInitializer::addConfigOption(options);
-
   std::swap(workflowOptions, options);
 }
 
@@ -42,18 +52,47 @@ WorkflowSpec defineDataProcessing(ConfigContext const& configcontext)
 {
   o2::conf::ConfigurableParam::updateFromString(configcontext.options().get<std::string>("configKeyValues"));
   auto useMC = !configcontext.options().get<bool>("disable-mc");
+  bool enableSV = !configcontext.options().get<bool>("disable-secondary-vertices");
+  bool enableST = !configcontext.options().get<bool>("disable-strangeness-tracker");
+  bool ctpcfgperrun = !configcontext.options().get<bool>("ctpconfig-run-independent");
+  bool enableFITextra = configcontext.options().get<bool>("enable-FIT-extra");
 
-  GID::mask_t allowedSrc = GID::getSourcesMask("ITS,MFT,MCH,TPC,ITS-TPC,ITS-TPC-TOF,TPC-TOF,MFT-MCH,FT0,FV0,FDD,TPC-TRD,ITS-TPC-TRD,FT0,FV0,FDD,ZDC");
+  GID::mask_t allowedSrc = GID::getSourcesMask("ITS,MFT,MCH,MID,MCH-MID,TPC,TRD,ITS-TPC,TPC-TOF,TPC-TRD,ITS-TPC-TOF,ITS-TPC-TRD,TPC-TRD-TOF,ITS-TPC-TRD-TOF,MFT-MCH,FT0,FV0,FDD,ZDC,EMC,CTP,PHS,CPV,HMP");
   GID::mask_t src = allowedSrc & GID::getSourcesMask(configcontext.options().get<std::string>("info-sources"));
 
+  // manually add TOF to MC mask for addInputSpecs()
+  if (src[GID::TPCTOF] || src[GID::ITSTPCTRDTOF] || src[GID::ITSTPCTOF] || src[GID::TPCTRDTOF]) {
+    src.set(o2::detectors::DetID::TOF);
+  }
+
   WorkflowSpec specs;
-  specs.emplace_back(o2::aodproducer::getAODProducerWorkflowSpec(src, useMC));
+  specs.emplace_back(o2::aodproducer::getAODProducerWorkflowSpec(src, enableSV, enableST, useMC, ctpcfgperrun, enableFITextra));
 
-  o2::globaltracking::InputHelper::addInputSpecs(configcontext, specs, src, src, src, useMC, src);
-  o2::globaltracking::InputHelper::addInputSpecsPVertex(configcontext, specs, useMC);
-  o2::globaltracking::InputHelper::addInputSpecsSVertex(configcontext, specs);
+  auto srcCls = src & ~(GID::getSourceMask(GID::MCH) | GID::getSourceMask(GID::MID)); // Don't read global MID and MCH clusters (those attached to tracks are always read)
+  auto srcMtc = src;
 
-  // configure dpl timer to inject correct firstTFOrbit: start from the 1st orbit of TF containing 1st sampled orbit
+  WorkflowSpec inputspecs;
+  o2::globaltracking::InputHelper::addInputSpecs(configcontext, inputspecs, srcCls, srcMtc, src, useMC, src);
+  o2::globaltracking::InputHelper::addInputSpecsPVertex(configcontext, inputspecs, useMC);
+  if (enableSV) {
+    o2::globaltracking::InputHelper::addInputSpecsSVertex(configcontext, inputspecs);
+  }
+  if (enableST) {
+    o2::globaltracking::InputHelper::addInputSpecsStrangeTrack(configcontext, inputspecs, useMC);
+  }
+  if (configcontext.options().get<bool>("combine-source-devices")) {
+    std::vector<DataProcessorSpec> unmerged;
+    specs.push_back(specCombiner("AOD-input-reader", inputspecs, unmerged));
+    for (auto& is : unmerged) {
+      specs.push_back(is);
+    }
+  } else {
+    for (auto& s : inputspecs) {
+      specs.push_back(s);
+    }
+  }
+
+  // configure dpl timer to inject correct firstTForbit: start from the 1st orbit of TF containing 1st sampled orbit
   o2::raw::HBFUtilsInitializer hbfIni(configcontext, specs);
 
   return std::move(specs);

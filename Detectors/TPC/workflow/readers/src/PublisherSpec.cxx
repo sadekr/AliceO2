@@ -19,7 +19,7 @@
 #include "TPCReaderWorkflow/PublisherSpec.h"
 #include "Headers/DataHeader.h"
 #include "TPCBase/Sector.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DataFormatsTPC/TPCSectorHeader.h"
 #include <memory> // for make_shared, make_unique, unique_ptr
 #include <array>
@@ -111,7 +111,7 @@ DataProcessorSpec createPublisherSpec(PublisherConf const& config, bool propagat
           std::string message = std::string("invalid sector range specified, allowed 0-") + std::to_string(NSectors - 1);
           // FIXME should probably be FATAL, but this doesn't seem to be handled in the DPL control flow
           // at least the process is not marked dead in the DebugGUI
-          LOG(ERROR) << message;
+          LOG(error) << message;
           throw std::invalid_argument(message);
         }
         activeSectors |= (uint64_t)0x1 << s;
@@ -125,7 +125,7 @@ DataProcessorSpec createPublisherSpec(PublisherConf const& config, bool propagat
         o2::header::DataHeader::SubSpecificationType subSpec = *outputId;
         std::string sectorfile = filename;
         if (filename.find('%') != std::string::npos) {
-          vector<char> formattedname(filename.length() + 10, 0);
+          std::vector<char> formattedname(filename.length() + 10, 0);
           snprintf(formattedname.data(), formattedname.size() - 1, filename.c_str(), sector);
           sectorfile = formattedname.data();
         }
@@ -204,9 +204,9 @@ DataProcessorSpec createPublisherSpec(PublisherConf const& config, bool propagat
         header.sectorBits = 0;
         header.activeSectors = processAttributes->activeSectors;
         for (auto const& subSpec : processAttributes->zeroLengthOutputs) {
-          pc.outputs().make<char>({dto.origin, dto.description, subSpec, Lifetime::Timeframe, {header}});
+          pc.outputs().make<char>({dto.origin, dto.description, subSpec, {header}});
           if (pc.outputs().isAllowed({mco.origin, mco.description, subSpec})) {
-            pc.outputs().make<char>({mco.origin, mco.description, subSpec, Lifetime::Timeframe, {header}});
+            pc.outputs().make<char>({mco.origin, mco.description, subSpec, {header}});
           }
         }
       }

@@ -16,7 +16,7 @@
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
 #include "fairlogger/Logger.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 
@@ -28,11 +28,10 @@ namespace trd
 void TRDTrackletReader::init(InitContext& ic)
 {
   // get the option from the init context
-  LOG(INFO) << "Init TRD tracklet reader!";
-  mInFileNameTrklt = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")),
-                                                   ic.options().get<std::string>("trd-tracklet-infile"));
-  mInTreeNameTrklt = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")),
-                                                   ic.options().get<std::string>("treename"));
+  LOG(info) << "Init TRD tracklet reader!";
+  mInFileNameTrklt = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")), ic.options().get<std::string>("trd-tracklet-infile"));
+  mInFileNameCTrklt = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")), ic.options().get<std::string>("trd-calib-tracklet-infile"));
+  mInTreeNameTrklt = ic.options().get<std::string>("treename");
   connectTree();
   if (mUseTrackletTransform) {
     connectTreeCTracklet();
@@ -42,13 +41,13 @@ void TRDTrackletReader::init(InitContext& ic)
 void TRDTrackletReader::connectTreeCTracklet()
 {
   mTreeCTrklt.reset(nullptr); // in case it was already loaded
-  mFileCTrklt.reset(TFile::Open("trdcalibratedtracklets.root"));
+  mFileCTrklt.reset(TFile::Open(mInFileNameCTrklt.c_str()));
   assert(mFileCTrklt && !mFileCTrklt->IsZombie());
   mTreeCTrklt.reset((TTree*)mFileCTrklt->Get("ctracklets"));
   assert(mTreeCTrklt);
   mTreeCTrklt->SetBranchAddress("CTracklets", &mTrackletsCalPtr);
   mTreeCTrklt->SetBranchAddress("TrigRecMask", &mTrigRecMaskPtr);
-  LOG(INFO) << "Loaded tree from trdcalibratedtracklets.root with " << mTreeCTrklt->GetEntries() << " entries";
+  LOG(info) << "Loaded tree from trdcalibratedtracklets.root with " << mTreeCTrklt->GetEntries() << " entries";
 }
 
 void TRDTrackletReader::connectTree()
@@ -63,7 +62,7 @@ void TRDTrackletReader::connectTree()
   if (mUseMC) {
     mTreeTrklt->SetBranchAddress("TRKLabels", &mLabelsPtr);
   }
-  LOG(INFO) << "Loaded tree from " << mInFileNameTrklt << " with " << mTreeTrklt->GetEntries() << " entries";
+  LOG(info) << "Loaded tree from " << mInFileNameTrklt << " with " << mTreeTrklt->GetEntries() << " entries";
 }
 
 void TRDTrackletReader::run(ProcessingContext& pc)
@@ -71,22 +70,22 @@ void TRDTrackletReader::run(ProcessingContext& pc)
   auto currEntry = mTreeTrklt->GetReadEntry() + 1;
   assert(currEntry < mTreeTrklt->GetEntries()); // this should not happen
   mTreeTrklt->GetEntry(currEntry);
-  LOG(INFO) << "Pushing " << mTriggerRecords.size() << " TRD trigger records at entry " << currEntry;
-  LOG(INFO) << "Pushing " << mTracklets.size() << " uncalibrated TRD tracklets for these trigger records";
-  pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "TRACKLETS", 0, Lifetime::Timeframe}, mTracklets);
+  LOG(info) << "Pushing " << mTriggerRecords.size() << " TRD trigger records at entry " << currEntry;
+  LOG(info) << "Pushing " << mTracklets.size() << " uncalibrated TRD tracklets for these trigger records";
+  pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "TRACKLETS", 0}, mTracklets);
   if (mUseTrackletTransform) {
     assert(mTreeTrklt->GetEntries() == mTreeCTrklt->GetEntries());
     mTreeCTrklt->GetEntry(currEntry);
-    LOG(INFO) << "Pushing " << mTrackletsCal.size() << " calibrated TRD tracklets for these trigger records";
-    LOG(INFO) << "Pushing " << mTrigRecMask.size() << " flags for the given TRD trigger records";
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "CTRACKLETS", 0, Lifetime::Timeframe}, mTrackletsCal);
-    pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "TRIGRECMASK", 0, Lifetime::Timeframe}, mTrigRecMask);
+    LOG(info) << "Pushing " << mTrackletsCal.size() << " calibrated TRD tracklets for these trigger records";
+    LOG(info) << "Pushing " << mTrigRecMask.size() << " flags for the given TRD trigger records";
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "CTRACKLETS", 0}, mTrackletsCal);
+    pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "TRIGRECMASK", 0}, mTrigRecMask);
   }
 
-  pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "TRKTRGRD", 0, Lifetime::Timeframe}, mTriggerRecords);
+  pc.outputs().snapshot(Output{o2::header::gDataOriginTRD, "TRKTRGRD", 0}, mTriggerRecords);
   if (mUseMC) {
-    LOG(INFO) << "Pushing " << mLabels.getNElements() << " TRD tracklet labels";
-    pc.outputs().snapshot(Output{"TRD", "TRKLABELS", 0, Lifetime::Timeframe}, mLabels);
+    LOG(info) << "Pushing " << mLabels.getNElements() << " TRD tracklet labels";
+    pc.outputs().snapshot(Output{"TRD", "TRKLABELS", 0}, mLabels);
   }
 
   if (mTreeTrklt->GetReadEntry() + 1 >= mTreeTrklt->GetEntries()) {
@@ -114,7 +113,8 @@ DataProcessorSpec getTRDTrackletReaderSpec(bool useMC, bool useCalibratedTrackle
     outputs,
     AlgorithmSpec{adaptFromTask<TRDTrackletReader>(useMC, useCalibratedTracklets)},
     Options{
-      {"trd-tracklet-infile", VariantType::String, "trdtracklets.root", {"Name of the input file"}},
+      {"trd-tracklet-infile", VariantType::String, "trdtracklets.root", {"Name of the tracklets input file"}},
+      {"trd-calib-tracklet-infile", VariantType::String, "trdcalibratedtracklets.root", {"Name of the calibrated tracklets input file"}},
       {"input-dir", VariantType::String, "none", {"Input directory"}},
       {"treename", VariantType::String, "o2sim", {"Name of top-level TTree"}},
     }};

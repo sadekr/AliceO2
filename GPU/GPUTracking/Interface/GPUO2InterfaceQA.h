@@ -16,9 +16,6 @@
 #define GPUO2INTERFACEQA_H
 
 // Some defines denoting that we are compiling for O2
-#ifndef GPUCA_HAVE_O2HEADERS
-#define GPUCA_HAVE_O2HEADERS
-#endif
 #ifndef GPUCA_TPC_GEOMETRY_O2
 #define GPUCA_TPC_GEOMETRY_O2
 #endif
@@ -32,6 +29,7 @@
 class TH1F;
 class TH1D;
 class TH2F;
+class TGraphAsymmErrors;
 class TObjArray;
 
 namespace o2
@@ -49,21 +47,23 @@ namespace o2::gpu
 class GPUQA;
 struct GPUParam;
 struct GPUO2InterfaceConfiguration;
+struct GPUSettingsGRP;
 class GPUO2InterfaceQA
 {
  public:
   GPUO2InterfaceQA(const GPUO2InterfaceConfiguration* config = nullptr);
   ~GPUO2InterfaceQA();
 
-  int initializeForProcessing(int tasks); // only needed for processing, not for postprocessing
+  int32_t initializeForProcessing(int32_t tasks); // only needed for processing, not for postprocessing
 
   void runQA(const std::vector<o2::tpc::TrackTPC>* tracksExternal, const std::vector<o2::MCCompLabel>* tracksExtMC, const o2::tpc::ClusterNativeAccess* clNative);
-  int postprocess(TObjArray& out);
+  int32_t postprocess(TObjArray& out);
+  void updateGRP(GPUSettingsGRP* grp);
 
   // Input might be modified, so we assume non-const. If it is const, a copy should be created before.
-  int postprocessExternal(std::vector<TH1F>& in1, std::vector<TH2F>& in2, std::vector<TH1D>& in3, TObjArray& out, int tasks);
+  int32_t postprocessExternal(std::vector<TH1F>& in1, std::vector<TH2F>& in2, std::vector<TH1D>& in3, std::vector<TGraphAsymmErrors>& in4, TObjArray& out, int32_t tasks);
 
-  void getHists(const std::vector<TH1F>*& h1, const std::vector<TH2F>*& h2, const std::vector<TH1D>*& h3);
+  void getHists(const std::vector<TH1F>*& h1, const std::vector<TH2F>*& h2, const std::vector<TH1D>*& h3, const std::vector<TGraphAsymmErrors>*& h4);
   void resetHists();
   void cleanup();
 

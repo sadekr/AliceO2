@@ -14,6 +14,8 @@
 #include "Framework/Logger.h"
 #include "Framework/ConfigParamSpec.h"
 #include "Framework/ExternalFairMQDeviceProxy.h"
+#include "Framework/CompletionPolicy.h"
+#include "Framework/CompletionPolicyHelpers.h"
 #include <vector>
 
 using namespace o2::framework;
@@ -39,6 +41,10 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
 
   workflowOptions.push_back(
     ConfigParamSpec{
+      "sporadic-inputs", VariantType::Bool, false, {"consider all the inputs as sporadic"}});
+
+  workflowOptions.push_back(
+    ConfigParamSpec{
       "output-proxy-address", VariantType::String, "0.0.0.0", {"address to connect / bind to"}});
 
   workflowOptions.push_back(
@@ -48,16 +54,32 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
   workflowOptions.push_back(
     ConfigParamSpec{
       "default-port", VariantType::Int, 4200, {"default port number"}});
+
+  /*  workflowOptions.push_back( // Cannot read option in customize function, so using an env variable for now
+      ConfigParamSpec{
+        "ordered-completion-policy", VariantType::Bool, false, {"Use the ordered completion policy for the input"}});*/
+}
+
+void customize(std::vector<o2::framework::CompletionPolicy>& policies)
+{
+  static bool doOrdered = getenv("DPL_OUTPUT_PROXY_ORDERED") && atoi(getenv("DPL_OUTPUT_PROXY_ORDERED"));
+  static bool doAny = getenv("DPL_OUTPUT_PROXY_WHENANY") && atoi(getenv("DPL_OUTPUT_PROXY_WHENANY"));
+  if (doOrdered) {
+    policies.push_back(CompletionPolicyHelpers::consumeWhenAllOrdered(".*"));
+  } else if (doAny) {
+    policies.push_back(CompletionPolicyHelpers::consumeWhenAny(".*"));
+  }
 }
 
 #include "Framework/runDataProcessing.h"
 
 WorkflowSpec defineDataProcessing(ConfigContext const& config)
 {
-  std::string processorName = config.options().get<std::string>("proxy-name");
-  std::string inputConfig = config.options().get<std::string>("dataspec");
+  auto processorName = config.options().get<std::string>("proxy-name");
+  auto inputConfig = config.options().get<std::string>("dataspec");
   int defaultPort = config.options().get<int>("default-port");
-  std::string defaultTransportConfig = config.options().get<std::string>("default-transport");
+  bool sporadicInputs = config.options().get<bool>("sporadic-inputs");
+  auto defaultTransportConfig = config.options().get<std::string>("default-transport");
   if (defaultTransportConfig == "zeromq") {
     // nothing to do for the moment
   } else if (defaultTransportConfig == "shmem") {
@@ -69,6 +91,12 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
   std::vector<InputSpec> inputs = select(inputConfig.c_str());
   if (inputs.size() == 0) {
     throw std::runtime_error("invalid dataspec '" + inputConfig + "'");
+  }
+  // we need to set the lifetime of the inputs to sporadic if requested
+  if (sporadicInputs) {
+    for (auto& input : inputs) {
+      input.lifetime = Lifetime::Sporadic;
+    }
   }
 
   // we build the default channel configuration from the binding of the first input

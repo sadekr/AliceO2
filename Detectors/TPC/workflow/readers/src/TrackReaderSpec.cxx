@@ -15,7 +15,8 @@
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
 #include "TPCReaderWorkflow/TrackReaderSpec.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
+#include "DataFormatsGlobalTracking/TrackTuneParams.h"
 
 using namespace o2::framework;
 
@@ -33,6 +34,7 @@ void TrackReader::init(InitContext& ic)
 {
   mInputFileName = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")),
                                                  ic.options().get<std::string>("infile"));
+  mSkipClusRefs = ic.options().get<bool>("skip-clusref");
   connectTree(mInputFileName);
 }
 
@@ -42,13 +44,37 @@ void TrackReader::run(ProcessingContext& pc)
   accumulate(ent, 1);                // to really accumulate all, use accumulate(ent,mTree->GetEntries());
   assert(ent < mTree->GetEntries()); // this should not happen
   mTree->GetEntry(ent);
-
-  pc.outputs().snapshot(Output{"TPC", "TRACKS", 0, Lifetime::Timeframe}, mTracksOut);
-  pc.outputs().snapshot(Output{"TPC", "CLUSREFS", 0, Lifetime::Timeframe}, mCluRefVecOut);
-  if (mUseMC) {
-    pc.outputs().snapshot(Output{"TPC", "TRACKSMCLBL", 0, Lifetime::Timeframe}, mMCTruthOut);
+  using TrackTunePar = o2::globaltracking::TrackTuneParams;
+  const auto& trackTune = TrackTunePar::Instance();
+  // Normally we should not apply tuning here as with sourceLevelTPC==true it is already applied in the tracking.
+  // Note that there is no way to apply lumi scaling here!!!
+  if ((trackTune.sourceLevelTPC && trackTune.applyWhenReading) &&
+      (trackTune.useTPCInnerCorr || trackTune.useTPCOuterCorr ||
+       trackTune.tpcCovInnerType != TrackTunePar::AddCovType::Disable || trackTune.tpcCovOuterType != TrackTunePar::AddCovType::Disable)) {
+    for (auto& trc : mTracksOut) {
+      if (trc.getNClusters() == 0) {
+        continue; // filtered/reduced track
+      }
+      if (trackTune.useTPCInnerCorr) {
+        trc.updateParams(trackTune.tpcParInner);
+      }
+      if (trackTune.tpcCovInnerType != TrackTunePar::AddCovType::Disable) {
+        trc.updateCov(trackTune.tpcCovInner, trackTune.tpcCovInnerType == TrackTunePar::AddCovType::WithCorrelations);
+      }
+      if (trackTune.useTPCOuterCorr) {
+        trc.getParamOut().updateParams(trackTune.tpcParOuter);
+      }
+      if (trackTune.tpcCovOuterType != TrackTunePar::AddCovType::Disable) {
+        trc.getParamOut().updateCov(trackTune.tpcCovOuter, trackTune.tpcCovOuterType == TrackTunePar::AddCovType::WithCorrelations);
+      }
+    }
   }
 
+  pc.outputs().snapshot(Output{"TPC", "TRACKS", 0}, mTracksOut);
+  pc.outputs().snapshot(Output{"TPC", "CLUSREFS", 0}, mCluRefVecOut);
+  if (mUseMC) {
+    pc.outputs().snapshot(Output{"TPC", "TRACKSMCLBL", 0}, mMCTruthOut);
+  }
   if (mTree->GetReadEntry() + 1 >= mTree->GetEntries()) {
     pc.services().get<ControlService>().endOfStream();
     pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
@@ -90,7 +116,7 @@ void TrackReader::accumulate(int from, int n)
       }
     }
   }
-  LOG(INFO) << "TPCTrackReader pushes " << mTracksOut.size() << " tracks from entries " << from << " : " << from + n - 1;
+  LOG(info) << "TPCTrackReader pushes " << mTracksOut.size() << " tracks from entries " << from << " : " << from + n - 1;
 }
 
 void TrackReader::connectTree(const std::string& filename)
@@ -106,17 +132,21 @@ void TrackReader::connectTree(const std::string& filename)
   }
 
   mTree->SetBranchAddress(mTrackBranchName.c_str(), &mTracksInp);
-  mTree->SetBranchAddress(mClusRefBranchName.c_str(), &mCluRefVecInp);
+  if (!mSkipClusRefs) {
+    mTree->SetBranchAddress(mClusRefBranchName.c_str(), &mCluRefVecInp);
+  } else {
+    mCluRefVecInp = new std::vector<o2::tpc::TPCClRefElem>;
+  }
   if (mUseMC) {
     if (mTree->GetBranch(mTrackMCTruthBranchName.c_str())) {
       mTree->SetBranchAddress(mTrackMCTruthBranchName.c_str(), &mMCTruthInp);
-      LOG(INFO) << "Will use MC-truth from " << mTrackMCTruthBranchName;
+      LOG(info) << "Will use MC-truth from " << mTrackMCTruthBranchName;
     } else {
-      LOG(INFO) << "MC-truth is missing";
+      LOG(info) << "MC-truth is missing";
       mUseMC = false;
     }
   }
-  LOG(INFO) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
+  LOG(info) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
 }
 
 DataProcessorSpec getTPCTrackReaderSpec(bool useMC)
@@ -135,7 +165,8 @@ DataProcessorSpec getTPCTrackReaderSpec(bool useMC)
     AlgorithmSpec{adaptFromTask<TrackReader>(useMC)},
     Options{
       {"infile", VariantType::String, "tpctracks.root", {"Name of the input track file"}},
-      {"input-dir", VariantType::String, "none", {"Input directory"}}}};
+      {"input-dir", VariantType::String, "none", {"Input directory"}},
+      {"skip-clusref", VariantType::Bool, false, {"Skip reading cluster references"}}}};
 }
 
 } // namespace tpc

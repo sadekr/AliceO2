@@ -18,16 +18,17 @@ namespace o2::trd
 
 using namespace constants;
 
-Digit::Digit(const int det, const int row, const int pad, const ArrayADC adc)
+Digit::Digit(int det, int row, int pad, ArrayADC adc, int pretrigphase)
 {
   setDetector(det);
   setROB(row, pad);
   setMCM(row, pad);
   setADC(adc);
   setChannel(NADCMCM - 2 - (pad % NCOLMCM));
+  setPreTrigPhase(pretrigphase);
 }
 
-Digit::Digit(const int det, const int row, const int pad) // add adc data in a seperate step
+Digit::Digit(int det, int row, int pad) // add adc data in a seperate step
 {
   setDetector(det);
   setROB(row, pad);
@@ -35,16 +36,17 @@ Digit::Digit(const int det, const int row, const int pad) // add adc data in a s
   setChannel(NADCMCM - 2 - (pad % NCOLMCM));
 }
 
-Digit::Digit(const int det, const int rob, const int mcm, const int channel, const ArrayADC adc)
+Digit::Digit(int det, int rob, int mcm, int channel, ArrayADC adc, int pretrigphase)
 {
   setDetector(det);
   setROB(rob);
   setMCM(mcm);
   setChannel(channel);
   setADC(adc);
+  setPreTrigPhase(pretrigphase);
 }
 
-Digit::Digit(const int det, const int rob, const int mcm, const int channel) // add adc data in a seperate step
+Digit::Digit(int det, int rob, int mcm, int channel) // add adc data in a seperate step
 {
   setDetector(det);
   setROB(rob);
@@ -61,6 +63,11 @@ bool Digit::isSharedDigit() const
   }
 }
 
+bool Digit::isNeighbour(const Digit& other) const
+{
+  return (getDetector() == other.getDetector() && getROB() == other.getROB() && getMCM() == other.getMCM() && std::abs(getChannel() - other.getChannel()) == 1);
+}
+
 ADC_t Digit::getADCmax(int& idx) const
 {
   auto itMax = std::max_element(mADC.begin(), mADC.end());
@@ -70,7 +77,7 @@ ADC_t Digit::getADCmax(int& idx) const
 
 std::ostream& operator<<(std::ostream& stream, const Digit& d)
 {
-  stream << "Digit Det: " << d.getDetector() << " ROB: " << d.getROB() << " MCM: " << d.getMCM() << " Channel: " << d.getChannel() << " ADCs:";
+  stream << "Digit Det: " << HelperMethods::getSector(d.getDetector()) << "_" << HelperMethods::getStack(d.getDetector()) << "_" << HelperMethods::getLayer(d.getDetector()) << " pad row: " << d.getPadRow() << " pad column: " << d.getPadCol() << " Channel: " << d.getChannel() << " ADCs:";
   for (int i = 0; i < constants::TIMEBINS; i++) {
     stream << "[" << d.getADC()[i] << "]";
   }

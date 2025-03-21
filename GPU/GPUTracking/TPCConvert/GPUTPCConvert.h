@@ -18,9 +18,7 @@
 #include "GPUDef.h"
 #include "GPUProcessor.h"
 
-namespace GPUCA_NAMESPACE
-{
-namespace gpu
+namespace o2::gpu
 {
 struct GPUTPCClusterData;
 
@@ -39,21 +37,20 @@ class GPUTPCConvert : public GPUProcessor
   void* SetPointersMemory(void* mem);
 #endif
 
-  constexpr static unsigned int NSLICES = GPUCA_NSLICES;
+  constexpr static uint32_t NSECTORS = GPUCA_NSECTORS;
 
   struct Memory {
-    GPUTPCClusterData* clusters[NSLICES];
+    GPUTPCClusterData* clusters[NSECTORS];
   };
 
  protected:
   Memory* mMemory = nullptr;
   GPUTPCClusterData* mClusters = nullptr;
-  unsigned int mNClustersTotal = 0;
+  uint32_t mNClustersTotal = 0;
 
-  short mMemoryResOutput = -1;
-  short mMemoryResMemory = -1;
+  int16_t mMemoryResOutput = -1;
+  int16_t mMemoryResMemory = -1;
 };
-} // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2::gpu
 
 #endif

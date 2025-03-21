@@ -25,6 +25,7 @@
 #include "DataFormatsTOF/CalibInfoTOF.h"
 #include "DataFormatsTOF/Cluster.h"
 #include "CommonUtils/StringUtils.h"
+#include <sstream>
 
 using namespace o2::framework;
 
@@ -44,10 +45,10 @@ DataProcessorSpec getTOFMatchedWriterSpec(bool useMC, const char* outdef, bool w
 {
   // spectators for logging
   auto loggerMatched = [](MatchInfo const& indata) {
-    LOG(DEBUG) << "RECEIVED MATCHED SIZE " << indata.size();
+    LOG(debug) << "RECEIVED MATCHED SIZE " << indata.size();
   };
   auto loggerTofLabels = [](LabelsType const& labeltof) {
-    LOG(DEBUG) << "TOF LABELS GOT " << labeltof.size() << " LABELS ";
+    LOG(debug) << "TOF LABELS GOT " << labeltof.size() << " LABELS ";
   };
   //  o2::header::DataDescription ddMatchInfo{"MTC_ITSTPC"}, ddMatchInfo_tpc{"MTC_TPC"},
   //    ddMCMatchTOF{"MCMTC_ITSTPC"}, ddMCMatchTOF_tpc{"MCMTC_TPC"};
@@ -65,19 +66,26 @@ DataProcessorSpec getTOFMatchedWriterSpec(bool useMC, const char* outdef, bool w
     taskName = match_name_strict[mode];
   }
 
+  // inputBindings better be unique for each data spec, otherwise
+  // they can not be "combined" into a single DPL device
+  std::stringstream inputBinding1, inputBinding2, inputBinding3;
+  inputBinding1 << "tofmatching_" << mode;
+  inputBinding2 << "tpctofTracks_" << mode;
+  inputBinding3 << "matchtoflabels_" << mode;
+
   return MakeRootTreeWriterSpec(taskName,
                                 outdef,
                                 "matchTOF",
-                                BranchDefinition<MatchInfo>{InputSpec{"tofmatching", gDataOriginTOF, ddMatchInfo[mode], ss},
+                                BranchDefinition<MatchInfo>{InputSpec{inputBinding1.str().c_str(), gDataOriginTOF, ddMatchInfo[mode], ss},
                                                             "TOFMatchInfo",
                                                             "TOFMatchInfo-branch-name",
                                                             1,
                                                             loggerMatched},
-                                BranchDefinition<TrackInfo>{InputSpec{"tpctofTracks", gDataOriginTOF, "TOFTRACKS_TPC", ss},
+                                BranchDefinition<TrackInfo>{InputSpec{inputBinding2.str().c_str(), gDataOriginTOF, "TOFTRACKS_TPC", ss},
                                                             "TPCTOFTracks",
                                                             "TPCTOFTracks-branch-name",
                                                             writeTracks},
-                                BranchDefinition<LabelsType>{InputSpec{"matchtoflabels", gDataOriginTOF, ddMCMatchTOF[mode], ss},
+                                BranchDefinition<LabelsType>{InputSpec{inputBinding3.str().c_str(), gDataOriginTOF, ddMCMatchTOF[mode], ss},
                                                              "MatchTOFMCTruth",
                                                              "MatchTOFMCTruth-branch-name",
                                                              (useMC ? 1 : 0), // one branch if mc labels enabled

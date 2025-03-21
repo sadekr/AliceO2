@@ -14,7 +14,7 @@
 
 #include "DetectorsCalibration/TimeSlotCalibration.h"
 #include "DetectorsCalibration/TimeSlot.h"
-#include "FV0Calibration/FV0CalibrationInfoObject.h"
+#include "DataFormatsFV0/FV0CalibrationInfoObject.h"
 #include "FV0Base/Constants.h"
 
 #include <array>
@@ -58,9 +58,9 @@ class FV0CalibInfoSlot
   ClassDefNV(FV0CalibInfoSlot, 1);
 };
 
-class FV0CalibCollector final : public o2::calibration::TimeSlotCalibration<o2::fv0::FV0CalibrationInfoObject, o2::fv0::FV0CalibInfoSlot>
+class FV0CalibCollector final : public o2::calibration::TimeSlotCalibration<o2::fv0::FV0CalibInfoSlot>
 {
-  using TFType = uint64_t;
+  using TFType = o2::calibration::TFType;
   using Slot = o2::calibration::TimeSlot<o2::fv0::FV0CalibInfoSlot>;
   static constexpr int NCHANNELS = Constants::nFv0Channels;
 

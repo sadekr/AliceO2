@@ -1,6 +1,29 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
 /// \file CheckClusters.C
 /// \brief Simple macro to check ITSU clusters
 
+#include <TCanvas.h>
+#include <TFile.h>
+#include <TH2F.h>
+#include <TNtuple.h>
+#include <TString.h>
+#include <TTree.h>
+
+#include "ITSMFTBase/SegmentationAlpide.h"
+#include "ITSBase/GeometryTGeo.h"
+#include "DataFormatsITSMFT/CompCluster.h"
+#include "DataFormatsITSMFT/TopologyDictionary.h"
+#include "ITSMFTSimulation/Hit.h"
 #if !defined(__CLING__) || defined(__ROOTCLING__)
 #include <TCanvas.h>
 #include <TFile.h>
@@ -19,12 +42,14 @@
 #include "MathUtils/Utils.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "DetectorsCommonDataFormats/DetectorNameConf.h"
+#include "CCDB/BasicCCDBManager.h"
+#include "CCDB/CCDBTimeStampUtils.h"
 #endif
 
 void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile = "o2sim_HitsITS.root",
                    std::string inputGeom = "", std::string paramfile = "o2sim_par.root",
-                   std::string dictfile = "")
+                   long timestamp = 0)
 {
   const int QEDSourceID = 99; // Clusters from this MC source correspond to QED electrons
 
@@ -51,6 +76,11 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
   gman->fillMatrixCache(o2::math_utils::bit2Mask(o2::math_utils::TransformType::T2L, o2::math_utils::TransformType::T2GRot,
                                                  o2::math_utils::TransformType::L2G)); // request cached transforms
 
+  auto& mgr = o2::ccdb::BasicCCDBManager::instance();
+  mgr.setURL("http://alice-ccdb.cern.ch");
+  mgr.setTimestamp(timestamp ? timestamp : o2::ccdb::getCurrentTimestamp());
+  const o2::itsmft::TopologyDictionary* dict = mgr.get<o2::itsmft::TopologyDictionary>("ITS/Calib/ClusterDictionary");
+
   // Hits
   TFile fileH(hitfile.data());
   TTree* hitTree = (TTree*)fileH.Get("o2sim");
@@ -68,17 +98,6 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
   auto pattBranch = clusTree->GetBranch("ITSClusterPatt");
   if (pattBranch) {
     pattBranch->SetAddress(&patternsPtr);
-  }
-  if (dictfile.empty()) {
-    dictfile = o2::base::NameConf::getAlpideClusterDictionaryFileName(o2::detectors::DetID::ITS, "", "bin");
-  }
-  o2::itsmft::TopologyDictionary dict;
-  std::ifstream file(dictfile.c_str());
-  if (file.good()) {
-    LOG(INFO) << "Running with dictionary: " << dictfile.c_str();
-    dict.readBinaryFile(dictfile);
-  } else {
-    LOG(INFO) << "Running without dictionary !";
   }
 
   // ROFrecords
@@ -109,7 +128,7 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
     for (int irfd = mc2rof.maxROF - mc2rof.minROF + 1; irfd--;) {
       int irof = mc2rof.rofRecordID + irfd;
       if (irof >= nROFRec) {
-        LOG(ERROR) << "ROF=" << irof << " from MC2ROF record is >= N ROFs=" << nROFRec;
+        LOG(error) << "ROF=" << irof << " from MC2ROF record is >= N ROFs=" << nROFRec;
       }
       if (mcEvMin[irof] > imc) {
         mcEvMin[irof] = imc;
@@ -152,15 +171,15 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
       int npix = 0;
       auto pattID = cluster.getPatternID();
       o2::math_utils::Point3D<float> locC;
-      if (pattID == o2::itsmft::CompCluster::InvalidPatternID || dict.isGroup(pattID)) {
+      if (pattID == o2::itsmft::CompCluster::InvalidPatternID || dict->isGroup(pattID)) {
         o2::itsmft::ClusterPattern patt(pattIt);
         npix = patt.getNPixels();
-        locC = dict.getClusterCoordinates(cluster, patt, false);
+        locC = dict->getClusterCoordinates(cluster, patt, false);
       } else {
-        locC = dict.getClusterCoordinates(cluster);
-        errX = dict.getErrX(pattID);
-        errZ = dict.getErrZ(pattID);
-        npix = dict.getNpixels(pattID);
+        locC = dict->getClusterCoordinates(cluster);
+        errX = dict->getErrX(pattID);
+        errZ = dict->getErrZ(pattID);
+        npix = dict->getNpixels(pattID);
       }
       auto chipID = cluster.getSensorID();
       // Transformation to the local --> global
@@ -178,7 +197,7 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
       uint64_t key = (uint64_t(trID) << 32) + chipID;
       auto hitEntry = mc2hit.find(key);
       if (hitEntry == mc2hit.end()) {
-        LOG(ERROR) << "Failed to find MC hit entry for Tr" << trID << " chipID" << chipID;
+        LOG(error) << "Failed to find MC hit entry for Tr" << trID << " chipID" << chipID;
         continue;
       }
       const auto& hit = (*hitArray)[hitEntry->second];
@@ -195,7 +214,7 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
       auto z0 = locHsta.Z(), dltz = locH.Z() - z0;
       auto r = (0.5 * (Segmentation::SensorLayerThickness - Segmentation::SensorLayerThicknessEff) - y0) / dlty;
       locH.SetXYZ(x0 + r * dltx, y0 + r * dlty, z0 + r * dltz);
-      //locH.SetXYZ(0.5 * (locH.X() + locHsta.X()), 0.5 * (locH.Y() + locHsta.Y()), 0.5 * (locH.Z() + locHsta.Z()));
+      // locH.SetXYZ(0.5 * (locH.X() + locHsta.X()), 0.5 * (locH.Y() + locHsta.Y()), 0.5 * (locH.Z() + locHsta.Z()));
       std::array<float, 18> data = {(float)lab.getEventID(), (float)trID,
                                     locH.X(), locH.Z(), dltx / dlty, dltz / dlty,
                                     gloC.X(), gloC.Y(), gloC.Z(),
@@ -212,6 +231,18 @@ void CheckClusters(std::string clusfile = "o2clus_its.root", std::string hitfile
   nt.Draw("dz:dx", "abs(dz)<0.01 && abs(dx)<0.01");
   new TCanvas;
   nt.Draw("dz:tz", "abs(dz)<0.005 && abs(tz)<2");
+
+  auto canvdXdZ = new TCanvas("canvdXdZ", "", 1600, 800);
+  canvdXdZ->Divide(2, 2);
+  canvdXdZ->cd(1)->SetLogz();
+  nt.Draw("dx:dz>>h_dx_vs_dz_IB(1000, -0.01, 0.01, 1000, -0.01, 0.01)", "id < 3120", "colz");
+  canvdXdZ->cd(2)->SetLogz();
+  nt.Draw("dx:dz>>h_dx_vs_dz_OB(1000, -0.01, 0.01, 1000, -0.01, 0.01)", "id >= 3120", "colz");
+  canvdXdZ->cd(3)->SetLogz();
+  nt.Draw("dx:dz>>h_dx_vs_dz_IB_z(1000, -0.01, 0.01, 1000, -0.01, 0.01)", "id < 3120 && abs(cgz) < 2", "colz");
+  canvdXdZ->cd(4)->SetLogz();
+  nt.Draw("dx:dz>>h_dx_vs_dz_OB_z(1000, -0.01, 0.01, 1000, -0.01, 0.01)", "id >= 3120 && abs(cgz) < 2", "colz");
+  canvdXdZ->SaveAs("itsclusters_dx_vs_dz.pdf");
 
   auto c1 = new TCanvas("p1", "pullX");
   c1->cd();

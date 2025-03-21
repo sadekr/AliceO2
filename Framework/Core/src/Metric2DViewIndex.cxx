@@ -18,14 +18,12 @@
 #include <algorithm>
 #include <functional>
 
-namespace o2
-{
-namespace framework
+namespace o2::framework
 {
 
-Metric2DViewIndex::Updater Metric2DViewIndex::getUpdater(std::vector<Metric2DViewIndex*> views)
+Metric2DViewIndex::Updater Metric2DViewIndex::getUpdater()
 {
-  return [views](std::string const& name, MetricInfo const& metric, int value, int metricsIndex) -> void {
+  return [](std::array<Metric2DViewIndex*, 2> const& views, std::string const& name, MetricInfo const& metric, int value, int metricsIndex) -> void {
     for (auto viewPtr : views) {
       auto& view = *viewPtr;
       if (view.prefix.size() > name.size()) {
@@ -41,30 +39,29 @@ Metric2DViewIndex::Updater Metric2DViewIndex::getUpdater(std::vector<Metric2DVie
       extra.erase(0, view.prefix.size() + 1);
       if (extra == "w") {
         view.w = value;
-        view.indexes.resize(view.w * view.h);
+        view.indexes.resize(view.w * view.h, -1);
         return;
       } else if (extra == "h") {
         view.h = value;
-        view.indexes.resize(view.w * view.h);
+        view.indexes.resize(view.w * view.h, -1);
         return;
       }
       int idx = -1;
       try {
         idx = std::stoi(extra, nullptr, 10);
       } catch (...) {
-        LOG(ERROR) << "Badly formatted metric";
+        LOG(error) << "Badly formatted metric";
       }
       if (idx < 0) {
-        LOG(ERROR) << "Negative metric";
+        LOG(error) << "Negative metric";
         return;
       }
       if (view.indexes.size() <= idx) {
-        view.indexes.resize(std::max(idx + 1, view.w * view.h));
+        view.indexes.resize(std::max(idx + 1, view.w * view.h), -1);
       }
       view.indexes[idx] = metricsIndex;
     }
   };
 }
 
-} // namespace framework
 } // namespace o2

@@ -54,11 +54,11 @@ struct GroupStruct {
   float mErrZ;             ///< Error associated to the hit point in the z direction.
   float mErr2X;            ///< Squared Error associated to the hit point in the x direction.
   float mErr2Z;            ///< Squared Error associated to the hit point in the z direction.
-  float mXCOG;             ///< x position of te COG wrt the boottom left corner of the bounding box
-  float mZCOG;             ///< z position of te COG wrt the boottom left corner of the bounding box
+  float mXCOG;             ///< x position of the COG wrt the bottom left corner of the bounding box
+  float mZCOG;             ///< z position of the COG wrt the bottom left corner of the bounding box
   int mNpixels;            ///< Number of fired pixels
   ClusterPattern mPattern; ///< Bitmask of pixels. For groups the biggest bounding box for the group is taken, with all
-                           ///the bits set to 1.
+                           /// the bits set to 1.
   double mFrequency;       ///< Frequency of the topology
   bool mIsGroup;           ///< false: common topology; true: group of rare topologies
   ClassDefNV(GroupStruct, 3);
@@ -70,7 +70,8 @@ class TopologyDictionary
   /// Default constructor
   TopologyDictionary();
   /// Constructor
-  TopologyDictionary(std::string fileName);
+  TopologyDictionary(const std::string& fileName);
+  TopologyDictionary& operator=(const TopologyDictionary& dict) = default;
 
   /// constexpr for the definition of the groups of rare topologies.
   /// The attritbution of the group ID is stringly dependent on the following parameters: it must be a power of 2.
@@ -82,9 +83,12 @@ class TopologyDictionary
   /// Prints the dictionary
   friend std::ostream& operator<<(std::ostream& os, const TopologyDictionary& dictionary);
   /// Prints the dictionary in a binary file
-  void writeBinaryFile(std::string outputFile);
+  void writeBinaryFile(const std::string& outputFile);
   /// Reads the dictionary from a binary file
-  int readBinaryFile(std::string fileName);
+  int readBinaryFile(const std::string& fileName);
+
+  int readFromFile(const std::string& fileName);
+
   /// Returns the x position of the COG for the n_th element
   inline float getXCOG(int n) const
   {
@@ -156,19 +160,32 @@ class TopologyDictionary
   static void getTopologyDistribution(const TopologyDictionary& dict, TH1F*& histo, const char* histName);
   /// Returns the number of elements in the dicionary;
   int getSize() const { return (int)mVectorOfIDs.size(); }
-  ///Returns the local position of a compact cluster
-  math_utils::Point3D<float> getClusterCoordinates(const CompCluster& cl) const;
-  ///Returns the local position of a compact cluster
-  static math_utils::Point3D<float> getClusterCoordinates(const CompCluster& cl, const ClusterPattern& patt, bool isGroup = true);
+  /// Returns the local position of a compact cluster
+
+  // array version of getClusterCoordinates
+  template <typename T = float>
+  std::array<T, 3> getClusterCoordinatesA(const CompCluster& cl) const;
+  /// Returns the local position of a compact cluster
+  template <typename T = float>
+  static std::array<T, 3> getClusterCoordinatesA(const CompCluster& cl, const ClusterPattern& patt, bool isGroup = true);
+
+  template <typename T = float>
+  math_utils::Point3D<T> getClusterCoordinates(const CompCluster& cl) const;
+  /// Returns the local position of a compact cluster
+  template <typename T = float>
+  static math_utils::Point3D<T> getClusterCoordinates(const CompCluster& cl, const ClusterPattern& patt, bool isGroup = true);
+
+  static TopologyDictionary* loadFrom(const std::string& fileName = "", const std::string& objName = "ccdb_object");
 
   friend BuildTopologyDictionary;
   friend LookUp;
   friend TopologyFastSimulation;
 
  private:
+  static constexpr int STopoSize = 8 * 255 + 1;
   std::unordered_map<unsigned long, int> mCommonMap; ///< Map of pair <hash, position in mVectorOfIDs>
   std::unordered_map<int, int> mGroupMap;            ///< Map of pair <groudID, position in mVectorOfIDs>
-  int mSmallTopologiesLUT[8 * 255 + 1];              ///< Look-Up Table for the topologies with 1-byte linearised matrix
+  int mSmallTopologiesLUT[STopoSize];                ///< Look-Up Table for the topologies with 1-byte linearised matrix
   std::vector<GroupStruct> mVectorOfIDs;             ///< Vector of topologies and groups
 
   ClassDefNV(TopologyDictionary, 4);

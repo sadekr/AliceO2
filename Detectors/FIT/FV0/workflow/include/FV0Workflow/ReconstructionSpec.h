@@ -18,9 +18,9 @@
 #include "Framework/Task.h"
 #include "FV0Reconstruction/BaseRecoTask.h"
 #include "DataFormatsFV0/RecPoints.h"
-#include "CCDB/BasicCCDBManager.h"
 #include "FV0Base/Constants.h"
 #include "TStopwatch.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 
@@ -39,10 +39,12 @@ class ReconstructionDPL : public Task
   void init(InitContext& ic) final;
   void run(ProcessingContext& pc) final;
   void endOfStream(framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
-  bool mUseMC = true;
-  std::string mCCDBpath = "http://o2-ccdb.internal/";
+  bool mUseMC = false;
+  bool mUpdateCCDB = true;
+  const std::string mCCDBpath = o2::base::NameConf::getCCDBServer();
   std::vector<o2::fv0::RecPoints> mRecPoints;
   std::vector<o2::fv0::ChannelDataFloat> mRecChData;
   o2::fv0::BaseRecoTask mReco;
@@ -51,7 +53,7 @@ class ReconstructionDPL : public Task
 };
 
 /// create a processor spec
-framework::DataProcessorSpec getReconstructionSpec(bool useMC = true, const std::string ccdbpath = "http://o2-ccdb.internal/");
+framework::DataProcessorSpec getReconstructionSpec(bool useMC = false, const std::string ccdbpath = "http://alice-ccdb.cern.ch");
 
 } // namespace fv0
 } // namespace o2

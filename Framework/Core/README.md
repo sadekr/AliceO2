@@ -2,13 +2,14 @@
 \page refFrameworkCore Core
 \subpage refFrameworkCoreCOOKBOOK Core COOKBOOK
 \subpage refFrameworkCoreANALYSIS Core ANALYSIS
+\subpage refFrameworkCorePROFILING Core PROFILING
 /doxy -->
 
 # Data Processing Layer in O2 Framework
 
 ## Status quo and motivation for an O2 Data Processing Layer
 
-FairMQ currently provides a well documented and flexible framework for an actor based computation where each of the actors listens for message-like entities on channels and executes some code as a reaction. The key component which controls this is called a `FairMQDevice` (or *device* from now on) which can use different kind of transports to receive and send messages. In the most generic case, users are allowed to have full control on the state machine governing the message passing and have complete control on how the message handling is done. This of course covers all ALICE usecases in a generic manner, at the cost of extra complexity left to the user to implement. In most cases however a simplified way of creating devices is provided, and the user will simply create its own `FairMQDevice`-derived class, which registers via the `OnData(FairMQParts &parts)` method a callback that is invoked whenever a new message arrives. This however still holds the user responsible for:
+FairMQ currently provides a well documented and flexible framework for an actor based computation where each of the actors listens for message-like entities on channels and executes some code as a reaction. The key component which controls this is called a `fair::mq::Device` (or *device* from now on) which can use different kind of transports to receive and send messages. In the most generic case, users are allowed to have full control on the state machine governing the message passing and have complete control on how the message handling is done. This of course covers all ALICE usecases in a generic manner, at the cost of extra complexity left to the user to implement. In most cases however a simplified way of creating devices is provided, and the user will simply create its own `fair::m::Device`-derived class, which registers via the `OnData(fair::mq::Parts &parts)` method a callback that is invoked whenever a new message arrives. This however still holds the user responsible for:
 
 * Verifying that the required inputs for the computation are all available, both from the actual data flow (being it for readout, reconstruction or analysis) and from the asynchronous stream (e.g. alignment and calibrations).
 * Create the appropriate message which holds the results and send it.
@@ -58,7 +59,7 @@ WorkflowSpec defineDataProcessing(ConfigContext &context) {
 
 See next section, for a more detailed description of the `DataProcessorSpec` class. The code above has to be linked into a single executable together with the Data Processing Layer code to form a so called driver executable which if run will:
 
-* Map all `DataProcessorSpec` to a set of `FairMQDevice`s (using 1-1 correspondence, in the current implementation).
+* Map all `DataProcessorSpec` to a set of `fair::mq::Device`s (using 1-1 correspondence, in the current implementation).
 * Instanciate and start all the devices resulted from the previous step.
 * (Optionally) start a GUI which allows to monitor the running of the system.
 
@@ -72,7 +73,7 @@ void customize(std::vector<o2::framework::ConfigParamSpec> &workflowOptions)
 
 ### Describing a computation
 
-The description of the computation in such a layer is done via a `DataProcessorSpec` class, which describes some sort of processing of a (set of) O2 Data Payloads (*payloads* from now on), as defined by the O2 Data Model, eventually producing new payloads as outputs. The inputs to the computation, the outputs and the actual code to run on the former to produce the latter, is specified in a `DataProcessorSpec` instance. Multiple `DataProcessorSpec` instances can be grouped together in a `WorkflowSpec`to the driver code which maps them to  processing devices accordingly. 
+The description of the computation in such a layer is done via a `DataProcessorSpec` class, which describes some sort of processing of a (set of) O2 Data Payloads (*payloads* from now on), as defined by the O2 Data Model, eventually producing new payloads as outputs. The inputs to the computation, the outputs and the actual code to run on the former to produce the latter, is specified in a `DataProcessorSpec` instance. Multiple `DataProcessorSpec` instances can be grouped together in a `WorkflowSpec`to the driver code which maps them to  processing devices accordingly.
 
 The `DataProcessorSpec` is defined as follows:
 
@@ -96,7 +97,7 @@ So:
 
     {InputSpec{"clusters", "TPC", "CLUSTERS", 0}}
 
-really means "subscribe in input to the messages which have origin "TPC", contain objects of kind "CLUSTERS" and have a generic 
+really means "subscribe in input to the messages which have origin "TPC", contain objects of kind "CLUSTERS" and have a generic
 subspecification 0 (e.g. to index the sector). In your code you will be able to retrieve these kind of messages using the "clusters"
 label (see later the description of the InputRecord API).An InputSpec is effectively a three dimensional selection on space defined by all the possible origins, descriptions and subspecifications.
 
@@ -163,11 +164,11 @@ AlgorithmSpec{
 
 ### Task based API
 
-The previous API is flexible enough to work for large variety of cases, including 
+The previous API is flexible enough to work for large variety of cases, including
 creating `onProcess` callback on the fly depending on the `onInit` parameters.
-. 
+.
 
-However, very often what the user wants to do is to initialise some state and 
+However, very often what the user wants to do is to initialise some state and
 and invoke a "run" method. For this we provide a `Task` based API. In order to do so,
 you need to inherit your task from `o2::framework::Task` and use the adaptor:
 
@@ -249,7 +250,7 @@ Currently supported data types for `make<T>` are:
 * Messageable types: trivially copyable, non-polymorphic types.
   These get directly mapped on the message exchanged by FairMQ and are therefore "zerocopy" for what the Data Processing Layer is concerned.
 * Collections of messageable types, exposed to the user as `gsl::span`.
-* TObject derived classes. 
+* TObject derived classes.
   These are actually serialised via a TMessage and therefore are only suitable for the cases in which the cost of such a serialization is not an issue.
 
 Currently supported data types for `snapshot` functionality, state at time of
@@ -275,6 +276,8 @@ however, no API is provided to explicitly send it. All the created DataChunks ar
 ### Error handling
 
 When an error happens during processing of some data, the writer of the `process` function should simply throw an exception. By default the exception is caught by the `DataProcessingDevice` and a message is printed (if `std::exeception` derived `what()` method is used, otherwise a generic message is given). Users can provide themselves an error handler by specifying via the `onError` callback specified in `DataProcessorSpec`. This will allow in the future to reinject data into the flow in case of an error.
+
+When the exception is thrown inside processing function its message and stack trace is printed. However, the application itself is not terminated. If the error encountered is so severe that current workflow cannot continue it is advisable to call `LOG(fatal)` with proper describing message, which makes the application shutdown with non zero error code.
 
 ### Services
 
@@ -303,7 +306,7 @@ auto ctx.services().get<ControlService>().readyToQuit(QuitRequest::All) // In th
 
 #### RawDeviceService
 
-This service allows you to get an hold of the `FairMQDevice` running the DataProcessor computation from with the computation itself. While in general this should not be used, it is handy in case you want to integrate with a pre-existing `FairMQDevice` which potentially does not even follow the O2 Data Model.
+This service allows you to get an hold of the `fair::mq::Device` running the DataProcessor computation from with the computation itself. While in general this should not be used, it is handy in case you want to integrate with a pre-existing `fair::mq::Device` which potentially does not even follow the O2 Data Model.
 
 #### Monitoring service
 
@@ -335,9 +338,9 @@ FairLogger.
 #include "Framework/Logger.h"
 ...
 
-LOG(INFO) << "some message";      // streamer based API
-LOGF(INFO, "%s", "some message"); // printf based API
-LOGP(INFO, "{}", "some message"); // python / fmt based API
+LOG(info) << "some message";      // streamer based API
+LOGF(info, "%s", "some message"); // printf based API
+LOGP(info, "{}", "some message"); // python / fmt based API
 O2INFO("{}", "some message);      // same but with less typing.
 ```
 
@@ -397,7 +400,7 @@ In order to express those DPL provides the `o2::framework::parallel` and `o2::fr
 
 It can actually happen that you need to interface with native FairMQ devices, either for convenience or because they require a custom behavior which does not map well on top of the Data Processing Layer.
 
-This is fully supported and the DPL provides means to ingest foreign, non-DPL `FairMQDevice` produced messages into a DPL workflow. This is done via the help of a "proxy" data processor which connects to the foreign device, receives its inputs, optionally converts them to a format understood by the Data Processing Layer, and then pumps them to the right Data Processor Specs. 
+This is fully supported and the DPL provides means to ingest foreign, non-DPL `fair::mq::Device` produced messages into a DPL workflow. This is done via the help of a "proxy" data processor which connects to the foreign device, receives its inputs, optionally converts them to a format understood by the Data Processing Layer, and then pumps them to the right Data Processor Specs.
 
 This is done using the `FairMQRawDeviceService` which exposes the actual device on which an Algorithm is running, giving the user full control.
 
@@ -451,24 +454,27 @@ By default the Input and Outputs are matched solely by the signature of the data
 
 At the moment the configuration of a topology is done by compiling a declarative description of the computation done in C++, and by running the resulting executable. This is however an implementation detail and the datamodel for the configuration description is meant to be agnostic from the language. We foresee both using interpreted configurations (e.g. via ROOT / cling) or configurations done through another language (e.g. go, javascript).
 
-# Current Demonstrator
+# Folder Organization
 
-A demonstrator illustrating a possible implementation of the design described above is now found in the dev branch of AliceO2, in the Framework folder.
+DPL related classes are fully contained in the `Framework` folder of [O2](https://github.com/AliceO2Group/AliceO2/).
 
 In particular:
 
-- `Framework/Core` folder contains the `DataProcessorSpec` class and related.
-- `Framework/Core/test` folder contains a few unit test and simple example workflows.
-- `Framework/TestWorkflows` folder contains a few example workflows.
-- `Framework/DebugGUI` folder contains the core GUI functionalities.
-- `Framework/Utils` folder contains utilities and helpers for the creation of workflows.
+- `Framework/Core` contains the main classes associated to DPL and the implementation of the DataProcessingDevice and the Driver.
+- `Framework/Core/test` contains a few unit test and simple example workflows.
+- `Framework/TestWorkflows` contains a few example workflows.
+- `Framework/GUISupport` contains the core GUI functionalities.
+- `Framework/AnalysisSupport` contains some Analysis Framework specific components.
+- `Framework/Foundation` contains some header only utility classes, in particular for what concerns cross platform compatibility.
+- `Framework/Utils` contains utilities and helpers for the creation of workflows and in particular to interface with the rest of non-DPL utilities.
 
-There is also a few demonstrator available in particular:
+# Nomenclature:
 
-  - https://github.com/AliceO2Group/AliceO2/tree/dev/Detectors/TPC/workflow demonstrates the usage of DPL for TPC clusterisation and track reconstruction.
-  - https://github.com/AliceO2Group/AliceO2/blob/dev/Framework/TestWorkflows/src/o2SyncReconstructionDummy.cxx provides a skeleton for the synchronous reconstruction.
-  - https://github.com/AliceO2Group/AliceO2/tree/dev/Steer/DigitizerWorkflow provides a workflow than can do TPC digitisation.
+A class ending in `Spec` represents a Specification, i.e. a description how a given entity behaves. E.g. InputSpec is a specification for one of the Inputs.
 
+A class ending in `Info` represents runtime Information regarding an entity. E.g. `DeviceInfo` represent runtime information about a Device.
+
+A class ending in `Context` holds the state of a given phase. E.g. `InitContext` holds the state in which the Init callback happens.
 
 ## Interesting reads
 

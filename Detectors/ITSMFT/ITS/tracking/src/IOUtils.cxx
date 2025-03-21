@@ -23,15 +23,13 @@
 #include <unordered_set>
 #include <utility>
 
-#include "DataFormatsITSMFT/CompCluster.h"
-#include "DataFormatsITSMFT/TopologyDictionary.h"
 #include "ITSBase/GeometryTGeo.h"
 #include "ITStracking/Constants.h"
 #include "ITStracking/json.h"
 #include "MathUtils/Utils.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "Framework/Logger.h"
+#include "GPUCommonLogger.h"
 
 namespace
 {
@@ -46,40 +44,39 @@ namespace its
 
 void to_json(nlohmann::json& j, const TrackingParameters& par);
 void from_json(const nlohmann::json& j, TrackingParameters& par);
-void to_json(nlohmann::json& j, const MemoryParameters& par);
-void from_json(const nlohmann::json& j, MemoryParameters& par);
 
 /// convert compact clusters to 3D spacepoints
 void ioutils::convertCompactClusters(gsl::span<const itsmft::CompClusterExt> clusters,
                                      gsl::span<const unsigned char>::iterator& pattIt,
                                      std::vector<o2::BaseCluster<float>>& output,
-                                     const itsmft::TopologyDictionary& dict)
+                                     const itsmft::TopologyDictionary* dict)
 {
   GeometryTGeo* geom = GeometryTGeo::Instance();
-  for (auto& c : clusters) {
-    auto pattID = c.getPatternID();
-    o2::math_utils::Point3D<float> locXYZ;
-    float sigmaY2 = ioutils::DefClusError2Row, sigmaZ2 = ioutils::DefClusError2Col, sigmaYZ = 0; //Dummy COG errors (about half pixel size)
-    if (pattID != itsmft::CompCluster::InvalidPatternID) {
-      sigmaY2 = dict.getErr2X(pattID);
-      sigmaZ2 = dict.getErr2Z(pattID);
-      if (!dict.isGroup(pattID)) {
-        locXYZ = dict.getClusterCoordinates(c);
-      } else {
-        o2::itsmft::ClusterPattern patt(pattIt);
-        locXYZ = dict.getClusterCoordinates(c, patt);
-      }
-    } else {
-      o2::itsmft::ClusterPattern patt(pattIt);
-      locXYZ = dict.getClusterCoordinates(c, patt, false);
+  bool applyMisalignment = false;
+  const auto& conf = TrackerParamConfig::Instance();
+  const auto& chmap = getChipMappingITS();
+  for (int il = 0; il < chmap.NLayers; il++) {
+    if (conf.sysErrY2[il] > 0.f || conf.sysErrZ2[il] > 0.f) {
+      applyMisalignment = true;
+      break;
     }
+  }
+
+  for (auto& c : clusters) {
+    float sigmaY2, sigmaZ2, sigmaYZ = 0;
+    auto locXYZ = extractClusterData(c, pattIt, dict, sigmaY2, sigmaZ2);
     auto& cl3d = output.emplace_back(c.getSensorID(), geom->getMatrixT2L(c.getSensorID()) ^ locXYZ); // local --> tracking
+    if (applyMisalignment) {
+      auto lrID = chmap.getLayer(c.getSensorID());
+      sigmaY2 += conf.sysErrY2[lrID];
+      sigmaZ2 += conf.sysErrZ2[lrID];
+    }
     cl3d.setErrors(sigmaY2, sigmaZ2, sigmaYZ);
   }
 }
 
 void ioutils::loadEventData(ROframe& event, gsl::span<const itsmft::CompClusterExt> clusters,
-                            gsl::span<const unsigned char>::iterator& pattIt, const itsmft::TopologyDictionary& dict,
+                            gsl::span<const unsigned char>::iterator& pattIt, const itsmft::TopologyDictionary* dict,
                             const dataformats::MCTruthContainer<MCCompLabel>* clsLabels)
 {
   if (clusters.empty()) {
@@ -93,23 +90,8 @@ void ioutils::loadEventData(ROframe& event, gsl::span<const itsmft::CompClusterE
 
   for (auto& c : clusters) {
     int layer = geom->getLayer(c.getSensorID());
-
-    auto pattID = c.getPatternID();
-    o2::math_utils::Point3D<float> locXYZ;
-    float sigmaY2 = ioutils::DefClusError2Row, sigmaZ2 = ioutils::DefClusError2Col, sigmaYZ = 0; //Dummy COG errors (about half pixel size)
-    if (pattID != itsmft::CompCluster::InvalidPatternID) {
-      sigmaY2 = dict.getErr2X(pattID);
-      sigmaZ2 = dict.getErr2Z(pattID);
-      if (!dict.isGroup(pattID)) {
-        locXYZ = dict.getClusterCoordinates(c);
-      } else {
-        o2::itsmft::ClusterPattern patt(pattIt);
-        locXYZ = dict.getClusterCoordinates(c, patt);
-      }
-    } else {
-      o2::itsmft::ClusterPattern patt(pattIt);
-      locXYZ = dict.getClusterCoordinates(c, patt, false);
-    }
+    float sigmaY2, sigmaZ2, sigmaYZ = 0;
+    auto locXYZ = extractClusterData(c, pattIt, dict, sigmaY2, sigmaZ2);
     auto sensorID = c.getSensorID();
     // Inverse transformation to the local --> tracking
     auto trkXYZ = geom->getMatrixT2L(sensorID) ^ locXYZ;
@@ -131,7 +113,7 @@ void ioutils::loadEventData(ROframe& event, gsl::span<const itsmft::CompClusterE
   }
 }
 
-int ioutils::loadROFrameData(const o2::itsmft::ROFRecord& rof, ROframe& event, gsl::span<const itsmft::CompClusterExt> clusters, gsl::span<const unsigned char>::iterator& pattIt, const itsmft::TopologyDictionary& dict,
+int ioutils::loadROFrameData(const o2::itsmft::ROFRecord& rof, ROframe& event, gsl::span<const itsmft::CompClusterExt> clusters, gsl::span<const unsigned char>::iterator& pattIt, const itsmft::TopologyDictionary* dict,
                              const dataformats::MCTruthContainer<MCCompLabel>* mcLabels)
 {
   event.clear();
@@ -143,23 +125,8 @@ int ioutils::loadROFrameData(const o2::itsmft::ROFRecord& rof, ROframe& event, g
   auto clusters_in_frame = rof.getROFData(clusters);
   for (auto& c : clusters_in_frame) {
     int layer = geom->getLayer(c.getSensorID());
-
-    auto pattID = c.getPatternID();
-    o2::math_utils::Point3D<float> locXYZ;
-    float sigmaY2 = ioutils::DefClusError2Row, sigmaZ2 = ioutils::DefClusError2Col, sigmaYZ = 0; //Dummy COG errors (about half pixel size)
-    if (pattID != itsmft::CompCluster::InvalidPatternID) {
-      sigmaY2 = dict.getErr2X(pattID);
-      sigmaZ2 = dict.getErr2Z(pattID);
-      if (!dict.isGroup(pattID)) {
-        locXYZ = dict.getClusterCoordinates(c);
-      } else {
-        o2::itsmft::ClusterPattern patt(pattIt);
-        locXYZ = dict.getClusterCoordinates(c, patt);
-      }
-    } else {
-      o2::itsmft::ClusterPattern patt(pattIt);
-      locXYZ = dict.getClusterCoordinates(c, patt, false);
-    }
+    float sigmaY2, sigmaZ2, sigmaYZ = 0;
+    auto locXYZ = extractClusterData(c, pattIt, dict, sigmaY2, sigmaZ2);
     auto sensorID = c.getSensorID();
     // Inverse transformation to the local --> tracking
     auto trkXYZ = geom->getMatrixT2L(sensorID) ^ locXYZ;
@@ -227,52 +194,52 @@ std::vector<std::unordered_map<int, Label>> ioutils::loadLabels(const int events
   return labelsMap;
 }
 
-void ioutils::writeRoadsReport(std::ofstream& correctRoadsOutputStream, std::ofstream& duplicateRoadsOutputStream,
-                               std::ofstream& fakeRoadsOutputStream, const std::vector<std::vector<Road>>& roads,
-                               const std::unordered_map<int, Label>& labelsMap)
-{
-  const int numVertices{static_cast<int>(roads.size())};
-  std::unordered_set<int> foundMonteCarloIds{};
+// void ioutils::writeRoadsReport(std::ofstream& correctRoadsOutputStream, std::ofstream& duplicateRoadsOutputStream,
+//                                std::ofstream& fakeRoadsOutputStream, const std::vector<std::vector<Road<5>>>& roads,
+//                                const std::unordered_map<int, Label>& labelsMap)
+// {
+//   const int numVertices{static_cast<int>(roads.size())};
+//   std::unordered_set<int> foundMonteCarloIds{};
 
-  correctRoadsOutputStream << EventLabelsSeparator << std::endl;
-  fakeRoadsOutputStream << EventLabelsSeparator << std::endl;
+//   correctRoadsOutputStream << EventLabelsSeparator << std::endl;
+//   fakeRoadsOutputStream << EventLabelsSeparator << std::endl;
 
-  for (int iVertex{0}; iVertex < numVertices; ++iVertex) {
+//   for (int iVertex{0}; iVertex < numVertices; ++iVertex) {
 
-    const std::vector<Road>& currentVertexRoads{roads[iVertex]};
-    const int numRoads{static_cast<int>(currentVertexRoads.size())};
+//     const std::vector<Road<5>>& currentVertexRoads{roads[iVertex]};
+//     const int numRoads{static_cast<int>(currentVertexRoads.size())};
 
-    for (int iRoad{0}; iRoad < numRoads; ++iRoad) {
+//     for (int iRoad{0}; iRoad < numRoads; ++iRoad) {
 
-      const Road& currentRoad{currentVertexRoads[iRoad]};
-      const int currentRoadLabel{currentRoad.getLabel()};
+//       const Road<5>& currentRoad{currentVertexRoads[iRoad]};
+//       const int currentRoadLabel{currentRoad.getLabel()};
 
-      if (!labelsMap.count(currentRoadLabel)) {
+//       if (!labelsMap.count(currentRoadLabel)) {
 
-        continue;
-      }
+//         continue;
+//       }
 
-      const Label& currentLabel{labelsMap.at(currentRoadLabel)};
+//       const Label& currentLabel{labelsMap.at(currentRoadLabel)};
 
-      if (currentRoad.isFakeRoad()) {
+//       if (currentRoad.isFakeRoad()) {
 
-        fakeRoadsOutputStream << currentLabel << std::endl;
+//         fakeRoadsOutputStream << currentLabel << std::endl;
 
-      } else {
+//       } else {
 
-        if (foundMonteCarloIds.count(currentLabel.monteCarloId)) {
+//         if (foundMonteCarloIds.count(currentLabel.monteCarloId)) {
 
-          duplicateRoadsOutputStream << currentLabel << std::endl;
+//           duplicateRoadsOutputStream << currentLabel << std::endl;
 
-        } else {
+//         } else {
 
-          correctRoadsOutputStream << currentLabel << std::endl;
-          foundMonteCarloIds.emplace(currentLabel.monteCarloId);
-        }
-      }
-    }
-  }
-}
+//           correctRoadsOutputStream << currentLabel << std::endl;
+//           foundMonteCarloIds.emplace(currentLabel.monteCarloId);
+//         }
+//       }
+//     }
+//   }
+// }
 
 } // namespace its
 } // namespace o2

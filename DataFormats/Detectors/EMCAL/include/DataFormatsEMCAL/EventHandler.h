@@ -11,16 +11,20 @@
 #ifndef ALICEO2_EMCAL_EVENTHANDLER_H_
 #define ALICEO2_EMCAL_EVENTHANDLER_H_
 
+#include <cstdint>
 #include <exception>
 #include <iterator>
 #include <gsl/span>
+#include <vector>
 #include "Rtypes.h"
 #include "fmt/format.h"
 #include "DataFormatsEMCAL/Cell.h"
 #include "DataFormatsEMCAL/Cluster.h"
 #include "DataFormatsEMCAL/Digit.h"
 #include "DataFormatsEMCAL/EventData.h"
+#include "DataFormatsEMCAL/MCLabel.h"
 #include "DataFormatsEMCAL/TriggerRecord.h"
+#include "SimulationDataFormat/MCTruthContainer.h"
 
 namespace o2
 {
@@ -84,7 +88,7 @@ class EventHandler
  public:
   using TriggerRange = gsl::span<const TriggerRecord>;
   using ClusterRange = gsl::span<const Cluster>;
-  using CellIndexRange = gsl::span<int>;
+  using CellIndexRange = gsl::span<const int>;
   using CellRange = gsl::span<const CellInputType>;
 
   /// \class RangeException
@@ -171,6 +175,39 @@ class EventHandler
    private:
     InteractionRecord mInteractionRecordClusters; ///< Interaction record for clusters
     InteractionRecord mInteractionRecordCells;    ///< Interaction record for cells
+  };
+
+  /// \class TriggerBitsInvalidException
+  /// \brief Error handling in case the trigger bits from various sources do not match
+  class TriggerBitsInvalidException final : public std::exception
+  {
+   public:
+    /// \brief Constructor initializing the exception
+    /// \param bitsclusters Trigger bits from the cluster trigger record container
+    /// \param bitscells Trigger bits from the cell trigger record container
+    TriggerBitsInvalidException(uint64_t bitsclusters, uint64_t bitscells) : mTriggerBitsClusters(bitsclusters),
+                                                                             mTriggerBitsCells(bitscells)
+    {
+    }
+
+    /// \brief Destructor
+    ~TriggerBitsInvalidException() noexcept final = default;
+
+    /// \brief Creating error message of the exception
+    /// \return Error message of the exception
+    const char* what() const noexcept final { return "Tigger bits for clusters and cells not matching"; }
+
+    /// \brief Get the trigger bits for the cluster subevent
+    /// \return Trigger bits for the cluster subevent
+    uint64_t getTriggerBitsClusters() const { return mTriggerBitsClusters; }
+
+    /// \brief Get the trigger bits for the cells subevent
+    /// \return Trigger bits of the cell subevent
+    uint64_t getTriggerBitsCells() const { return mTriggerBitsCells; }
+
+   private:
+    uint64_t mTriggerBitsClusters; ///< Trigger bits from cluster trigger record container
+    uint64_t mTriggerBitsCells;    ///< Trigger bits from cell trigger record container
   };
 
   /// \class EventIterataor
@@ -290,9 +327,30 @@ class EventHandler
   /// \return Iteration end marker
   EventIterator rend() const { return EventIterator(*this, -1, false); };
 
-  ///
+  /// \brief Get the number of events handled by the event handler
+  /// \return Number of events
+  /// \throw NotInitializedException If the event handler is not initialized
   int getNumberOfEvents() const;
-  const InteractionRecord& getInteractionRecordForEvent(int eventID) const;
+
+  /// \brief Get the interaction record for the given event
+  /// \param eventID ID of the event in timeframe
+  /// \return Interaction record for the event
+  /// \throw RangeException in case the required event ID exceeds the maximum number of events
+  /// \throw InteractionRecordInvalidException If the interaction record for the same event from differnt containers has different content
+  /// \throw NotInitializedException in case the event handler is not initialized
+  ///
+  /// Requires at least on interaction record container to be set (clusters, cells or cell indices).
+  InteractionRecord getInteractionRecordForEvent(int eventID) const;
+
+  /// \brief Get the interaction record for the given event
+  /// \param eventID ID of the event in timeframe
+  /// \return Interaction record for the event
+  /// \throw RangeException in case the required event ID exceeds the maximum number of events
+  /// \throw TriggerBitsInvalidException in case the trigger bits for the same event from differnt containers are different
+  /// \throw NotInitializedException in case the event handler is not initialized
+  ///
+  /// Requires at least on interaction record container to be set (clusters, cells or cell indices).
+  uint64_t getTriggerBitsForEvent(int eventID) const;
 
   /// \brief Get range of clusters belonging to the given event
   /// \param eventID ID of the event
@@ -307,6 +365,13 @@ class EventHandler
   /// \throw RangeException in case the required event ID exceeds the maximum number of events
   /// \throw NotInitializedException in case the event handler is not initialized for cell
   const CellRange getCellsForEvent(int eventID) const;
+
+  /// \brief Get vector of MC labels belonging to the given event
+  /// \param eventID ID of the event
+  /// \return vector of MC labels for the event
+  /// \throw RangeException in case the required event ID exceeds the maximum number of events
+  /// \throw NotInitializedException in case the event handler is not initialized for cell
+  std::vector<gsl::span<const o2::emcal::MCLabel>> getCellMCLabelForEvent(int eventID) const;
 
   /// \brief Get range of cluster cell indices belonging to the given event
   /// \param eventID ID of the event
@@ -349,6 +414,13 @@ class EventHandler
     mTriggerRecordsCells = triggers;
   }
 
+  /// \brief Setting the pointer for the MCTruthContainer for cells
+  /// \param mclabels Pointer to the MCTruthContainer for cells in timeframe
+  void setCellMCTruthContainer(const o2::dataformats::MCTruthContainer<o2::emcal::MCLabel>* mclabels)
+  {
+    mCellLabels = mclabels;
+  }
+
   /// \brief Reset containers with empty ranges
   void reset();
 
@@ -378,9 +450,10 @@ class EventHandler
   TriggerRange mTriggerRecordsCellIndices; ///< trigger record for cluster cell index type
   TriggerRange mTriggerRecordsCells;       ///< Trigger record for cell type
 
-  ClusterRange mClusters;             /// container for clusters in timeframe
-  CellIndexRange mClusterCellIndices; /// container for cell indices in timeframe
-  CellRange mCells;                   /// container for cells in timeframe
+  ClusterRange mClusters;                                                             /// container for clusters in timeframe
+  CellIndexRange mClusterCellIndices;                                                 /// container for cell indices in timeframe
+  CellRange mCells;                                                                   /// container for cells in timeframe
+  const o2::dataformats::MCTruthContainer<o2::emcal::MCLabel>* mCellLabels = nullptr; /// pointer to the MCTruthContainer for cells in timeframe
 
   ClassDefNV(EventHandler, 1);
 };

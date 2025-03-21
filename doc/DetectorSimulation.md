@@ -65,6 +65,7 @@ The purpose of the `o2-sim` executable is to simulate the passage of particles e
 | --configKeyValues | Like `--configFile` but allowing to set parameters on the command line as a string sequence. Example `--configKeyValues "Stack.pruneKine=false"`. Takes precedence over `--configFile`. Parameters need to be known ConfigurableParams. |
 | --seed   | The initial seed to (all) random number instances. Default is -1 which leads to random behaviour. |
 | -o,--outPrefix | How output files should be prefixed. Default is o2sim. Example `-o mySignalProduction`.|
+| --noGeant | Switch off Geant transport. Just produce the generator kinematics. |
 
 * **Expert control** via environment variables:
 `o2-sim` is sensitive to the following environment variables:
@@ -90,7 +91,6 @@ Important parameters influencing the transport simulation are:
 | Stack | Parameters influencing the particle stack. Example include whether the stack does kinematics pruning or whether it keeps secondaries at all. |
 | SimCutParams | Parameters allowing to set some sime geometry stepping cuts in R, Z, etc. |
 | Diamond | Parameter allowing to set the interaction vertex location and the spread/width. Is used in all event generators. |
-| Pythia6 | Parameters that influence the pythia6 generator. |
 | Pythia8 | Parameters that influence the pythia8 generator. |
 | HepMC | Parameters that influence the HepMC generator. |
 | TriggerParticle | Parameters influencing the trigger mechanism in particle generators. |
@@ -114,6 +114,7 @@ o2-sim -m MFT -e TGeant3 -g fwmugen -n 10
 ```
 o2-sim -m PIPE ITS MFT -e TGeant3 -g boxgen -n 10 --configKeyValues 'BoxGun.pdg=13 ; BoxGun.eta[0]=-3.6 ; BoxGun.eta[1]=-2.45; BoxGun.number=100'
 ```
+This command line will generate 10 events with 100 forward muons.
 
 * **PYTHIA 8**
 
@@ -134,13 +135,6 @@ You may contribute to the documentation by asking a question
 #### 1. **How can I interface an event generator from ALIROOT**?
 In order to access event generators from ALIROOT, such as `THijing` or `TPyhtia6`, you may use the `-g external` command line option followed by a ROOT macro setting up the event 
 generator. Examples thereof are available in the installation directory `$O2_ROOT/share/Generators/external`.
-
-For example, in order to simulate with 10 Pythia6 events, the following command can be run:
-```
-o2-sim -n 10 -g external --configKeyValues 'GeneratorExternal.fileName=$O2_ROOT/share/Generators/external/pythia6.C'
-```
-Macro arguments can be passed setting `GeneratorExternal.funcName`  
-`GeneratorExternal.funcName=pythia6(14000., "pythia.settings")`.
 
 Users may write there own macros in order to customize to their needs.
 
@@ -169,12 +163,12 @@ o2-sim --embedIntoFile o2sim.background.root
 
 Background events are sampled one-by-one until all events have been used. At that point the events start to be reused.
 
-#### 5. **How can I obtain detailed stepping information?**
+#### 5. **How can I obtain detailed stepping information?** <a name="MCStepLoggerSection"></a>
 Run the simulation (currently only supported in combination with `o2-sim-serial`) with a preloaded library:
 ```
-MCSTEPLOG_TTREE=1 LD_PRELOAD=$O2_ROOT/lib/libMCStepLogger.so o2-sim-serial -j 1 -n 10
+MCSTEPLOG_TTREE=1 LD_PRELOAD=$MCSTEPLOGGER_ROOT/lib/libMCStepLoggerInterceptSteps.so o2-sim-serial -j 1 -n 10
 ```
-This will produce a file `MCStepLoggerOutput.root` containing detailed information about steps and processes (where, what, ...). The file can be analysed using a special analysis framework. See https://github.com/AliceO2Group/AliceO2/blob/dev/Utilities/MCStepLogger/README.md for more documentation.
+This will produce a file `MCStepLoggerOutput.root` containing detailed information about steps and processes (where, what, ...). The file can be analysed using a special analysis framework. See https://github.com/AliceO2Group/VMCStepLogger/blob/master/README.md for more documentation.
 
 #### 6. **How can I add a trigger to the event generator?**
 All event generator interfaces that comply with the `o2::eventgen::Generator` protocol can be triggered.
@@ -219,7 +213,31 @@ Notice that in this case the user is presented with a pointer to the event-gener
 For the sake of generality, a `void*` has to be used in order to pass any possible types of event-generators, that are
 normally othogonal one to another. The name encodes a string to identify what generator has been passed and perform the correct cast to use it.
 
+#### 7. **How can I change medium cut and process parameters on the fly?**
+Some medium parameter definitions are defined in `$O2/Detectors/<detector>/simulation/data/simcuts.txt` (or in `$O2/Detectors/Passive/data/simcuts_<modulename>.txt` for passive modules), others might be hard-coded in the source code. To extract/change/study any of those parameters on the fly, it is possible to write out all of them into a `JSON` file with
+```bash
+o2-sim <args> --configKeyValues "MaterialManagerParam.outputFile=medium_params.json"
+```
+Parameters of interest can be changed in `medium_params.json` and it can be passed **now as an input** for the target simulation with
+```bash
+o2-sim <args> --configKeyValues "MaterialManagerParam.inputFile=medium_params.json"
+```
 
+**Note** that process parameters have no effect when Geant4 is used for transport.
+
+### Replaying steps and optimising full sim parameters
+
+The `MCReplay` engine can be used to replay a simulation based on steps logged by the `MCStepLogger` (see also a more [in-depth documentation](https://github.com/AliceO2Group/VMCStepLogger/tree/v0.2.0/MCReplay)).
+
+To run it with O2, first follow the steps as explained in [MCStepLoggerSection](#MCStepLoggerSection) to produce a file containing logged steps. To replay, do
+```bash
+o2-sim-serial -n <ref_nevents> -e MCReplay -g extkinO2 --extKinFile o2sim_Kine.root -o replay
+```
+It is advisory to use another output prefix as done in this case since otherwise the hit files would be overwritten which might contain exactly the information one is interested in. Make sure to use/exclude the same modules as used in the reference run (`-m` and `--skipModules` flags). In case the reference run was done with another prefix, the kinematics file name is different, namely `<prefix>_Kine.root`.
+
+If the name of the step log file is different, it can be passed with `--configKeyValues="MCReplayParam.stepFilename=<path/step/file/name>"`. It is also possible to set a minimum energy (in units of GeV) cut particles have to have when produced. For that, use `--configKeyValues="MCReplayParam.energyCut=0.1"` if everything produced below `0.1 GeV` should be dropped.
+
+Comparing the produced hits with those from the reference run it is possible to omit steps/particle production which have a negligible impact on the hits and hence on digits. As a result, the detector simulation can be tuned to be faster and more efficient.
 
 ### Deep triggers
 Deep triggers is just a name to a new functionality that allows the user to define custom functions that will have a direct handle on the event generator interface. The functionality follows the schema of the previous point, with the user providing a custom lambda function that will receive from the framework a pointer to the internal event-generator interface object (i.e. for Pythia8, a pointer to the Pythia object) and a tagname to identify the interface. This functionality might be useful to users who want to provide triggers based on information beyond the stack of the generated particles, based on more internal counters/information in the event generator machinery.
@@ -240,7 +258,7 @@ o2::eventgen::DeepTrigger
       auto py8 = reinterpret_cast<Pythia8::Pythia*>(interface);
       return py8->info.nMPI() >= mpiMin;
     }
-    LOG(FATAL) << "Cannot define MPI for generator interface \'" << name << "\'";
+    LOG(fatal) << "Cannot define MPI for generator interface \'" << name << "\'";
     return false;
   };
 }
@@ -286,37 +304,6 @@ Pythia8::UserHooks*
   pythia8_userhooks_charm()
 {
   return new UserHooksCharm();
-```
-
-
-### Pythia6 interface
-A new Pythia6 interface is provided via GeneratorPythia6. This complies with the o2::eventgen::Generator protocol, and hence the user is allowed to use all the trigger functionalities. The class can also be used for DeepTriggers as this modified macro shows.
-
-```
-//   usage: o2sim --trigger external --configKeyValues "TriggerExternal.fileName=trigger_mpi.C;TriggerExternal.funcName="trigger_mpi()"'
-
-#include "Generators/Trigger.h"
-#include "Pythia8/Pythia.h"
-#include "TPythia6.h"
-
-o2::eventgen::DeepTrigger
-  trigger_mpi(int mpiMin = 15)
-{
-  return [mpiMin](void* interface, std::string name) -> bool {
-    int nMPI = 0;
-    if (!name.compare("pythia8")) {
-      auto py8 = reinterpret_cast<Pythia8::Pythia*>(interface);
-      nMPI = py8->info.nMPI();
-    }
-    else if (!name.compare("pythia6")) {
-      auto py6 = reinterpret_cast<TPythia6*>(interface);
-      nMPI = py6->GetMSTI(31);
-    }
-    else
-      LOG(FATAL) << "Cannot define MPI for generator interface \'" << name << "\'";
-    return nMPI >= mpiMin;
-  };
-}
 ```
 
 ## Development

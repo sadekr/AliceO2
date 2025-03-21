@@ -12,7 +12,6 @@
 /// @file   RecPointWriterSpec.cxx
 
 #include <vector>
-
 #include "FV0Workflow/RecPointWriterSpec.h"
 #include "DPLUtils/MakeRootTreeWriterSpec.h"
 #include "DataFormatsFV0/RecPoints.h"
@@ -32,7 +31,7 @@ DataProcessorSpec getRecPointWriterSpec(bool useMC)
   using ChanDataType = std::vector<o2::fv0::ChannelDataFloat>;
   // Spectators for logging
   auto logger = [](RecPointsType const& recPoints) {
-    LOG(INFO) << "FT0RecPointWriter pulled " << recPoints.size() << " RecPoints";
+    LOG(debug) << "FV0RecPointWriter pulled " << recPoints.size() << " RecPoints";
   };
   return MakeRootTreeWriterSpec("fv0-recpoint-writer",
                                 "o2reco_fv0.root",

@@ -19,7 +19,7 @@
 #include "HMPIDBase/Param.h"
 #include "TGeoManager.h"
 #include "TMath.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "DetectorsBase/GeometryManager.h"
 
 ClassImp(o2::hmpid::Geo);
@@ -33,6 +33,6 @@ using namespace o2::hmpid;
 /// Init :
 void Geo::Init()
 {
-  LOG(INFO) << "hmpid::Geo: Initialization of HMPID parameters";
+  LOG(info) << "hmpid::Geo: Initialization of HMPID parameters";
 }
 

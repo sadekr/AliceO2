@@ -14,6 +14,9 @@
 ///
 /// \author Piotr Konopka, piotr.jan.konopka@cern.ch
 
+#include <gsl/span>
+#include <memory>
+#include <stdexcept>
 #define BOOST_TEST_MODULE Test Utilities MergerAlgorithm
 #define BOOST_TEST_MAIN
 #define BOOST_TEST_DYN_LINK
@@ -23,6 +26,7 @@
 #include "Mergers/MergerAlgorithm.h"
 #include "Mergers/CustomMergeableTObject.h"
 #include "Mergers/CustomMergeableObject.h"
+#include "Mergers/ObjectStore.h"
 
 #include <TObjArray.h>
 #include <TObjString.h>
@@ -35,13 +39,14 @@
 #include <TF1.h>
 #include <TGraph.h>
 #include <TProfile.h>
+#include <TCanvas.h>
 
-//using namespace o2::framework;
+// using namespace o2::framework;
 using namespace o2::mergers;
 
-const size_t bins = 10;
-const size_t min = 0;
-const size_t max = 10;
+constexpr size_t bins = 10;
+constexpr size_t min = 0;
+constexpr size_t max = 10;
 
 BOOST_AUTO_TEST_CASE(MergerEmptyObjects)
 {
@@ -63,7 +68,8 @@ BOOST_AUTO_TEST_CASE(MergerNotSupportedTObject)
 {
   TObjString* target = new TObjString("foo");
   TObjString* other = new TObjString("bar");
-  BOOST_CHECK_THROW(algorithm::merge(target, other), std::runtime_error);
+  algorithm::merge(target, other);
+  BOOST_CHECK(target->GetString() == "foo");
   delete target;
   delete other;
 }
@@ -300,6 +306,117 @@ BOOST_AUTO_TEST_CASE(MergerCollection)
   delete target;
 }
 
+TCanvas* createCanvas(std::string name, std::string title, std::vector<std::shared_ptr<TH1I>>& histograms)
+{
+  auto canvas = new TCanvas(name.c_str(), title.c_str(), 100, 100);
+  canvas->Divide(histograms.size(), 1);
+  for (size_t i = 1; const auto& hist : histograms) {
+    canvas->cd(i);
+    hist->Draw();
+    ++i;
+  }
+  return canvas;
+}
+
+auto collectUnderlyingObjects(TCanvas* canvas) -> std::vector<TObject*>
+{
+  auto collectFromTPad = [](TPad* pad, std::vector<TObject*>& objects, const auto& collectFromTPad) {
+    if (!pad) {
+      return;
+    }
+    auto* primitives = pad->GetListOfPrimitives();
+    for (int i = 0; i < primitives->GetSize(); ++i) {
+      auto* primitive = primitives->At(i);
+      if (auto* primitivePad = dynamic_cast<TPad*>(primitive)) {
+        collectFromTPad(primitivePad, objects, collectFromTPad);
+      } else {
+        objects.push_back(primitive);
+      }
+    }
+  };
+
+  std::vector<TObject*> collectedObjects;
+  collectFromTPad(canvas, collectedObjects, collectFromTPad);
+
+  return collectedObjects;
+}
+
+BOOST_AUTO_TEST_CASE(MergerTCanvas)
+{
+  // working example
+  {
+    std::vector<std::shared_ptr<TH1I>> histsC1{
+      std::make_shared<TH1I>("th1", "obj1", bins, min, max),
+      std::make_shared<TH1I>("th2", "obj2", bins, min, max),
+    };
+    histsC1[0]->Fill(5);
+    histsC1[1]->Fill(2);
+    BOOST_CHECK_EQUAL(histsC1[0]->GetBinContent(histsC1[0]->FindBin(5)), 1);
+    BOOST_CHECK_EQUAL(histsC1[1]->GetBinContent(histsC1[1]->FindBin(2)), 1);
+
+    std::vector<std::shared_ptr<TH1I>> histsC2{
+      std::make_shared<TH1I>("th1", "obj1", bins, min, max),
+      std::make_shared<TH1I>("th2", "obj2", bins, min, max),
+    };
+
+    histsC2[0]->Fill(5);
+    histsC2[1]->Fill(2);
+    BOOST_CHECK_EQUAL(histsC2[0]->GetBinContent(histsC2[0]->FindBin(5)), 1);
+    BOOST_CHECK_EQUAL(histsC2[1]->GetBinContent(histsC2[1]->FindBin(2)), 1);
+
+    auto targetCanvas = createCanvas("c1", "test title 1", histsC1);
+    auto otherCanvas = createCanvas("c2", "test title 2", histsC2);
+
+    algorithm::merge(targetCanvas, otherCanvas);
+
+    auto targetObjects = collectUnderlyingObjects(targetCanvas);
+
+    BOOST_CHECK_EQUAL(targetObjects.size(), 2);
+    for (const auto& object : targetObjects) {
+      auto th = static_cast<TH1*>(object);
+      if (std::string(th->GetName()) == "th1") {
+        BOOST_CHECK_EQUAL(th->GetBinContent(th->FindBin(5)), 2);
+      }
+      if (std::string(th->GetName()) == "th2") {
+        BOOST_CHECK_EQUAL(th->GetBinContent(th->FindBin(2)), 2);
+      }
+    }
+  }
+
+  // throw because we try to merge canvases with different number of underlying items
+  {
+    std::vector<std::shared_ptr<TH1I>> histsC1{
+      std::make_shared<TH1I>("th1", "obj1", bins, min, max),
+      std::make_shared<TH1I>("th2", "obj2", bins, min, max),
+    };
+
+    std::vector<std::shared_ptr<TH1I>> histsC2{
+      std::make_shared<TH1I>("th1", "obj1", bins, min, max),
+    };
+
+    auto targetCanvas = createCanvas("c1", "test title 1", histsC1);
+    auto otherCanvas = createCanvas("c2", "test title 2", histsC2);
+
+    BOOST_CHECK_THROW(algorithm::merge(targetCanvas, otherCanvas), std::runtime_error);
+  }
+
+  // throw because we try to merge canvases with different underlying items
+  {
+    std::vector<std::shared_ptr<TH1I>> histsC1{
+      std::make_shared<TH1I>("th1", "obj1", bins, min, max),
+    };
+
+    std::vector<std::shared_ptr<TH1I>> histsC2{
+      std::make_shared<TH1I>("th2", "obj2", bins, min, max),
+    };
+
+    auto targetCanvas = createCanvas("c1", "test title 1", histsC1);
+    auto otherCanvas = createCanvas("c2", "test title 2", histsC2);
+
+    BOOST_CHECK_THROW(algorithm::merge(targetCanvas, otherCanvas), std::runtime_error);
+  }
+}
+
 BOOST_AUTO_TEST_CASE(Deleting)
 {
   TObjArray* main = new TObjArray();
@@ -329,3 +446,152 @@ BOOST_AUTO_TEST_CASE(Deleting)
   // I am afraid we can't check more than that.
   BOOST_CHECK_NO_THROW(algorithm::deleteTCollections(main));
 }
+
+BOOST_AUTO_TEST_CASE(AverageHisto)
+{
+  TH1F* target = new TH1F("histo 1", "histo 1", bins, min, max);
+  target->SetBit(TH1::kIsAverage);
+  target->Fill(5);
+
+  TH1F* other = new TH1F("histo 2", "histo 2", bins, min, max);
+  other->SetBit(TH1::kIsAverage);
+  other->Fill(5);
+
+  BOOST_CHECK_NO_THROW(algorithm::merge(target, other));
+  BOOST_CHECK_CLOSE(target->GetBinContent(other->FindBin(5)), 1.0, 0.001);
+
+  delete target;
+  delete other;
+}
+
+BOOST_AUTO_TEST_SUITE(VectorOfHistos)
+
+gsl::span<float> to_span(std::shared_ptr<TH1F>& histo)
+{
+  return {histo->GetArray(), static_cast<uint>(histo->GetSize())};
+}
+
+template <typename T, std::size_t N>
+gsl::span<T, N> to_array(T (&&arr)[N])
+{
+  return arr;
+}
+
+BOOST_AUTO_TEST_CASE(SameLength, *boost::unit_test::tolerance(0.001))
+{
+  auto target1_1 = std::make_shared<TH1F>("histo 1-1", "histo 1-1", bins, min, max);
+  target1_1->Fill(5);
+  target1_1->Fill(5);
+
+  auto target1_2 = std::make_shared<TH1F>("histo 1-2", "histo 1-2", bins, min, max);
+  target1_2->Fill(5);
+  target1_2->Fill(5);
+  target1_2->Fill(5);
+  target1_2->Fill(5);
+
+  VectorOfTObjectPtrs target{target1_1, target1_2};
+
+  auto other1_1 = std::make_shared<TH1F>("histo 1-1", "histo 1-1", bins, min, max);
+  other1_1->Fill(5);
+
+  auto other1_2 = std::make_shared<TH1F>("histo 1-2", "histo 1-2", bins, min, max);
+  other1_2->Fill(5);
+  other1_2->Fill(5);
+
+  VectorOfTObjectPtrs other{other1_1, other1_2};
+
+  BOOST_TEST(target.size() == 2);
+  BOOST_TEST(other.size() == 2);
+
+  BOOST_TEST(to_span(target1_1) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(target1_2) == to_array({0., 0., 0., 0., 0., 0., 4., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_1) == to_array({0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_2) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+
+  BOOST_CHECK_NO_THROW(algorithm::merge(target, other));
+
+  BOOST_TEST(target.size() == 2);
+  BOOST_TEST(other.size() == 2);
+
+  BOOST_TEST(to_span(target1_1) == to_array({0., 0., 0., 0., 0., 0., 3., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(target1_2) == to_array({0., 0., 0., 0., 0., 0., 6., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_1) == to_array({0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_2) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(TargetLonger, *boost::unit_test::tolerance(0.001))
+{
+  auto target1_1 = std::make_shared<TH1F>("histo 1-1", "histo 1-1", bins, min, max);
+  target1_1->Fill(5);
+  target1_1->Fill(5);
+
+  auto target1_2 = std::make_shared<TH1F>("histo 1-2", "histo 1-2", bins, min, max);
+  target1_2->Fill(5);
+  target1_2->Fill(5);
+  target1_2->Fill(5);
+  target1_2->Fill(5);
+
+  VectorOfTObjectPtrs target{target1_1, target1_2};
+
+  auto other1_1 = std::make_shared<TH1F>("histo 1-1", "histo 1-1", bins, min, max);
+  other1_1->Fill(5);
+
+  VectorOfTObjectPtrs other{other1_1};
+
+  BOOST_TEST(target.size() == 2);
+  BOOST_TEST(other.size() == 1);
+
+  BOOST_TEST(to_span(target1_1) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(target1_2) == to_array({0., 0., 0., 0., 0., 0., 4., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_1) == to_array({0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+
+  BOOST_CHECK_NO_THROW(algorithm::merge(target, other));
+
+  BOOST_TEST(target.size() == 2);
+  BOOST_TEST(other.size() == 1);
+
+  BOOST_TEST(to_span(target1_1) == to_array({0., 0., 0., 0., 0., 0., 3., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(target1_2) == to_array({0., 0., 0., 0., 0., 0., 4., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_1) == to_array({0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(OtherLonger, *boost::unit_test::tolerance(0.001))
+{
+  auto target1_1 = std::make_shared<TH1F>("histo 1-1", "histo 1-1", bins, min, max);
+  target1_1->Fill(5);
+  target1_1->Fill(5);
+
+  VectorOfTObjectPtrs target{target1_1};
+
+  auto other1_1 = std::make_shared<TH1F>("histo 1-1", "histo 1-1", bins, min, max);
+  other1_1->Fill(5);
+
+  auto other1_2 = std::make_shared<TH1F>("histo 1-2", "histo 1-2", bins, min, max);
+  other1_2->Fill(5);
+  other1_2->Fill(5);
+
+  VectorOfTObjectPtrs other{other1_1, other1_2};
+
+  BOOST_TEST(target.size() == 1);
+  BOOST_TEST(other.size() == 2);
+
+  BOOST_TEST(std::string_view{target[0]->GetName()} == "histo 1-1");
+
+  BOOST_TEST(to_span(target1_1) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_1) == to_array({0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_2) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+
+  BOOST_CHECK_NO_THROW(algorithm::merge(target, other));
+
+  BOOST_TEST(target.size() == 2);
+  BOOST_TEST(other.size() == 2);
+
+  BOOST_TEST(std::string_view{target[0]->GetName()} == "histo 1-1");
+  BOOST_TEST(std::string_view{target[1]->GetName()} == "histo 1-2");
+
+  BOOST_TEST(to_span(target1_1) == to_array({0., 0., 0., 0., 0., 0., 3., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_1) == to_array({0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+  BOOST_TEST(to_span(other1_2) == to_array({0., 0., 0., 0., 0., 0., 2., 0., 0., 0., 0., 0.}), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_SUITE_END()

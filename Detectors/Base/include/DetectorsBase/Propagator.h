@@ -33,7 +33,8 @@ namespace o2
 namespace parameters
 {
 class GRPObject;
-}
+class GRPMagField;
+} // namespace parameters
 
 namespace dataformats
 {
@@ -44,7 +45,7 @@ namespace field
 {
 class MagFieldFast;
 class MagneticField;
-}
+} // namespace field
 
 namespace gpu
 {
@@ -94,6 +95,10 @@ class PropagatorImpl
     return bzOnly ? propagateToX(track, x, getNominalBz(), maxSnp, maxStep, matCorr, tofInfo, signCorr) : PropagateToXBxByBz(track, x, maxSnp, maxStep, matCorr, tofInfo, signCorr);
   }
 
+  template <typename track_T>
+  GPUd() bool propagateToAlphaX(track_T& track, value_type alpha, value_type x, bool bzOnly = false, value_type maxSnp = MAX_SIN_PHI, value_type maxStep = MAX_STEP, int minSteps = 1,
+                                MatCorrType matCorr = MatCorrType::USEMatCorrLUT, track::TrackLTIntegral* tofInfo = nullptr, int signCorr = 0) const;
+
   GPUd() bool propagateToDCA(const o2::dataformats::VertexBase& vtx, o2::track::TrackParametrizationWithError<value_type>& track, value_type bZ,
                              value_type maxStep = MAX_STEP, MatCorrType matCorr = MatCorrType::USEMatCorrLUT,
                              o2::dataformats::DCA* dcaInfo = nullptr, track::TrackLTIntegral* tofInfo = nullptr,
@@ -120,15 +125,19 @@ class PropagatorImpl
   PropagatorImpl& operator=(PropagatorImpl&&) = delete;
 
   // Bz at the origin
-  GPUd() value_type getNominalBz() const { return mBz; }
-
+  GPUd() void updateField();
+  GPUd() value_type getNominalBz() const { return mNominalBz; }
+  GPUd() void setTGeoFallBackAllowed(bool v) { mTGeoFallBackAllowed = v; }
+  GPUd() bool isTGeoFallBackAllowed() const { return mTGeoFallBackAllowed; }
   GPUd() void setMatLUT(const o2::base::MatLayerCylSet* lut) { mMatLUT = lut; }
   GPUd() const o2::base::MatLayerCylSet* getMatLUT() const { return mMatLUT; }
   GPUd() void setGPUField(const o2::gpu::GPUTPCGMPolynomialField* field) { mGPUField = field; }
   GPUd() const o2::gpu::GPUTPCGMPolynomialField* getGPUField() const { return mGPUField; }
-  GPUd() void setBz(value_type bz) { mBz = bz; }
+  GPUd() void setNominalBz(value_type bz) { mNominalBz = bz; }
+  GPUd() bool hasMagFieldSet() const { return mField != nullptr; }
 
-  GPUd() void estimateLTFast(o2::track::TrackLTIntegral& lt, const o2::track::TrackParametrization<value_type>& trc) const;
+  GPUd() value_type estimateLTFast(o2::track::TrackLTIntegral& lt, const o2::track::TrackParametrization<value_type>& trc) const;
+  GPUd() float estimateLTIncrement(const o2::track::TrackParametrization<value_type>& trc, const o2::math_utils::Point3D<value_type>& postStart, const o2::math_utils::Point3D<value_type>& posEnd) const;
 
 #ifndef GPUCA_GPUCODE
   static PropagatorImpl* Instance(bool uninitialized = false)
@@ -136,9 +145,10 @@ class PropagatorImpl
     static PropagatorImpl instance(uninitialized);
     return &instance;
   }
+  static int initFieldFromGRP(const o2::parameters::GRPMagField* grp, bool verbose = false);
 
   static int initFieldFromGRP(const o2::parameters::GRPObject* grp, bool verbose = false);
-  static int initFieldFromGRP(const std::string grpFileName = "", std::string grpName = "GRP", bool verbose = false);
+  static int initFieldFromGRP(const std::string grpFileName = "", bool verbose = false);
 #endif
 
   GPUd() MatBudget getMatBudget(MatCorrType corrType, const o2::math_utils::Point3D<value_type>& p0, const o2::math_utils::Point3D<value_type>& p1) const;
@@ -152,14 +162,15 @@ class PropagatorImpl
   PropagatorImpl(bool uninitialized = false);
   ~PropagatorImpl() = default;
 #endif
-
+  static constexpr value_type Epsilon = 0.00001; // precision of propagation to X
   template <typename T>
   GPUd() void getFieldXYZImpl(const math_utils::Point3D<T> xyz, T* bxyz) const;
 
   const o2::field::MagFieldFast* mFieldFast = nullptr; ///< External fast field map (barrel only for the moment)
   o2::field::MagneticField* mField = nullptr;          ///< External nominal field map
-  value_type mBz = 0;                                  ///< nominal field
+  value_type mNominalBz = 0;                           ///< nominal field
 
+  bool mTGeoFallBackAllowed = true;                            ///< allow fall back to TGeo if requested MatLUT is not available
   const o2::base::MatLayerCylSet* mMatLUT = nullptr;           // externally set LUT
   const o2::gpu::GPUTPCGMPolynomialField* mGPUField = nullptr; // externally set GPU Field
 
@@ -167,7 +178,7 @@ class PropagatorImpl
 };
 
 using PropagatorF = PropagatorImpl<float>;
-using PropatatorD = PropagatorImpl<double>;
+using PropagatorD = PropagatorImpl<double>;
 using Propagator = PropagatorF;
 
 } // namespace base

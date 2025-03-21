@@ -22,10 +22,12 @@
 #include "EventVisualisationBase/DataReader.h"
 #include "CCDB/BasicCCDBManager.h"
 #include "CCDB/CcdbApi.h"
+#include "TEveCaloData.h"
 
 #include <TEveElement.h>
 #include <TEveEventManager.h>
 #include <TQObject.h>
+#include <TEnv.h>
 
 #include <string>
 
@@ -59,8 +61,8 @@ class EventManager final : public TEveEventManager, public TQObject
 
   DataSource* getDataSource() { return dataSource; }
   void setDataSource(DataSource* dataSource) { this->dataSource = dataSource; }
+  void CurrentEvent();
 
-  void Open() override;
   void GotoEvent(Int_t /*event*/) override;
   void NextEvent() override;
   void PrevEvent() override;
@@ -75,12 +77,34 @@ class EventManager final : public TEveEventManager, public TQObject
 
   void DropEvent();
 
+  bool mShowDate = true;
+  bool getShowDate() const { return mShowDate; }
+  void setShowDate(bool value) { this->mShowDate = value; }
+
  private:
+  struct VizSettings {
+    bool firstEvent;
+    Bool_t trackVisibility[EVisualisationGroup::NvisualisationGroups];
+    Color_t trackColor[EVisualisationGroup::NvisualisationGroups];
+    Style_t trackStyle[EVisualisationGroup::NvisualisationGroups];
+    Width_t trackWidth[EVisualisationGroup::NvisualisationGroups];
+
+    Bool_t clusterVisibility[EVisualisationGroup::NvisualisationGroups];
+    Color_t clusterColor[EVisualisationGroup::NvisualisationGroups];
+    Style_t clusterStyle[EVisualisationGroup::NvisualisationGroups];
+    Size_t clusterSize[EVisualisationGroup::NvisualisationGroups];
+  };
+
+  static constexpr auto TEMP_SETTINGS_PATH = ".o2eve_temp_settings.json";
+
   static EventManager* instance;
   o2::ccdb::CcdbApi ccdbApi;
-  TEveElementList* dataTypeLists[EVisualisationDataType::NdataTypes];
+  TEveElementList* dataTypeLists[EVisualisationDataType::NdataTypes];    // 3D
+  TEveElementList* dataTypeListsPhi[EVisualisationDataType::NdataTypes]; // Phi
   DataSource* dataSource = nullptr;
   TString dataPath = "";
+  TEnv settings;
+  VizSettings vizSettings;
 
   /// Default constructor
   EventManager();
@@ -92,6 +116,9 @@ class EventManager final : public TEveEventManager, public TQObject
   void operator=(EventManager const&) = delete;
 
   void displayVisualisationEvent(VisualisationEvent& event, const std::string& detectorName);
+  void displayCalorimeters(VisualisationEvent& event, const std::string& detectorName);
+  void saveVisualisationSettings();
+  void restoreVisualisationSettings();
 };
 
 } // namespace event_visualisation

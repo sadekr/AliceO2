@@ -25,14 +25,15 @@ int convertRootToCSV(const std::string rootFileName)
   if (f->IsZombie()) {
     throw std::runtime_error("can not open " + rootFileName);
   }
-  auto dsChannelGroup = reinterpret_cast<o2::mch::DsChannelGroup*>(f->Get("ccdb_object"));
-  auto channels = dsChannelGroup->getChannels();
+  auto& tinfo = typeid(std::vector<o2::mch::DsChannelId>*);
+  TClass* cl = TClass::GetClass(tinfo);
+  auto channels = static_cast<std::vector<o2::mch::DsChannelId>*>(f->GetObjectChecked("ccdb_object", cl));
 
   std::cout << fmt::format("solarid,dsid,ch\n");
 
-  for (auto c : channels) {
+  for (auto c : *channels) {
     std::cout << fmt::format("{},{},{}\n",
-                             c.getSolarId(), c.getDsId(), c.getChannel());
+                             c.getSolarId(), c.getElinkId(), c.getChannel());
   }
 
   delete f;
@@ -57,7 +58,7 @@ int main(int argc, char** argv)
 
   if (vm.count("help")) {
     std::cout << R"(
-This program converts a Root file containing bad channels information into the 
+This program converts a Root file containing bad channels information into the
 same information in CSV format.
 
 The output file format is :

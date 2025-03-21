@@ -26,7 +26,6 @@
 #include "DetectorsCommonDataFormats/DetID.h"
 #include "DetectorsBase/CTFCoderBase.h"
 #include "MCHCTF/CTFHelper.h"
-#include "rANS/rans.h"
 
 class TTree;
 
@@ -38,43 +37,67 @@ namespace mch
 class CTFCoder : public o2::ctf::CTFCoderBase
 {
  public:
-  CTFCoder() : o2::ctf::CTFCoderBase(CTF::getNBlocks(), o2::detectors::DetID::MCH) {}
-  ~CTFCoder() = default;
+  CTFCoder(o2::ctf::CTFCoderBase::OpType op) : o2::ctf::CTFCoderBase(op, CTF::getNBlocks(), o2::detectors::DetID::MCH) {}
+  ~CTFCoder() final = default;
 
   /// entropy-encode data to buffer with CTF
   template <typename VEC>
-  void encode(VEC& buff, const gsl::span<const ROFRecord>& rofData, const gsl::span<const Digit>& digData);
+  o2::ctf::CTFIOSize encode(VEC& buff, const gsl::span<const ROFRecord>& rofData, const gsl::span<const Digit>& digData);
 
   /// entropy decode data from buffer with CTF
   template <typename VROF, typename VCOL>
-  void decode(const CTF::base& ec, VROF& rofVec, VCOL& digVec);
+  o2::ctf::CTFIOSize decode(const CTF::base& ec, VROF& rofVec, VCOL& digVec);
 
-  void createCoders(const std::string& dictPath, o2::ctf::CTFCoderBase::OpType op);
+  void createCoders(const std::vector<char>& bufVec, o2::ctf::CTFCoderBase::OpType op) final;
 
  private:
+  template <typename VEC>
+  o2::ctf::CTFIOSize encode_impl(VEC& buff, const gsl::span<const ROFRecord>& rofData, const gsl::span<const Digit>& digData);
   void appendToTree(TTree& tree, CTF& ec);
   void readFromTree(TTree& tree, int entry, std::vector<ROFRecord>& rofVec, std::vector<Digit>& digVec);
+
+  std::vector<ROFRecord> mROFRecFilt;
+  std::vector<Digit> mDigDataFilt;
 };
 
 /// entropy-encode clusters to buffer with CTF
 template <typename VEC>
-void CTFCoder::encode(VEC& buff, const gsl::span<const ROFRecord>& rofData, const gsl::span<const Digit>& digData)
+o2::ctf::CTFIOSize CTFCoder::encode(VEC& buff, const gsl::span<const ROFRecord>& rofData, const gsl::span<const Digit>& digData)
+{
+  if (mIRFrameSelector.isSet()) { // preselect data
+    mROFRecFilt.clear();
+    mDigDataFilt.clear();
+    for (const auto& rof : rofData) {
+      if (mIRFrameSelector.check(rof.getBCData()) >= 0) {
+        mROFRecFilt.push_back(rof);
+        auto digIt = digData.begin() + rof.getFirstIdx();
+        auto& rofC = mROFRecFilt.back();
+        rofC.setDataRef((int)mDigDataFilt.size(), rof.getNEntries());
+        std::copy(digIt, digIt + rofC.getNEntries(), std::back_inserter(mDigDataFilt));
+      }
+    }
+    return encode_impl(buff, mROFRecFilt, mDigDataFilt);
+  }
+  return encode_impl(buff, rofData, digData);
+}
+
+template <typename VEC>
+o2::ctf::CTFIOSize CTFCoder::encode_impl(VEC& buff, const gsl::span<const ROFRecord>& rofData, const gsl::span<const Digit>& digData)
 {
   using MD = o2::ctf::Metadata::OptStore;
   // what to do which each field: see o2::ctd::Metadata explanation
   constexpr MD optField[CTF::getNBlocks()] = {
-    MD::EENCODE, // BLC_bcIncROF
-    MD::EENCODE, // BLC_orbitIncROF
-    MD::EENCODE, // BLC_nDigitsROF
-    MD::EENCODE, // BLC_tfTime
-    MD::EENCODE, // BLC_nSamples
-    MD::EENCODE, // BLC_isSaturated
-    MD::EENCODE, // BLC_detID
-    MD::EENCODE, // BLC_padID
-    MD::EENCODE  // BLC_ADC
+    MD::EENCODE_OR_PACK, // BLC_bcIncROF
+    MD::EENCODE_OR_PACK, // BLC_orbitIncROF
+    MD::EENCODE_OR_PACK, // BLC_nDigitsROF
+    MD::EENCODE_OR_PACK, // BLC_tfTime
+    MD::EENCODE_OR_PACK, // BLC_nSamples
+    MD::EENCODE_OR_PACK, // BLC_isSaturated
+    MD::EENCODE_OR_PACK, // BLC_detID
+    MD::EENCODE_OR_PACK, // BLC_padID
+    MD::EENCODE_OR_PACK  // BLC_ADC
   };
   CTFHelper helper(rofData, digData);
-
   // book output size with some margin
   auto szIni = sizeof(CTFHeader) + helper.getSize() * 2. / 3; // will be autoexpanded if needed
   buff.resize(szIni);
@@ -84,51 +107,56 @@ void CTFCoder::encode(VEC& buff, const gsl::span<const ROFRecord>& rofData, cons
 
   ec->setHeader(helper.createHeader());
   assignDictVersion(static_cast<o2::ctf::CTFDictHeader&>(ec->getHeader()));
-  ec->getANSHeader().majorVersion = 0;
-  ec->getANSHeader().minorVersion = 1;
+  ec->setANSHeader(mANSVersion);
   // at every encoding the buffer might be autoexpanded, so we don't work with fixed pointer ec
-#define ENCODEMCH(beg, end, slot, bits) CTF::get(buff.data())->encode(beg, end, int(slot), bits, optField[int(slot)], &buff, mCoders[int(slot)].get(), getMemMarginFactor());
+  o2::ctf::CTFIOSize iosize;
+#define ENCODEMCH(beg, end, slot, bits) CTF::get(buff.data())->encode(beg, end, int(slot), bits, optField[int(slot)], &buff, mCoders[int(slot)], getMemMarginFactor());
   // clang-format off
-  ENCODEMCH(helper.begin_bcIncROF(),    helper.end_bcIncROF(),     CTF::BLC_bcIncROF,     0);
-  ENCODEMCH(helper.begin_orbitIncROF(), helper.end_orbitIncROF(),  CTF::BLC_orbitIncROF,  0);
-  ENCODEMCH(helper.begin_nDigitsROF(),  helper.end_nDigitsROF(),   CTF::BLC_nDigitsROF,   0);
+  iosize += ENCODEMCH(helper.begin_bcIncROF(),    helper.end_bcIncROF(),     CTF::BLC_bcIncROF,     0);
+  iosize += ENCODEMCH(helper.begin_orbitIncROF(), helper.end_orbitIncROF(),  CTF::BLC_orbitIncROF,  0);
+  iosize += ENCODEMCH(helper.begin_nDigitsROF(),  helper.end_nDigitsROF(),   CTF::BLC_nDigitsROF,   0);
 
-  ENCODEMCH(helper.begin_tfTime(),      helper.end_tfTime(),       CTF::BLC_tfTime,       0);
-  ENCODEMCH(helper.begin_nSamples(),    helper.end_nSamples(),     CTF::BLC_nSamples,     0);
-  ENCODEMCH(helper.begin_isSaturated(), helper.end_isSaturated(),  CTF::BLC_isSaturated,  0);
-  ENCODEMCH(helper.begin_detID(),       helper.end_detID(),        CTF::BLC_detID,        0);
-  ENCODEMCH(helper.begin_padID(),       helper.end_padID(),        CTF::BLC_padID,        0);
-  ENCODEMCH(helper.begin_ADC()  ,       helper.end_ADC(),          CTF::BLC_ADC,          0);
+  iosize += ENCODEMCH(helper.begin_tfTime(),      helper.end_tfTime(),       CTF::BLC_tfTime,       0);
+  iosize += ENCODEMCH(helper.begin_nSamples(),    helper.end_nSamples(),     CTF::BLC_nSamples,     0);
+  iosize += ENCODEMCH(helper.begin_isSaturated(), helper.end_isSaturated(),  CTF::BLC_isSaturated,  0);
+  iosize += ENCODEMCH(helper.begin_detID(),       helper.end_detID(),        CTF::BLC_detID,        0);
+  iosize += ENCODEMCH(helper.begin_padID(),       helper.end_padID(),        CTF::BLC_padID,        0);
+  iosize += ENCODEMCH(helper.begin_ADC()  ,       helper.end_ADC(),          CTF::BLC_ADC,          0);
   // clang-format on
-  //  CTF::get(buff.data())->print(getPrefix());
+  CTF::get(buff.data())->print(getPrefix(), mVerbosity);
+  finaliseCTFOutput<CTF>(buff);
+  iosize.rawIn = sizeof(ROFRecord) * rofData.size() + sizeof(Digit) * digData.size();
+  return iosize;
 }
 
 /// decode entropy-encoded clusters to standard compact clusters
 template <typename VROF, typename VCOL>
-void CTFCoder::decode(const CTF::base& ec, VROF& rofVec, VCOL& digVec)
+o2::ctf::CTFIOSize CTFCoder::decode(const CTF::base& ec, VROF& rofVec, VCOL& digVec)
 {
   auto header = ec.getHeader();
   checkDictVersion(static_cast<const o2::ctf::CTFDictHeader&>(header));
-  ec.print(getPrefix());
+  ec.print(getPrefix(), mVerbosity);
 
-  std::vector<uint16_t> bcInc, nSamples;
-  std::vector<uint32_t> orbitInc, ADC, nDigits;
+  std::vector<uint16_t> nSamples;
+  std::vector<uint32_t> ADC, nDigits;
+  std::vector<int32_t> orbitInc;
   std::vector<int32_t> tfTime;
-  std::vector<int16_t> detID, padID;
+  std::vector<int16_t> bcInc, detID, padID;
   std::vector<uint8_t> isSaturated;
 
-#define DECODEMCH(part, slot) ec.decode(part, int(slot), mCoders[int(slot)].get())
+  o2::ctf::CTFIOSize iosize;
+#define DECODEMCH(part, slot) ec.decode(part, int(slot), mCoders[int(slot)])
   // clang-format off
-  DECODEMCH(bcInc,       CTF::BLC_bcIncROF);
-  DECODEMCH(orbitInc,    CTF::BLC_orbitIncROF);
-  DECODEMCH(nDigits,     CTF::BLC_nDigitsROF);
+  iosize += DECODEMCH(bcInc,       CTF::BLC_bcIncROF);
+  iosize += DECODEMCH(orbitInc,    CTF::BLC_orbitIncROF);
+  iosize += DECODEMCH(nDigits,     CTF::BLC_nDigitsROF);
 
-  DECODEMCH(tfTime,      CTF::BLC_tfTime);
-  DECODEMCH(nSamples,    CTF::BLC_nSamples);
-  DECODEMCH(isSaturated, CTF::BLC_isSaturated);
-  DECODEMCH(detID,       CTF::BLC_detID);
-  DECODEMCH(padID,       CTF::BLC_padID);
-  DECODEMCH(ADC,         CTF::BLC_ADC);
+  iosize += DECODEMCH(tfTime,      CTF::BLC_tfTime);
+  iosize += DECODEMCH(nSamples,    CTF::BLC_nSamples);
+  iosize += DECODEMCH(isSaturated, CTF::BLC_isSaturated);
+  iosize += DECODEMCH(detID,       CTF::BLC_detID);
+  iosize += DECODEMCH(padID,       CTF::BLC_padID);
+  iosize += DECODEMCH(ADC,         CTF::BLC_ADC);
   // clang-format on
   //
   rofVec.clear();
@@ -158,6 +186,8 @@ void CTFCoder::decode(const CTF::base& ec, VROF& rofVec, VCOL& digVec)
   }
   assert(rofVec.size() == header.nROFs);
   assert(digCount == header.nDigits);
+  iosize.rawIn = sizeof(ROFRecord) * rofVec.size() + sizeof(Digit) * digVec.size();
+  return iosize;
 }
 
 } // namespace mch

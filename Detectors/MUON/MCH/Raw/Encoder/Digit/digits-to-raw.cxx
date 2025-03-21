@@ -11,7 +11,7 @@
 
 #include "CommonDataFormat/InteractionRecord.h"
 #include "DataFormatsMCH/Digit.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DigitTreeReader.h"
 #include "Framework/Logger.h"
 #include "MCHRawEncoderDigit/DigitRawEncoder.h"
@@ -55,7 +55,7 @@ int main(int argc, char* argv[])
       ("userLogic,u",po::bool_switch()->default_value(true),"user logic format")
       ("dummy-elecmap,d",po::bool_switch()->default_value(false),"use a dummy electronic mapping (for testing only, to be removed at some point)")
       ("output-dir,o",po::value<std::string>()->default_value("./"),"output directory for file(s)")
-      ("file-for,f", po::value<std::string>()->default_value("all"), "output one file (file-for=all), per link (file-for=link) or per cru end point (file-for=cru)")
+      ("file-for,f", po::value<std::string>()->default_value("all"), "output one file (file-for=all), per link (file-for=link) or per cru end point (file-for=cruendpoint)")
       ("input-file,i",po::value<std::string>(&input)->default_value("mchdigits.root"),"input file name")
       ("configKeyValues", po::value<std::string>()->default_value(""), "comma-separated configKeyValues")
       ("no-empty-hbf,e", po::value<bool>()->default_value(false), "do not create empty HBF pages (except for HBF starting TF)")
@@ -87,7 +87,7 @@ int main(int argc, char* argv[])
   // first things first : check the input path actually exists
   std::ifstream in(input);
   if (!in) {
-    LOGF(FATAL, "could not open input file {}", input);
+    LOGF(fatal, "could not open input file {}", input);
     exit(2);
   }
 
@@ -108,7 +108,7 @@ int main(int argc, char* argv[])
   auto fileFor = vm["file-for"].as<std::string>();
   if (fileFor == "link") {
     opts.splitMode = OutputSplit::PerLink;
-  } else if (fileFor == "cru") {
+  } else if (fileFor == "cruendpoint") {
     opts.splitMode = OutputSplit::PerCruEndpoint;
   } else if (fileFor == "all") {
     opts.splitMode = OutputSplit::None;
@@ -137,7 +137,8 @@ int main(int argc, char* argv[])
 
   // here we implicitely assume that this digits-to-raw is only called for
   // one timeframe so it's easy to detect the TF start...
-  uint32_t firstOrbitOfRun = o2::raw::HBFUtils::Instance().orbitFirst;
+  // RS: why do you need such assumption? In general, it is not correct
+  uint32_t firstOrbitOfRun = o2::raw::HBFUtils::Instance().getFirstSampledTFIR().orbit; // RS note that this is not anymore 1st orbit of the run but of the 1st filled TF
   auto dsElecIds = opts.dummyElecMap ? getAllDs<ElectronicMapperDummy>() : getAllDs<ElectronicMapperGenerated>();
   dre.addHeartbeats(dsElecIds, firstOrbitOfRun);
 

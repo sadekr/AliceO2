@@ -24,6 +24,10 @@
 
 namespace o2
 {
+namespace utils
+{
+class IRFrameSelector;
+}
 namespace mid
 {
 
@@ -37,7 +41,7 @@ class CTFHelper
     std::vector<OrderRef> rofDataRefs{};
     std::array<gsl::span<const o2::mid::ColumnData>, NEvTypes> colData{};
     std::array<gsl::span<const o2::mid::ROFRecord>, NEvTypes> rofData{};
-    void buildReferences();
+    void buildReferences(o2::utils::IRFrameSelector& irSelector);
   };
 
   CTFHelper(const TFData& data) : mTFData(data) {}
@@ -45,7 +49,7 @@ class CTFHelper
 
   CTFHeader createHeader()
   {
-    CTFHeader h{0, 1, 0, // dummy timestamp, version 1.0
+    CTFHeader h{o2::detectors::DetID::MID, 0, 1, 0, // dummy timestamp, version 1.0
                 uint32_t(mTFData.rofDataRefs.size()), uint32_t(mTFData.colDataRefs.size()), 0, 0};
     if (h.nROFs) {
       auto id0 = mTFData.rofDataRefs.front();
@@ -64,7 +68,7 @@ class CTFHelper
   class _Iter
   {
    public:
-    using difference_type = int64_t;
+    using difference_type = std::ptrdiff_t;
     using value_type = T;
     using pointer = const T*;
     using reference = const T&;
@@ -73,55 +77,103 @@ class CTFHelper
     _Iter(const std::vector<OrderRef>& ord, const std::array<gsl::span<const D>, NEvTypes>& data, bool end = false) : mOrder(ord), mData(&data), mIndex(end ? M * ord.size() : 0) {}
     _Iter() = default;
 
-    const I& operator++()
+    inline I& operator++() noexcept
     {
       ++mIndex;
-      return (I&)(*this);
+      return static_cast<I&>(*this);
     }
 
-    const I& operator--()
+    inline I operator++(int)
+    {
+      I res = *(static_cast<I*>(this));
+      ++mIndex;
+      return res;
+    }
+
+    inline I& operator--() noexcept
     {
       mIndex--;
-      return (I&)(*this);
+      return static_cast<I&>(*this);
     }
 
-    difference_type operator-(const I& other) const { return mIndex - other.mIndex; }
-
-    difference_type operator-(size_t idx) const { return mIndex - idx; }
-
-    const I& operator-(size_t idx)
+    inline I operator--(int)
     {
-      mIndex -= idx;
-      return (I&)(*this);
+      I res = *(static_cast<I*>(this));
+      --mIndex;
+      return res;
     }
 
-    bool operator!=(const I& other) const { return mIndex != other.mIndex; }
-    bool operator==(const I& other) const { return mIndex == other.mIndex; }
-    bool operator>(const I& other) const { return mIndex > other.mIndex; }
-    bool operator<(const I& other) const { return mIndex < other.mIndex; }
+    I& operator+=(difference_type i) noexcept
+    {
+      mIndex += i;
+      return static_cast<I&>(*this);
+    }
+
+    I operator+(difference_type i) const
+    {
+      I res = *(const_cast<I*>(static_cast<const I*>(this)));
+      return res += i;
+    }
+
+    I& operator-=(difference_type i) noexcept
+    {
+      mIndex -= i;
+      return static_cast<I&>(*this);
+    }
+
+    I operator-(difference_type i) const
+    {
+      I res = *(const_cast<I*>(static_cast<const I*>(this)));
+      return res -= i;
+    }
+
+    difference_type operator-(const I& other) const noexcept { return mIndex - other.mIndex; }
+
+    inline friend I operator+(difference_type i, const I& iter) { return iter + i; };
+
+    bool operator!=(const I& other) const noexcept { return mIndex != other.mIndex; }
+    bool operator==(const I& other) const noexcept { return mIndex == other.mIndex; }
+    bool operator>(const I& other) const noexcept { return mIndex > other.mIndex; }
+    bool operator<(const I& other) const noexcept { return mIndex < other.mIndex; }
+    bool operator>=(const I& other) const noexcept { return mIndex >= other.mIndex; }
+    bool operator<=(const I& other) const noexcept { return mIndex <= other.mIndex; }
 
    protected:
     gsl::span<const OrderRef> mOrder{};
     const std::array<gsl::span<const D>, NEvTypes>* mData{};
-    size_t mIndex = 0;
+    difference_type mIndex = 0;
   };
 
   //_______________________________________________
   // BC difference wrt previous if in the same orbit, otherwise the abs.value.
   // For the very 1st entry return 0 (diff wrt 1st BC in the CTF header)
-  class Iter_bcIncROF : public _Iter<Iter_bcIncROF, ROFRecord, uint16_t>
+  class Iter_bcIncROF : public _Iter<Iter_bcIncROF, ROFRecord, int16_t>
   {
    public:
-    using _Iter<Iter_bcIncROF, ROFRecord, uint16_t>::_Iter;
+    using _Iter<Iter_bcIncROF, ROFRecord, int16_t>::_Iter;
     value_type operator*() const
     {
       const auto ir = (*mData)[mOrder[mIndex].getSource()][mOrder[mIndex].getIndex()].interactionRecord;
       if (mIndex) {
         const auto irP = (*mData)[mOrder[mIndex - 1].getSource()][mOrder[mIndex - 1].getIndex()].interactionRecord;
         if (ir.orbit == irP.orbit) {
-          return ir.bc - irP.bc;
+          return value_type(ir.bc - irP.bc);
         } else {
-          return ir.bc;
+          return value_type(ir.bc);
+        }
+      }
+      return 0;
+    }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      const auto ir = (*mData)[mOrder[id].getSource()][mOrder[id].getIndex()].interactionRecord;
+      if (id) {
+        const auto irP = (*mData)[mOrder[id - 1].getSource()][mOrder[id - 1].getIndex()].interactionRecord;
+        if (ir.orbit == irP.orbit) {
+          return value_type(ir.bc - irP.bc);
+        } else {
+          return value_type(ir.bc);
         }
       }
       return 0;
@@ -130,16 +182,26 @@ class CTFHelper
 
   //_______________________________________________
   // Orbit difference wrt previous. For the very 1st entry return 0 (diff wrt 1st BC in the CTF header)
-  class Iter_orbitIncROF : public _Iter<Iter_orbitIncROF, ROFRecord, uint32_t>
+  class Iter_orbitIncROF : public _Iter<Iter_orbitIncROF, ROFRecord, int32_t>
   {
    public:
-    using _Iter<Iter_orbitIncROF, ROFRecord, uint32_t>::_Iter;
+    using _Iter<Iter_orbitIncROF, ROFRecord, int32_t>::_Iter;
     value_type operator*() const
     {
       if (mIndex) {
         const auto ir = (*mData)[mOrder[mIndex].getSource()][mOrder[mIndex].getIndex()].interactionRecord;
         const auto irP = (*mData)[mOrder[mIndex - 1].getSource()][mOrder[mIndex - 1].getIndex()].interactionRecord;
-        return ir.orbit - irP.orbit;
+        return value_type(ir.orbit - irP.orbit);
+      }
+      return 0;
+    }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      if (id) {
+        const auto ir = (*mData)[mOrder[id].getSource()][mOrder[id].getIndex()].interactionRecord;
+        const auto irP = (*mData)[mOrder[id - 1].getSource()][mOrder[id - 1].getIndex()].interactionRecord;
+        return value_type(ir.orbit - irP.orbit);
       }
       return 0;
     }
@@ -152,6 +214,11 @@ class CTFHelper
    public:
     using _Iter<Iter_entriesROF, ROFRecord, uint16_t>::_Iter;
     value_type operator*() const { return (*mData)[mOrder[mIndex].getSource()][mOrder[mIndex].getIndex()].nEntries; }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      return (*mData)[mOrder[id].getSource()][mOrder[id].getIndex()].nEntries;
+    }
   };
 
   //_______________________________________________
@@ -161,6 +228,11 @@ class CTFHelper
    public:
     using _Iter<Iter_evtypeROF, ROFRecord, uint8_t>::_Iter;
     value_type operator*() const { return value_type((*mData)[mOrder[mIndex].getSource()][mOrder[mIndex].getIndex()].eventType); }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      return value_type((*mData)[mOrder[id].getSource()][mOrder[id].getIndex()].eventType);
+    }
   };
 
   //_______________________________________________
@@ -172,6 +244,12 @@ class CTFHelper
     {
       auto idx = mOrder[mIndex / 5];
       return (*mData)[idx.getSource()][idx.getIndex()].patterns[mIndex % 5];
+    }
+    value_type operator[](difference_type i) const
+    {
+      size_t id = mIndex + i;
+      auto idx = mOrder[id / 5];
+      return (*mData)[idx.getSource()][idx.getIndex()].patterns[id % 5];
     }
   };
 
@@ -185,6 +263,11 @@ class CTFHelper
       auto idx = mOrder[mIndex];
       return (*mData)[idx.getSource()][idx.getIndex()].deId;
     }
+    value_type operator[](difference_type i) const
+    {
+      auto idx = mOrder[mIndex + i];
+      return (*mData)[idx.getSource()][idx.getIndex()].deId;
+    }
   };
 
   //_______________________________________________
@@ -195,6 +278,11 @@ class CTFHelper
     value_type operator*() const
     {
       auto idx = mOrder[mIndex];
+      return (*mData)[idx.getSource()][idx.getIndex()].columnId;
+    }
+    value_type operator[](difference_type i) const
+    {
+      auto idx = mOrder[mIndex + i];
       return (*mData)[idx.getSource()][idx.getIndex()].columnId;
     }
   };

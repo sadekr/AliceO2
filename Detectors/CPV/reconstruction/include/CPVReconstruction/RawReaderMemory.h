@@ -31,6 +31,7 @@ enum RawErrorType_t {
   kNOT_CPV_RDH,
   kSTOPBIT_NOTFOUND,
   kPAGE_NOTFOUND,
+  kOFFSET_TO_NEXT_IS_0,
   kPAYLOAD_INCOMPLETE,
   kNO_CPVHEADER,
   kNO_CPVTRAILER,
@@ -41,7 +42,8 @@ enum RawErrorType_t {
   kEOE_HEADER_ERROR,
   kPADERROR,
   kUNKNOWN_WORD,
-  kPadAddress
+  kPadAddress,
+  kWRONG_DATAFORMAT
 };
 
 /// \class RawReaderMemory
@@ -50,7 +52,7 @@ enum RawErrorType_t {
 /// \author Dmitri Peresunko after Markus Fasel
 /// \since Sept. 25, 2020
 ///
-///It reads one HBF, stores HBF orbit number in getCurrentHBFOrbit() and produces digits in AddressChargeBC format
+/// It reads one HBF, stores HBF orbit number in getCurrentHBFOrbit() and produces digits in AddressChargeBC format
 class RawReaderMemory
 {
  public:
@@ -102,6 +104,10 @@ class RawReaderMemory
   /// \return HeartBeatFrame orbit number
   uint32_t getCurrentHBFOrbit() const { return mCurrentHBFOrbit; }
 
+  /// \brief get data format from RDH
+  /// \return data format read from RDH (0x0 for RDH version < 7)
+  uint8_t getDataFormat() const { return mDataFormat; }
+
  protected:
   /// \brief Initialize the raw stream
   ///
@@ -114,12 +120,13 @@ class RawReaderMemory
   gsl::span<const char> mRawMemoryBuffer; ///< Memory block with multiple DMA pages
   o2::header::RDHAny mRawHeader;          ///< Raw header
   std::vector<char> mRawPayload;          ///< Raw payload (can consist of multiple pages)
-  int mCurrentPosition = 0;               ///< Current page in file
+  unsigned int mCurrentPosition = 0;      ///< Current page in file
   bool mRawHeaderInitialized = false;     ///< RDH for current page initialized
   bool mPayloadInitialized = false;       ///< Payload for current page initialized
   uint32_t mCurrentHBFOrbit = 0;          ///< Current orbit of HBF
   bool mStopBitWasNotFound;               ///< True if StopBit was not found but HBF orbit changed
   bool mIsJustInited = false;             ///< True if init() was just called
+  uint8_t mDataFormat = 0x0;              ///< Data format (read from RDH version >= 7)
 
   ClassDefNV(RawReaderMemory, 2);
 };

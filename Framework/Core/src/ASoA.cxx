@@ -17,13 +17,59 @@
 
 namespace o2::soa
 {
+void accessingInvalidIndexFor(const char* getter)
+{
+  throw o2::framework::runtime_error_f("Accessing invalid index for %s", getter);
+}
+void dereferenceWithWrongType(const char* getter, const char* target)
+{
+  throw o2::framework::runtime_error_f("Trying to dereference index with a wrong type in %s_as<T> for base target \"%s\". Note that if you have several compatible index targets in your process() signature, the last one will be the one actually bound.", getter, target);
+}
+void missingFilterDeclaration(int hash, int ai)
+{
+  throw o2::framework::runtime_error_f("Null selection for %d (arg %d), missing Filter declaration?", hash, ai);
+}
+
+void getterNotFound(const char* targetColumnLabel)
+{
+  throw o2::framework::runtime_error_f("Getter for \"%s\" not found", targetColumnLabel);
+}
+
+void emptyColumnLabel()
+{
+  throw framework::runtime_error("columnLabel: must not be empty");
+}
+
+SelectionVector selectionToVector(gandiva::Selection const& sel)
+{
+  SelectionVector rows;
+  rows.resize(sel->GetNumSlots());
+  for (auto i = 0; i < sel->GetNumSlots(); ++i) {
+    rows[i] = sel->GetIndex(i);
+  }
+  return rows;
+}
+
+SelectionVector sliceSelection(gsl::span<int64_t const> const& mSelectedRows, int64_t nrows, uint64_t offset)
+{
+  auto start = offset;
+  auto end = start + nrows;
+  auto start_iterator = std::lower_bound(mSelectedRows.begin(), mSelectedRows.end(), start);
+  auto stop_iterator = std::lower_bound(start_iterator, mSelectedRows.end(), end);
+  SelectionVector slicedSelection{start_iterator, stop_iterator};
+  std::transform(slicedSelection.begin(), slicedSelection.end(), slicedSelection.begin(),
+                 [&start](int64_t idx) {
+                   return idx - static_cast<int64_t>(start);
+                 });
+  return slicedSelection;
+}
 
 std::shared_ptr<arrow::Table> ArrowHelpers::joinTables(std::vector<std::shared_ptr<arrow::Table>>&& tables)
 {
   if (tables.size() == 1) {
     return tables[0];
   }
-  for (auto i = 0u; i < tables.size() - 1; ++i) {
+  for (auto i = 0U; i < tables.size() - 1; ++i) {
     if (tables[i]->num_rows() != tables[i + 1]->num_rows()) {
       throw o2::framework::runtime_error_f("Tables %s and %s have different sizes (%d vs %d) and cannot be joined!",
                                            tables[i]->schema()->metadata()->Get("label").ValueOrDie().c_str(),
@@ -91,35 +137,91 @@ std::shared_ptr<arrow::Table> ArrowHelpers::concatTables(std::vector<std::shared
   return result;
 }
 
-arrow::ChunkedArray* getIndexFromLabel(arrow::Table* table, const char* label)
+arrow::ChunkedArray* getIndexFromLabel(arrow::Table* table, std::string_view label)
 {
-  auto index = table->schema()->GetAllFieldIndices(label);
-  if (index.empty() == true) {
+  auto field = std::find_if(table->schema()->fields().begin(), table->schema()->fields().end(), [&](std::shared_ptr<arrow::Field> const& f) {
+    auto caseInsensitiveCompare = [](const std::string_view& str1, const std::string& str2) {
+      return std::ranges::equal(
+        str1, str2,
+        [](char c1, char c2) {
+          return std::tolower(static_cast<unsigned char>(c1)) ==
+                 std::tolower(static_cast<unsigned char>(c2));
+        });
+    };
+
+    return caseInsensitiveCompare(label, f->name());
+  });
+  if (field == table->schema()->fields().end()) {
     o2::framework::throw_error(o2::framework::runtime_error_f("Unable to find column with label %s", label));
   }
-  return table->column(index[0]).get();
+  auto index = std::distance(table->schema()->fields().begin(), field);
+  return table->column(index).get();
 }
 
-arrow::Status getSliceFor(int value, char const* key, std::shared_ptr<arrow::Table> const& input, std::shared_ptr<arrow::Table>& output, uint64_t& offset)
+void notBoundTable(const char* tableName)
 {
-  arrow::Datum value_counts;
-  auto options = arrow::compute::ScalarAggregateOptions::Defaults();
-  ARROW_ASSIGN_OR_RAISE(value_counts,
-                        arrow::compute::CallFunction("value_counts", {input->GetColumnByName(key)},
-                                                     &options));
-  auto pair = static_cast<arrow::StructArray>(value_counts.array());
-  auto values = static_cast<arrow::NumericArray<arrow::Int32Type>>(pair.field(0)->data());
-  auto counts = static_cast<arrow::NumericArray<arrow::Int64Type>>(pair.field(1)->data());
+  throw o2::framework::runtime_error_f("Index pointing to %s is not bound! Did you subscribe to the table?", tableName);
+}
 
-  for (auto slice = 0; slice < values.length(); ++slice) {
-    if (values.Value(slice) == value) {
-      output = input->Slice(offset, counts.Value(slice));
-      return arrow::Status::OK();
-    }
-    offset += counts.Value(slice);
-  }
-  output = input->Slice(offset, 0);
-  return arrow::Status::OK();
+void notFoundColumn(const char* label, const char* key)
+{
+  throw o2::framework::runtime_error_f(R"(Preslice not valid: table "%s" (or join based on it) does not have column "%s")", label, key);
+}
+
+void missingOptionalPreslice(const char* label, const char* key)
+{
+  throw o2::framework::runtime_error_f(R"(Optional Preslice with missing binding used: table "%s" (or join based on it) does not have column "%s")", label, key);
 }
 
 } // namespace o2::soa
+
+namespace o2::framework
+{
+std::string cutString(std::string&& str)
+{
+  auto pos = str.find('_');
+  if (pos != std::string::npos) {
+    str.erase(pos);
+  }
+  return str;
+}
+
+std::string strToUpper(std::string&& str)
+{
+  std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c) { return std::toupper(c); });
+  return str;
+}
+
+bool PreslicePolicyBase::isMissing() const
+{
+  return binding == "[MISSING]";
+}
+
+StringPair const& PreslicePolicyBase::getBindingKey() const
+{
+  return bindingKey;
+}
+
+void PreslicePolicySorted::updateSliceInfo(SliceInfoPtr&& si)
+{
+  sliceInfo = si;
+}
+
+void PreslicePolicyGeneral::updateSliceInfo(SliceInfoUnsortedPtr&& si)
+{
+  sliceInfo = si;
+}
+
+std::shared_ptr<arrow::Table> PreslicePolicySorted::getSliceFor(int value, std::shared_ptr<arrow::Table> const& input, uint64_t& offset) const
+{
+  auto [offset_, count] = this->sliceInfo.getSliceFor(value);
+  auto output = input->Slice(offset_, count);
+  offset = static_cast<int64_t>(offset_);
+  return output;
+}
+
+gsl::span<const int64_t> PreslicePolicyGeneral::getSliceFor(int value) const
+{
+  return this->sliceInfo.getSliceFor(value);
+}
+} // namespace o2::framework

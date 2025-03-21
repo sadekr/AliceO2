@@ -10,57 +10,29 @@
 // or submit itself to any jurisdiction.
 #include "Framework/Variant.h"
 #include "Framework/VariantPropertyTreeHelpers.h"
+#include "Framework/VariantJSONHelpers.h"
 #include <iostream>
 #include <sstream>
 
 namespace o2::framework
 {
-
-namespace
-{
-template <typename T>
-void printArray(std::ostream& oss, T* array, size_t size)
-{
-  oss << variant_array_symbol<T>::symbol << "[";
-  oss << array[0];
-  for (auto i = 1U; i < size; ++i) {
-    oss << ", " << array[i];
-  }
-  oss << "]";
-}
-
-template <typename T>
-void printMatrix(std::ostream& oss, Array2D<T> const& m)
-{
-  oss << variant_array_symbol<T>::symbol << "[[";
-  oss << m(0, 0);
-  for (auto j = 1U; j < m.cols; ++j) {
-    oss << ", " << m(0, j);
-  }
-  oss << "]";
-  for (auto i = 1U; i < m.rows; ++i) {
-    oss << ", [";
-    oss << m(i, 0);
-    for (auto j = 1U; j < m.cols; ++j) {
-      oss << ", " << m(i, j);
-    }
-    oss << "]";
-  }
-  oss << "]";
-}
-} // namespace
-
 std::ostream& operator<<(std::ostream& oss, Variant const& val)
 {
   switch (val.type()) {
     case VariantType::Int:
       oss << val.get<int>();
       break;
+    case VariantType::Int8:
+      oss << (int)val.get<int8_t>();
+      break;
+    case VariantType::Int16:
+      oss << (int)val.get<int16_t>();
+      break;
     case VariantType::UInt8:
-      oss << val.get<uint8_t>();
+      oss << (int)val.get<uint8_t>();
       break;
     case VariantType::UInt16:
-      oss << val.get<uint16_t>();
+      oss << (int)val.get<uint16_t>();
       break;
     case VariantType::UInt32:
       oss << val.get<uint32_t>();
@@ -84,30 +56,19 @@ std::ostream& operator<<(std::ostream& oss, Variant const& val)
       oss << val.get<bool>();
       break;
     case VariantType::ArrayInt:
-      printArray<int>(oss, val.get<int*>(), val.size());
-      break;
     case VariantType::ArrayFloat:
-      printArray<float>(oss, val.get<float*>(), val.size());
-      break;
     case VariantType::ArrayDouble:
-      printArray<double>(oss, val.get<double*>(), val.size());
-      break;
     case VariantType::ArrayBool:
-      printArray<bool>(oss, val.get<bool*>(), val.size());
-      break;
     case VariantType::ArrayString:
-      printArray<std::string>(oss, val.get<std::string*>(), val.size());
-      break;
     case VariantType::Array2DInt:
-      printMatrix<int>(oss, val.get<Array2D<int>>());
-      break;
     case VariantType::Array2DFloat:
-      printMatrix<float>(oss, val.get<Array2D<float>>());
-      break;
     case VariantType::Array2DDouble:
-      printMatrix<double>(oss, val.get<Array2D<double>>());
+      VariantJSONHelpers::write(oss, val);
       break;
     case VariantType::Empty:
+      break;
+    case VariantType::Dict:
+      oss << "{}";
       break;
     default:
       oss << "undefined";
@@ -130,27 +91,27 @@ Variant::Variant(const Variant& other) : mType(other.mType)
   switch (mType) {
     case variant_trait_v<const char*>:
       mSize = other.mSize;
-      variant_helper<storage_t, const char*>::set(&mStore, other.get<const char*>());
+      variant_helper<const char*>::set(&mStore, other.get<const char*>());
       return;
     case variant_trait_v<int*>:
       mSize = other.mSize;
-      variant_helper<storage_t, int*>::set(&mStore, other.get<int*>(), mSize);
+      variant_helper<int*>::set(&mStore, other.get<int*>(), mSize);
       return;
     case variant_trait_v<float*>:
       mSize = other.mSize;
-      variant_helper<storage_t, float*>::set(&mStore, other.get<float*>(), mSize);
+      variant_helper<float*>::set(&mStore, other.get<float*>(), mSize);
       return;
     case variant_trait_v<double*>:
       mSize = other.mSize;
-      variant_helper<storage_t, double*>::set(&mStore, other.get<double*>(), mSize);
+      variant_helper<double*>::set(&mStore, other.get<double*>(), mSize);
       return;
     case variant_trait_v<bool*>:
       mSize = other.mSize;
-      variant_helper<storage_t, bool*>::set(&mStore, other.get<bool*>(), mSize);
+      variant_helper<bool*>::set(&mStore, other.get<bool*>(), mSize);
       return;
     case variant_trait_v<std::string*>:
       mSize = other.mSize;
-      variant_helper<storage_t, std::string*>::set(&mStore, other.get<std::string*>(), mSize);
+      variant_helper<std::string*>::set(&mStore, other.get<std::string*>(), mSize);
       return;
     default:
       mStore = other.mStore;
@@ -211,22 +172,22 @@ Variant& Variant::operator=(const Variant& other)
   mType = other.mType;
   switch (mType) {
     case variant_trait_v<const char*>:
-      variant_helper<storage_t, const char*>::set(&mStore, other.get<const char*>());
+      variant_helper<const char*>::set(&mStore, other.get<const char*>());
       return *this;
     case variant_trait_v<int*>:
-      variant_helper<storage_t, int*>::set(&mStore, other.get<int*>(), mSize);
+      variant_helper<int*>::set(&mStore, other.get<int*>(), mSize);
       return *this;
     case variant_trait_v<float*>:
-      variant_helper<storage_t, float*>::set(&mStore, other.get<float*>(), mSize);
+      variant_helper<float*>::set(&mStore, other.get<float*>(), mSize);
       return *this;
     case variant_trait_v<double*>:
-      variant_helper<storage_t, double*>::set(&mStore, other.get<double*>(), mSize);
+      variant_helper<double*>::set(&mStore, other.get<double*>(), mSize);
       return *this;
     case variant_trait_v<bool*>:
-      variant_helper<storage_t, bool*>::set(&mStore, other.get<bool*>(), mSize);
+      variant_helper<bool*>::set(&mStore, other.get<bool*>(), mSize);
       return *this;
     case variant_trait_v<std::string*>:
-      variant_helper<storage_t, std::string*>::set(&mStore, other.get<std::string*>(), mSize);
+      variant_helper<std::string*>::set(&mStore, other.get<std::string*>(), mSize);
       return *this;
     default:
       mStore = other.mStore;
@@ -240,27 +201,27 @@ Variant& Variant::operator=(Variant&& other) noexcept
   mType = other.mType;
   switch (mType) {
     case variant_trait_v<const char*>:
-      variant_helper<storage_t, const char*>::set(&mStore, other.get<const char*>());
+      variant_helper<const char*>::set(&mStore, other.get<const char*>());
       *reinterpret_cast<char**>(&(other.mStore)) = nullptr;
       return *this;
     case variant_trait_v<int*>:
-      variant_helper<storage_t, int*>::set(&mStore, other.get<int*>(), mSize);
+      variant_helper<int*>::set(&mStore, other.get<int*>(), mSize);
       *reinterpret_cast<int**>(&(other.mStore)) = nullptr;
       return *this;
     case variant_trait_v<float*>:
-      variant_helper<storage_t, float*>::set(&mStore, other.get<float*>(), mSize);
+      variant_helper<float*>::set(&mStore, other.get<float*>(), mSize);
       *reinterpret_cast<float**>(&(other.mStore)) = nullptr;
       return *this;
     case variant_trait_v<double*>:
-      variant_helper<storage_t, double*>::set(&mStore, other.get<double*>(), mSize);
+      variant_helper<double*>::set(&mStore, other.get<double*>(), mSize);
       *reinterpret_cast<double**>(&(other.mStore)) = nullptr;
       return *this;
     case variant_trait_v<bool*>:
-      variant_helper<storage_t, bool*>::set(&mStore, other.get<bool*>(), mSize);
+      variant_helper<bool*>::set(&mStore, other.get<bool*>(), mSize);
       *reinterpret_cast<bool**>(&(other.mStore)) = nullptr;
       return *this;
     case variant_trait_v<std::string*>:
-      variant_helper<storage_t, std::string*>::set(&mStore, other.get<std::string*>(), mSize);
+      variant_helper<std::string*>::set(&mStore, other.get<std::string*>(), mSize);
       *reinterpret_cast<std::string**>(&(other.mStore)) = nullptr;
       return *this;
     default:

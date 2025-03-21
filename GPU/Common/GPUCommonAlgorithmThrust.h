@@ -15,14 +15,12 @@
 #ifndef GPUCOMMONALGORITHMTHRUST_H
 #define GPUCOMMONALGORITHMTHRUST_H
 
-#if !defined(GPUCA_GPUCODE_GENRTC) && !defined(GPUCA_GPUCODE_HOSTONLY)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wshadow"
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include <thrust/device_ptr.h>
 #pragma GCC diagnostic pop
-#endif
 
 #include "GPUCommonDef.h"
 
@@ -32,7 +30,7 @@
 #define GPUCA_THRUST_NAMESPACE thrust::hip
 #endif
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -90,6 +88,6 @@ GPUdi() void GPUCommonAlgorithm::sortDeviceDynamic(T* begin, T* end, const S& co
 }
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

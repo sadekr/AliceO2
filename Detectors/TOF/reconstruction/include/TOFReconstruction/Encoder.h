@@ -42,7 +42,7 @@ class Encoder
   Encoder();
   ~Encoder() = default;
 
-  bool open(const std::string& name, const std::string& path = ".", const std::string& fileFor = "cru");
+  bool open(const std::string& name, const std::string& path = ".", const std::string& fileFor = "cruendpoint");
   bool alloc(long size);
 
   bool encode(std::vector<std::vector<o2::tof::Digit>> digitWindow, int tofwindow = 0);
@@ -51,6 +51,8 @@ class Encoder
   bool flush(int icrate);
   bool close();
   void setVerbose(bool val) { mVerbose = val; };
+
+  void setEncoderCRUZEROES(bool val = true) { mOldFormat = val; }
 
   int getSize(void* first, void* last);
 
@@ -92,6 +94,8 @@ class Encoder
 
   bool mStartRun = true;
   int mFirstBC = 0;
+
+  bool mOldFormat = false;
 
   // temporary variable for encoding
   int mEventCounter;         //!

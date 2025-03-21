@@ -16,9 +16,11 @@ o2_add_library(DataFormatsTOF
                        src/CalibLHCphaseTOF.cxx
                        src/CalibTimeSlewingParamTOF.cxx
                        src/CTF.cxx
+                       src/ParameterContainers.cxx
                        src/CalibInfoCluster.cxx
                        src/CosmicInfo.cxx
                        src/Diagnostic.cxx
+                       src/TOFFEElightInfo.cxx
                PUBLIC_LINK_LIBRARIES O2::ReconstructionDataFormats
                                      O2::GPUCommon
                                      Boost::serialization)
@@ -32,6 +34,8 @@ o2_target_root_dictionary(DataFormatsTOF
                                   include/DataFormatsTOF/RawDataFormat.h
                                   include/DataFormatsTOF/CompressedDataFormat.h
                                   include/DataFormatsTOF/CTF.h
+                                  include/DataFormatsTOF/ParameterContainers.h
                                   include/DataFormatsTOF/CalibInfoCluster.h
                                   include/DataFormatsTOF/CosmicInfo.h
+                                  include/DataFormatsTOF/TOFFEElightInfo.h
                                   include/DataFormatsTOF/Diagnostic.h)

@@ -20,7 +20,7 @@
 
 #include "GPUCommonDef.h"
 
-namespace GPUCA_NAMESPACE
+namespace o2
 {
 namespace gpu
 {
@@ -37,13 +37,13 @@ class RegularSpline1D
   /// _____________  Constructors / destructors __________________________
 
   /// Default constructor
-  RegularSpline1D() CON_DEFAULT;
+  RegularSpline1D() = default;
 
   /// Destructor
-  ~RegularSpline1D() CON_DEFAULT;
+  ~RegularSpline1D() = default;
 
   /// Constructor. Number of knots will be set to at least 5
-  void construct(int numberOfKnots);
+  void construct(int32_t numberOfKnots);
 
   /// _______________  Main functionality   ________________________
 
@@ -56,52 +56,52 @@ class RegularSpline1D
 
   /// Get interpolated value for f(u) using spline at knot "knot_1" and function values at knots {knot_0,knot_1,knot_2,knot_3}
   template <typename T>
-  T getSpline(const int iknot, T f0, T f1, T f2, T f3, float u) const;
+  T getSpline(const int32_t iknot, T f0, T f1, T f2, T f3, float u) const;
 
   /// Get interpolated value for f(u) using data array correctedData[getNumberOfKnots()] with corrected edges
   template <typename T>
   T getSpline(const T correctedData[], float u) const;
 
   /// Get number of knots
-  int getNumberOfKnots() const { return mNumberOfKnots; }
+  int32_t getNumberOfKnots() const { return mNumberOfKnots; }
 
   /// Get the U-Coordinate depending on the given knot-Index
-  double knotIndexToU(int index) const;
+  double knotIndexToU(int32_t index) const;
 
   /// Get index of associated knot for a given U coordinate.
   ///
   /// Note: U values from the first interval are mapped to the second inrerval.
   /// Values from the last interval are mapped to the previous interval.
   ///
-  int getKnotIndex(float u) const;
+  int32_t getKnotIndex(float u) const;
 
  private:
-  unsigned char mNumberOfKnots = 5; ///< n knots on the grid
+  uint8_t mNumberOfKnots = 5; ///< n knots on the grid
 };
 
 /// ====================================================
 ///       Inline implementations of some methods
 /// ====================================================
 
-inline void RegularSpline1D::construct(int numberOfKnots)
+inline void RegularSpline1D::construct(int32_t numberOfKnots)
 {
   /// Constructor
   mNumberOfKnots = (numberOfKnots < 5) ? 5 : numberOfKnots;
 }
 
 template <typename T>
-inline T RegularSpline1D::getSpline(const int iknot1, T f0, T f1, T f2, T f3, float u) const
+inline T RegularSpline1D::getSpline(const int32_t iknot1, T f0, T f1, T f2, T f3, float u) const
 {
   /// static method
   /// Get interpolated value for f(u) using a spline polynom for [iknot1,iknot2] interval.
   /// The polynom is constructed with function values f0,f1,f2,f3 at knots {iknot0,iknot1,iknot2,iknot3}
   /// The u value supposed to be inside the [knot1,knot2] region, but also may be any.
 
-  ///f0 = f value at iknot1-1
-  ///f1 = f value at iknot1
-  ///f2 = f value at iknot1+1
-  ///f3 = f value at iknot1+2
-  ///u = u value where f(u) is searched for.
+  /// f0 = f value at iknot1-1
+  /// f1 = f value at iknot1
+  /// f2 = f value at iknot1+1
+  /// f3 = f value at iknot1+2
+  /// u = u value where f(u) is searched for.
 
   f0 -= f1;
   f2 -= f1;
@@ -135,12 +135,12 @@ template <typename T>
 inline T RegularSpline1D::getSpline(const T correctedData[], float u) const
 {
   /// Get interpolated value for f(u) using data array correctedData[getNumberOfKnots()] with corrected edges
-  int iknot = getKnotIndex(u);
+  int32_t iknot = getKnotIndex(u);
   const T* f = correctedData + iknot - 1;
   return getSpline(iknot, f[0], f[1], f[2], f[3], u);
 }
 
-inline double RegularSpline1D::knotIndexToU(int iknot) const
+inline double RegularSpline1D::knotIndexToU(int32_t iknot) const
 {
   if (iknot <= 0) {
     return 0;
@@ -151,10 +151,10 @@ inline double RegularSpline1D::knotIndexToU(int iknot) const
   return iknot / ((double)mNumberOfKnots - 1.);
 }
 
-inline int RegularSpline1D::getKnotIndex(float u) const
+inline int32_t RegularSpline1D::getKnotIndex(float u) const
 {
-  //index is just u elem [0, 1] * numberOfKnots and then floored. (so the "left" coordinate beside u gets chosen)
-  int index = (int)(u * (mNumberOfKnots - 1));
+  // index is just u elem [0, 1] * numberOfKnots and then floored. (so the "left" coordinate beside u gets chosen)
+  int32_t index = (int32_t)(u * (mNumberOfKnots - 1));
   if (index <= 1) {
     index = 1;
   } else if (index >= mNumberOfKnots - 3) {
@@ -168,12 +168,12 @@ inline void RegularSpline1D::correctEdges(T* data) const
 {
   // data[i] is the i-th f-value
   constexpr T c0(0.5), c1(1.5);
-  const int i = mNumberOfKnots - 1;
+  const int32_t i = mNumberOfKnots - 1;
   data[0] = c0 * (data[0] + data[3]) + c1 * (data[1] - data[2]);
   data[i] = c0 * (data[i - 0] + data[i - 3]) + c1 * (data[i - 1] - data[i - 2]);
 }
 
 } // namespace gpu
-} // namespace GPUCA_NAMESPACE
+} // namespace o2
 
 #endif

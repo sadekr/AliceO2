@@ -7,14 +7,25 @@
 This is a top page for the MCH detector documentation.
 
 <!-- doxy
-\subpage refDetectorsMUONMCHContour
-\subpage refDetectorsMUONMCHClustering
-\subpage refDetectorsMUONMCHCTF
-\subpage refDetectorsMUONMCHRaw
-\subpage refDetectorsMUONMCHMapping
-\subpage refDetectorsMUONMCHTracking
-\subpage refDetectorsMUONMCHWorkflow
-\subpage refDetectorsMUONMCHGeometry
-\subpage refDetectorsMUONMCHConditions
-\subpage refDetectorsMUONMCHDevIO
+* \subpage refDetectorsMUONMCHCTF
+* \subpage refDetectorsMUONMCHCalibration
+* \subpage refDetectorsMUONMCHClustering
+* \subpage refDetectorsMUONMCHConditions
+* \subpage refDetectorsMUONMCHContour
+* \subpage refDetectorsMUONMCHDevIO
+* \subpage refDetectorsMUONMCHDigitFiltering
+* \subpage refDetectorsMUONMCHPreClustering
+* \subpage refDetectorsMUONMCHROFFiltering
+* \subpage refDetectorsMUONMCHTimeClustering
+* \subpage refDetectorsMUONMCHGeometry
+* \subpage refDetectorsMUONMCHMapping
+* \subpage refDetectorsMUONMCHRaw
+* \subpage refDetectorsMUONMCHSimulation
+* \subpage refDetectorsMUONMCHStatus
+* \subpage refDetectorsMUONMCHTracking
+* \subpage refDetectorsMUONMCHTriggering
+* \subpage refDetectorsMUONMCHWorkflow
+* \subpage refDetectorsMUONMCHGlobalMapping
+* \subpage refDetectorsMUONMCHIO
+* \subpage refDetectorsMUONMCHEvaluation
 /doxy -->

@@ -51,9 +51,11 @@ class MatLayerCylSet : public o2::gpu::FlatObject
 {
 
  public:
-  MatLayerCylSet() CON_DEFAULT;
-  ~MatLayerCylSet() CON_DEFAULT;
-  MatLayerCylSet(const MatLayerCylSet& src) CON_DELETE;
+#ifndef GPUCA_GPUCODE
+  MatLayerCylSet() = default;
+  ~MatLayerCylSet() = default;
+  MatLayerCylSet(const MatLayerCylSet& src) = delete;
+#endif
 
   GPUd() const MatLayerCylSetLayout* get() const { return reinterpret_cast<const MatLayerCylSetLayout*>(mFlatBufferPtr); }
   GPUd() MatLayerCylSetLayout* get() { return reinterpret_cast<MatLayerCylSetLayout*>(mFlatBufferPtr); }
@@ -74,12 +76,19 @@ class MatLayerCylSet : public o2::gpu::FlatObject
   void populateFromTGeo(int ntrPerCel = 10);
   void optimizePhiSlices(float maxRelDiff = 0.05);
 
-  void dumpToTree(const std::string outName = "matbudTree.root") const;
-  void writeToFile(std::string outFName = "matbud.root", std::string name = "MatBud");
-  static MatLayerCylSet* loadFromFile(std::string inpFName = "matbud.root", std::string name = "MatBud");
+  void dumpToTree(const std::string& outName = "matbudTree.root") const;
+  void writeToFile(const std::string& outFName = "matbud.root");
+  static MatLayerCylSet* loadFromFile(const std::string& inpFName = "matbud.root");
   static MatLayerCylSet* rectifyPtrFromFile(MatLayerCylSet* ptr);
 
+  // initializes internal voxel lookup
+  void initLayerVoxelLU();
+
   void flatten();
+
+  MatLayerCyl& getLayer(int i) { return get()->mLayers[i]; }
+  MatLayerCylSet* extractCopy(float rmin, float rmax, float tol = 1e-3) const;
+  void finalizeStructures();
 
 #endif // !GPUCA_ALIGPUCODE
 
@@ -93,6 +102,9 @@ class MatLayerCylSet : public o2::gpu::FlatObject
   GPUd() MatBudget getMatBudget(float x0, float y0, float z0, float x1, float y1, float z1) const;
 
   GPUd() int searchSegment(float val, int low = -1, int high = -1) const;
+
+  /// searches a layer based on r2 input, using a lookup table
+  GPUd() int searchLayerFast(float r2, int low = -1, int high = -1) const;
 
 #ifndef GPUCA_GPUCODE
   //-----------------------------------------------------------
@@ -113,6 +125,14 @@ class MatLayerCylSet : public o2::gpu::FlatObject
   /// Gives minimal alignment in bytes required for the flat buffer
   static constexpr size_t getBufferAlignmentBytes() { return 8; }
 #endif // !GPUCA_GPUCODE
+
+  static constexpr float LayerRMax = 500;    // maximum value of R lookup (corresponds to last layer of MatLUT)
+  static constexpr float VoxelRDelta = 0.05; // voxel spacing for layer lookup; seems a natural choice - corresponding ~ to smallest spacing
+  static constexpr float InvVoxelRDelta = 1.f / VoxelRDelta;
+  static constexpr int NumVoxels = int(LayerRMax / VoxelRDelta);
+
+  uint16_t mLayerVoxelLU[2 * NumVoxels]; //! helper structure to lookup a layer based on known radius (static dimension for easy copy to GPU)
+  bool mInitializedLayerVoxelLU = false; //! if the voxels have been initialized
 
   ClassDefNV(MatLayerCylSet, 1);
 };

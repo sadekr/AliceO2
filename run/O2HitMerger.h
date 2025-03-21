@@ -17,14 +17,14 @@
 #include <memory>
 #include <string>
 #include <type_traits>
-#include "FairMQMessage.h"
-#include <FairMQDevice.h>
-#include <FairLogger.h>
+#include <fairmq/Message.h>
+#include <fairmq/Device.h>
+#include <fairlogger/Logger.h>
 #include <SimulationDataFormat/MCEventHeader.h>
-#include <SimulationDataFormat/Stack.h>
+#include <DetectorsBase/Stack.h>
 #include <SimulationDataFormat/PrimaryChunk.h>
 #include <DetectorsCommonDataFormats/DetID.h>
-#include <DetectorsCommonDataFormats/NameConf.h>
+#include <DetectorsCommonDataFormats/DetectorNameConf.h>
 #include <gsl/gsl>
 #include "TFile.h"
 #include "TMemFile.h"
@@ -32,13 +32,12 @@
 #include "TROOT.h"
 #include <memory>
 #include <TMessage.h>
-#include <FairMQParts.h>
+#include <fairmq/Parts.h>
 #include <ctime>
 #include <TStopwatch.h>
 #include <sstream>
 #include <cassert>
 #include "FairSystemInfo.h"
-#include "Steer/InteractionSampler.h"
 
 #include "O2HitMerger.h"
 #include "O2SimDevice.h"
@@ -57,6 +56,7 @@
 #include <MCHSimulation/Detector.h>
 #include <MIDSimulation/Detector.h>
 #include <ZDCSimulation/Detector.h>
+#include <FOCALSimulation/Detector.h>
 
 #include "CommonUtils/ShmManager.h"
 #include <map>
@@ -70,10 +70,17 @@
 #include "SimPublishChannelHelper.h"
 
 #ifdef ENABLE_UPGRADES
-#include <ITS3Simulation/Detector.h>
 #include <TRKSimulation/Detector.h>
 #include <FT3Simulation/Detector.h>
+#include <FCTSimulation/Detector.h>
+#include <ITS3Simulation/DescriptorInnerBarrelITS3.h>
+#include <IOTOFSimulation/Detector.h>
+#include <RICHSimulation/Detector.h>
+#include <ECalSimulation/Detector.h>
+#include <MI3Simulation/Detector.h>
 #endif
+
+#include <tbb/concurrent_unordered_map.h>
 
 namespace o2
 {
@@ -84,12 +91,12 @@ namespace devices
 void sighandler(int signal)
 {
   if (signal == SIGSEGV) {
-    LOG(WARN) << "segmentation violation ... just exit without coredump in order not to hang";
+    LOG(warn) << "segmentation violation ... just exit without coredump in order not to hang";
     raise(SIGKILL);
   }
 }
 
-class O2HitMerger : public FairMQDevice
+class O2HitMerger : public fair::mq::Device
 {
 
   class TMessageWrapper : public TMessage
@@ -112,33 +119,40 @@ class O2HitMerger : public FairMQDevice
   ~O2HitMerger() override
   {
     FairSystemInfo sysinfo;
-    LOG(INFO) << "TIME-STAMP " << mTimer.RealTime() << "\t";
+    LOG(info) << "TIME-STAMP " << mTimer.RealTime() << "\t";
     mTimer.Continue();
-    LOG(INFO) << "MEM-STAMP " << sysinfo.GetCurrentMemory() / (1024. * 1024) << " "
+    LOG(info) << "MEM-STAMP " << sysinfo.GetCurrentMemory() / (1024. * 1024) << " "
               << sysinfo.GetMaxMemory() << " MB\n";
   }
 
  private:
-  /// Overloads the InitTask() method of FairMQDevice
+  /// Overloads the InitTask() method of fair::mq::Device
   void InitTask() final
   {
-    LOG(INFO) << "INIT HIT MERGER";
+    LOG(info) << "INIT HIT MERGER";
     // signal(SIGSEGV, sighandler);
     ROOT::EnableThreadSafety();
 
     std::string outfilename("o2sim_merged_hits.root"); // default name
     // query the sim config ... which is used to extract the filenames
-    if (o2::devices::O2SimDevice::querySimConfig(fChannels.at("o2sim-primserv-info").at(0))) {
+    if (o2::devices::O2SimDevice::querySimConfig(GetChannels().at("o2sim-primserv-info").at(0))) {
       outfilename = o2::base::NameConf::getMCKinematicsFileName(o2::conf::SimConfig::Instance().getOutPrefix().c_str());
       mNExpectedEvents = o2::conf::SimConfig::Instance().getNEvents();
     }
     mAsService = o2::conf::SimConfig::Instance().asService();
+    mForwardKine = o2::conf::SimConfig::Instance().forwardKine();
+    mWriteToDisc = o2::conf::SimConfig::Instance().writeToDisc();
 
     mOutFileName = outfilename.c_str();
-    mOutFile = new TFile(outfilename.c_str(), "RECREATE");
-    mOutTree = new TTree("o2sim", "o2sim");
-    mOutTree->SetDirectory(mOutFile);
+    if (mWriteToDisc) {
+      mOutFile = new TFile(outfilename.c_str(), "RECREATE");
+      mOutTree = new TTree("o2sim", "o2sim");
+      mOutTree->SetDirectory(mOutFile);
 
+      mMCHeaderOnlyOutFile = new TFile(o2::base::NameConf::getMCHeadersFileName(o2::conf::SimConfig::Instance().getOutPrefix().c_str()).c_str(), "RECREATE");
+      mMCHeaderTree = new TTree("o2sim", "o2sim");
+      mMCHeaderTree->SetDirectory(mMCHeaderOnlyOutFile);
+    }
     // detectors init only once
     if (mDetectorInstances.size() == 0) {
       initDetInstances();
@@ -151,9 +165,9 @@ class O2HitMerger : public FairMQDevice
     auto pipeenv = getenv("ALICE_O2SIMMERGERTODRIVER_PIPE");
     if (pipeenv) {
       mPipeToDriver = atoi(pipeenv);
-      LOG(INFO) << "ASSIGNED PIPE HANDLE " << mPipeToDriver;
+      LOG(info) << "ASSIGNED PIPE HANDLE " << mPipeToDriver;
     } else {
-      LOG(WARNING) << "DID NOT FIND ENVIRONMENT VARIABLE TO INIT PIPE";
+      LOG(warning) << "DID NOT FIND ENVIRONMENT VARIABLE TO INIT PIPE";
     }
 
     // if no data to expect we shut down the device NOW since it would otherwise hang
@@ -161,7 +175,7 @@ class O2HitMerger : public FairMQDevice
       if (mAsService) {
         waitForControlInput();
       } else {
-        LOG(INFO) << "NOT EXPECTING ANY DATA; SHUTTING DOWN";
+        LOG(info) << "NOT EXPECTING ANY DATA; SHUTTING DOWN";
         raise(SIGINT);
       }
     }
@@ -184,7 +198,7 @@ class O2HitMerger : public FairMQDevice
         auto absolutePath = fs::absolute(fs::path(dir));
         if (!fs::exists(absolutePath)) {
           if (!fs::create_directory(absolutePath)) {
-            LOG(ERROR) << "Could not create directory " << absolutePath.string();
+            LOG(error) << "Could not create directory " << absolutePath.string();
             return false;
           }
         }
@@ -192,9 +206,9 @@ class O2HitMerger : public FairMQDevice
         fs::current_path(absolutePath.string().c_str());
         mCurrentOutputDir = fs::current_path().string();
       }
-      LOG(INFO) << "FINAL PATH " << mCurrentOutputDir;
+      LOG(info) << "FINAL PATH " << mCurrentOutputDir;
     } catch (std::exception e) {
-      LOG(ERROR) << " could not change path to " << dir;
+      LOG(error) << " could not change path to " << dir;
     }
     return true;
   }
@@ -213,16 +227,29 @@ class O2HitMerger : public FairMQDevice
     outfilename = o2::base::NameConf::getMCKinematicsFileName(reconfig.outputPrefix);
     mNExpectedEvents = reconfig.nEvents;
     mOutFileName = outfilename.c_str();
-    mOutFile = new TFile(outfilename.c_str(), "RECREATE");
-    mOutTree = new TTree("o2sim", "o2sim");
-    mOutTree->SetDirectory(mOutFile);
+    if (mWriteToDisc) {
+      mOutFile = new TFile(outfilename.c_str(), "RECREATE");
+      mOutTree = new TTree("o2sim", "o2sim");
+      mOutTree->SetDirectory(mOutFile);
 
+      mMCHeaderOnlyOutFile = new TFile(o2::base::NameConf::getMCHeadersFileName(reconfig.outputPrefix).c_str(), "RECREATE");
+      mMCHeaderTree = new TTree("o2sim", "o2sim");
+      mMCHeaderTree->SetDirectory(mMCHeaderOnlyOutFile);
+    }
     // reinit detectorInstance files (also make sure they are closed before continuing)
     initHitFiles(reconfig.outputPrefix);
 
     // clear "counter" datastructures
     mPartsCheckSum.clear();
     mEventChecksum = 0;
+
+    // clear collector datastructures
+    mMCTrackBuffer.clear();
+    mTrackRefBuffer.clear();
+    mSubEventInfoBuffer.clear();
+    mFlushableEvents.clear();
+    mNextFlushID = 1;
+
     return true;
   }
 
@@ -247,14 +274,14 @@ class O2HitMerger : public FairMQDevice
     return checksum == nparts * (nparts + 1) / 2;
   }
 
-  void consumeHits(int eventID, FairMQParts& data, int& index)
+  void consumeHits(int eventID, fair::mq::Parts& data, int& index)
   {
     auto detIDmessage = std::move(data.At(index++));
     // this should be a detector ID
     if (detIDmessage->GetSize() == 4) {
       auto ptr = (int*)detIDmessage->GetData();
       o2::detectors::DetID id(ptr[0]);
-      LOG(DEBUG2) << "I1 " << ptr[0] << " NAME " << id.getName() << " MB "
+      LOG(debug2) << "I1 " << ptr[0] << " NAME " << id.getName() << " MB "
                   << data.At(index)->GetSize() / 1024. / 1024.;
 
       // get the detector that can interpret it
@@ -266,7 +293,7 @@ class O2HitMerger : public FairMQDevice
   }
 
   template <typename T, typename BT>
-  void consumeData(int eventID, FairMQParts& data, int& index, BT& buffer)
+  void consumeData(int eventID, fair::mq::Parts& data, int& index, BT& buffer)
   {
     auto decodeddata = o2::base::decodeTMessage<T*>(data, index);
     if (buffer.find(eventID) == buffer.end()) {
@@ -290,48 +317,48 @@ class O2HitMerger : public FairMQDevice
 
   bool waitForControlInput()
   {
-    o2::simpubsub::publishMessage(fChannels["merger-notifications"].at(0), o2::simpubsub::simStatusString("MERGER", "STATUS", "AWAITING INPUT"));
+    o2::simpubsub::publishMessage(GetChannels()["merger-notifications"].at(0), o2::simpubsub::simStatusString("MERGER", "STATUS", "AWAITING INPUT"));
 
-    auto factory = FairMQTransportFactory::CreateTransportFactory("zeromq");
-    auto channel = FairMQChannel{"o2sim-control", "sub", factory};
+    auto factory = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+    auto channel = fair::mq::Channel{"o2sim-control", "sub", factory};
     auto controlsocketname = getenv("ALICE_O2SIMCONTROL");
-    LOG(INFO) << "SOCKETNAME " << controlsocketname;
+    LOG(info) << "SOCKETNAME " << controlsocketname;
     channel.Connect(std::string(controlsocketname));
     channel.Validate();
-    std::unique_ptr<FairMQMessage> reply(channel.NewMessage());
+    std::unique_ptr<fair::mq::Message> reply(channel.NewMessage());
 
-    LOG(INFO) << "WAITING FOR INPUT";
+    LOG(info) << "WAITING FOR INPUT";
     if (channel.Receive(reply) > 0) {
       auto data = reply->GetData();
       auto size = reply->GetSize();
 
       std::string command(reinterpret_cast<char const*>(data), size);
-      LOG(INFO) << "message: " << command;
+      LOG(info) << "message: " << command;
 
       o2::conf::SimReconfigData reconfig;
       o2::conf::parseSimReconfigFromString(command, reconfig);
       return ReInit(reconfig);
     } else {
-      LOG(INFO) << "NOTHING RECEIVED";
+      LOG(info) << "NOTHING RECEIVED";
     }
     return true;
   }
 
   bool ConditionalRun() override
   {
-    auto& channel = fChannels.at("simdata").at(0);
-    FairMQParts request;
+    auto& channel = GetChannels().at("simdata").at(0);
+    fair::mq::Parts request;
     auto bytes = channel.Receive(request);
     if (bytes < 0) {
-      LOG(ERROR) << "Some error occurred on socket during receive on sim data";
+      LOG(error) << "Some error occurred on socket during receive on sim data";
       return true; // keep going
     }
     TStopwatch timer;
     timer.Start();
     auto more = handleSimData(request, 0);
-    LOG(INFO) << "HitMerger processing took " << timer.RealTime();
+    LOG(info) << "HitMerger processing took " << timer.RealTime();
     if (!more && mAsService) {
-      LOG(INFO) << " CONTROL ";
+      LOG(info) << " CONTROL ";
       // if we are done treating data we may go back to init phase
       // for the next batch
       return waitForControlInput();
@@ -339,7 +366,7 @@ class O2HitMerger : public FairMQDevice
     return more;
   }
 
-  bool handleSimData(FairMQParts& data, int /*index*/)
+  bool handleSimData(fair::mq::Parts& data, int /*index*/)
   {
     bool expectmore = true;
     int index = 0;
@@ -347,7 +374,7 @@ class O2HitMerger : public FairMQDevice
     o2::data::SubEventInfo& info = *infoptr;
     auto accum = insertAdd<uint32_t, uint32_t>(mPartsCheckSum, info.eventID, (uint32_t)info.part);
 
-    LOG(INFO) << "SIMDATA channel got " << data.Size() << " parts for event " << info.eventID << " part " << info.part << " out of " << info.nparts;
+    LOG(info) << "SIMDATA channel got " << data.Size() << " parts for event " << info.eventID << " part " << info.part << " out of " << info.nparts;
 
     fillSubEventInfoEntry(info);
     consumeData<std::vector<o2::MCTrack>>(info.eventID, data, index, mMCTrackBuffer);
@@ -357,7 +384,7 @@ class O2HitMerger : public FairMQDevice
     }
 
     if (isDataComplete<uint32_t>(accum, info.nparts)) {
-      LOG(INFO) << "Event " << info.eventID << " complete. Marking as flushable";
+      LOG(info) << "Event " << info.eventID << " complete. Marking as flushable";
       mFlushableEvents[info.eventID] = true;
 
       // check if previous flush finished
@@ -375,7 +402,7 @@ class O2HitMerger : public FairMQDevice
       mEventChecksum += info.eventID;
       // we also need to check if we have all events
       if (isDataComplete<uint32_t>(mEventChecksum, info.maxEvents)) {
-        LOG(INFO) << "ALL EVENTS HERE; CHECKSUM " << mEventChecksum;
+        LOG(info) << "ALL EVENTS HERE; CHECKSUM " << mEventChecksum;
 
         // flush remaining data and close file
         if (mMergerIOThread.joinable()) {
@@ -391,7 +418,7 @@ class O2HitMerger : public FairMQDevice
 
       if (mPipeToDriver != -1) {
         if (write(mPipeToDriver, &info.eventID, sizeof(info.eventID)) == -1) {
-          LOG(ERROR) << "FAILED WRITING TO PIPE";
+          LOG(error) << "FAILED WRITING TO PIPE";
         };
       }
     }
@@ -413,7 +440,7 @@ class O2HitMerger : public FairMQDevice
     std::copy(from.begin(), from.end(), std::back_inserter(to));
   }
 
-  void reorderAndMergeMCTracks(int eventID, TTree& target, const std::vector<int>& nprimaries, const std::vector<int>& nsubevents, std::function<void(std::vector<MCTrack> const&)> tracks_analysis_hook)
+  void reorderAndMergeMCTracks(int eventID, TTree* target, const std::vector<int>& nprimaries, const std::vector<int>& nsubevents, std::function<void(std::vector<MCTrack> const&)> tracks_analysis_hook, o2::dataformats::MCEventHeader const* mceventheader)
   {
     // avoid doing this for trivial cases
     std::vector<MCTrack>* mcTracksPerSubEvent = nullptr;
@@ -486,17 +513,33 @@ class O2HitMerger : public FairMQDevice
     // to be saved as part of the MCHeader structure
     tracks_analysis_hook(*filladdr);
 
-    auto targetbr = o2::base::getOrMakeBranch(target, "MCTrack", &filladdr);
-    targetbr->SetAddress(&filladdr);
-    targetbr->Fill();
-    targetbr->ResetAddress();
+    if (mWriteToDisc && target) {
+      auto targetbr = o2::base::getOrMakeBranch(*target, "MCTrack", &filladdr);
+      targetbr->SetAddress(&filladdr);
+      targetbr->Fill();
+      targetbr->ResetAddress();
+    }
+    // forwarding the track data to other consumers (pub/sub)
+    if (mForwardKine) {
+      auto free_tmessage = [](void* data, void* hint) { delete static_cast<TMessage*>(hint); };
+      auto& channel = GetChannels().at("kineforward").at(0);
+      TMessage* tmsg = new TMessage(kMESS_OBJECT);
+      tmsg->WriteObjectAny((void*)filladdr, TClass::GetClass("std::vector<o2::MCTrack>"));
+      std::unique_ptr<fair::mq::Message> trackmessage(channel.NewMessage(tmsg->Buffer(), tmsg->BufferSize(), free_tmessage, tmsg));
+      tmsg = new TMessage(kMESS_OBJECT);
+      tmsg->WriteObjectAny((void*)mceventheader, TClass::GetClass("o2::dataformats::MCEventHeader"));
+      std::unique_ptr<fair::mq::Message> headermessage(channel.NewMessage(tmsg->Buffer(), tmsg->BufferSize(), free_tmessage, tmsg));
+      fair::mq::Parts reply;
+      reply.AddPart(std::move(headermessage));
+      reply.AddPart(std::move(trackmessage));
+      channel.Send(reply);
+      LOG(info) << "Forward publish MC tracks on channel";
+    }
 
     // cleanup buffered data
     for (auto ptr : vectorOfSubEventMCTracks) {
       delete ptr; // avoid this by using unique ptr
     }
-    // TODO: protect by lock (as multithreaded access to STL MAP)
-    mMCTrackBuffer.erase(eventID);
   }
 
   template <typename T, typename M>
@@ -548,7 +591,6 @@ class O2HitMerger : public FairMQDevice
     for (auto ptr : vectorOfT) {
       delete ptr; // avoid this by using unique ptr
     }
-    mapOfVectorOfTs.erase(eventID);
   }
 
   void updateTrackIdWithOffset(MCTrack& track, Int_t nprim, Int_t idelta0, Int_t idelta1)
@@ -570,15 +612,20 @@ class O2HitMerger : public FairMQDevice
   void initHitTreeAndOutFile(std::string prefix, int detID)
   {
     using o2::detectors::DetID;
-    if (mDetectorOutFiles[detID]) {
-      LOG(WARN) << "Hit outfile for detID " << DetID::getName(detID) << " already initialized --> Reopening";
+    if (mDetectorOutFiles.find(detID) != mDetectorOutFiles.end() && mDetectorOutFiles[detID]) {
+      LOG(warn) << "Hit outfile for detID " << DetID::getName(detID) << " already initialized --> Reopening";
       mDetectorOutFiles[detID]->Close();
       delete mDetectorOutFiles[detID];
     }
-    std::string name(o2::base::NameConf::getHitsFileName(detID, prefix));
-    mDetectorOutFiles[detID] = new TFile(name.c_str(), "RECREATE");
-    mDetectorToTTreeMap[detID] = new TTree("o2sim", "o2sim");
-    mDetectorToTTreeMap[detID]->SetDirectory(mDetectorOutFiles[detID]);
+    std::string name(o2::base::DetectorNameConf::getHitsFileName(detID, prefix));
+    if (mWriteToDisc) {
+      mDetectorOutFiles[detID] = new TFile(name.c_str(), "RECREATE");
+      mDetectorToTTreeMap[detID] = new TTree("o2sim", "o2sim");
+      mDetectorToTTreeMap[detID]->SetDirectory(mDetectorOutFiles[detID]);
+    } else {
+      mDetectorOutFiles[detID] = nullptr;
+      mDetectorToTTreeMap[detID] = nullptr;
+    }
   }
 
   // This method goes over the buffers containing data for a given event; potentially merges
@@ -591,17 +638,17 @@ class O2HitMerger : public FairMQDevice
       return mFlushableEvents.find(mNextFlushID) != mFlushableEvents.end() && mFlushableEvents[mNextFlushID] == true;
     };
 
-    LOG(INFO) << "Launching merge kernel ";
+    LOG(info) << "Launching merge kernel ";
     bool canflush = mFlushableEvents.find(mNextFlushID) != mFlushableEvents.end() && mFlushableEvents[mNextFlushID] == true;
     if (!canflush) {
       return false;
     }
     while (canflush == true) {
       auto flusheventID = mNextFlushID;
-      LOG(INFO) << "Merge and flush event " << flusheventID;
+      LOG(info) << "Merge and flush event " << flusheventID;
       auto iter = mSubEventInfoBuffer.find(flusheventID);
       if (iter == mSubEventInfoBuffer.end()) {
-        LOG(ERROR) << "No info/data found for event " << flusheventID;
+        LOG(error) << "No info/data found for event " << flusheventID;
         if (!checkIfNextFlushable()) {
           return false;
         }
@@ -609,7 +656,7 @@ class O2HitMerger : public FairMQDevice
 
       auto& subEventInfoList = (*iter).second;
       if (subEventInfoList.size() == 0 || mNExpectedEvents == 0) {
-        LOG(ERROR) << "No data entries found for event " << flusheventID;
+        LOG(error) << "No data entries found for event " << flusheventID;
         if (!checkIfNextFlushable()) {
           return false;
         }
@@ -646,16 +693,13 @@ class O2HitMerger : public FairMQDevice
       // now see which events can be discarded in any case due to no hits
       if (confref.isFilterOutNoHitEvents()) {
         if (eventheader && eventheader->getMCEventStats().getNHits() == 0) {
-          LOG(INFO) << " Taking out event " << flusheventID << " due to no hits ";
+          LOG(info) << " Taking out event " << flusheventID << " due to no hits ";
           cleanEvent(flusheventID);
           if (!checkIfNextFlushable()) {
             return true;
           }
         }
       }
-
-      // put the event headers into the new TTree
-      auto headerbr = o2::base::getOrMakeBranch(*mOutTree, "MCEventHeader.", &eventheader);
 
       // attention: We need to make sure that we write everything in the same event order
       // but iteration over keys of a standard map in C++ is ordered
@@ -680,6 +724,9 @@ class O2HitMerger : public FairMQDevice
         int eta1Point2Counter = 0;
         int eta1Point0Counter = 0;
         int eta0Point8Counter = 0;
+        int eta1Point2CounterPi = 0;
+        int eta1Point0CounterPi = 0;
+        int eta0Point8CounterPi = 0;
         int prims = 0;
         for (auto& tr : tracks) {
           if (tr.isPrimary()) {
@@ -687,12 +734,21 @@ class O2HitMerger : public FairMQDevice
             const auto eta = tr.GetEta();
             if (eta < 1.2) {
               eta1Point2Counter++;
+              if (std::abs(tr.GetPdgCode()) == 211) {
+                eta1Point2CounterPi++;
+              }
             }
             if (eta < 1.0) {
               eta1Point0Counter++;
+              if (std::abs(tr.GetPdgCode()) == 211) {
+                eta1Point0CounterPi++;
+              }
             }
             if (eta < 0.8) {
               eta0Point8Counter++;
+              if (std::abs(tr.GetPdgCode()) == 211) {
+                eta0Point8CounterPi++;
+              }
             }
           } else {
             break; // track layout is such that all prims are first anyway
@@ -703,16 +759,33 @@ class O2HitMerger : public FairMQDevice
         eventheader->putInfo("prims_eta_1.2", eta1Point2Counter);
         eventheader->putInfo("prims_eta_1.0", eta1Point0Counter);
         eventheader->putInfo("prims_eta_0.8", eta0Point8Counter);
+        eventheader->putInfo("prims_eta_1.2_pi", eta1Point2CounterPi);
+        eventheader->putInfo("prims_eta_1.0_pi", eta1Point0CounterPi);
+        eventheader->putInfo("prims_eta_0.8_pi", eta0Point8CounterPi);
         eventheader->putInfo("prims_total", prims);
       };
 
-      reorderAndMergeMCTracks(flusheventID, *mOutTree, nprimaries, subevOrdered, mcheaderhook);
-      remapTrackIdsAndMerge<std::vector<o2::TrackReference>>("TrackRefs", flusheventID, *mOutTree, trackoffsets, nprimaries, subevOrdered, mTrackRefBuffer);
+      reorderAndMergeMCTracks(flusheventID, mOutTree, nprimaries, subevOrdered, mcheaderhook, eventheader);
 
-      // header can be written
-      headerbr->SetAddress(&eventheader);
-      headerbr->Fill();
-      headerbr->ResetAddress();
+      if (mOutTree) {
+        // adjusting and merging track references
+        remapTrackIdsAndMerge<std::vector<o2::TrackReference>>("TrackRefs", flusheventID, *mOutTree, trackoffsets, nprimaries, subevOrdered, mTrackRefBuffer);
+
+        // write MC event headers
+        {
+          auto headerbr = o2::base::getOrMakeBranch(*mOutTree, "MCEventHeader.", &eventheader);
+          headerbr->SetAddress(&eventheader);
+          headerbr->Fill();
+          headerbr->ResetAddress();
+        }
+
+        {
+          auto headerbr = o2::base::getOrMakeBranch(*mMCHeaderTree, "MCEventHeader.", &eventheader);
+          headerbr->SetAddress(&eventheader);
+          headerbr->Fill();
+          headerbr->ResetAddress();
+        }
+      }
 
       // c) do the merge procedure for all hits ... delegate this to detector specific functions
       // since they know about types; number of branches; etc.
@@ -721,60 +794,77 @@ class O2HitMerger : public FairMQDevice
         auto& det = mDetectorInstances[id];
         if (det) {
           auto hittree = mDetectorToTTreeMap[id];
-          // det->mergeHitEntries(*tree, *hittree, trackoffsets, nprimaries, subevOrdered);
-          det->mergeHitEntriesAndFlush(flusheventID, *hittree, trackoffsets, nprimaries, subevOrdered);
-          hittree->SetEntries(hittree->GetEntries() + 1);
-          LOG(INFO) << "flushing tree to file " << hittree->GetDirectory()->GetFile()->GetName();
+          if (hittree) {
+            det->mergeHitEntriesAndFlush(flusheventID, *hittree, trackoffsets, nprimaries, subevOrdered);
+            hittree->SetEntries(hittree->GetEntries() + 1);
+            LOG(info) << "flushing tree to file " << hittree->GetDirectory()->GetFile()->GetName();
+          }
         }
       }
 
       // increase the entry count in the tree
-      mOutTree->SetEntries(mOutTree->GetEntries() + 1);
-      LOG(INFO) << "outtree has file " << mOutTree->GetDirectory()->GetFile()->GetName();
+      if (mOutTree) {
+        mOutTree->SetEntries(mOutTree->GetEntries() + 1);
+        LOG(info) << "outtree has file " << mOutTree->GetDirectory()->GetFile()->GetName();
+      }
+      if (mMCHeaderTree) {
+        mMCHeaderTree->SetEntries(mMCHeaderTree->GetEntries() + 1);
+        LOG(info) << "mc header outtree has file " << mMCHeaderTree->GetDirectory()->GetFile()->GetName();
+      }
 
       cleanEvent(flusheventID);
-      LOG(INFO) << "Merge/flush for event " << flusheventID << " took " << timer.RealTime();
+      LOG(info) << "Merge/flush for event " << flusheventID << " took " << timer.RealTime();
       if (!checkIfNextFlushable()) {
         break;
       }
     } // end while
-    LOG(INFO) << "Writing TTrees";
-    mOutFile->Write("", TObject::kOverwrite);
-    for (int id = 0; id < mDetectorInstances.size(); ++id) {
-      auto& det = mDetectorInstances[id];
-      if (det) {
-        mDetectorOutFiles[id]->Write("", TObject::kOverwrite);
+    if (mWriteToDisc && mOutFile) {
+      LOG(info) << "Writing TTrees";
+      mOutFile->Write("", TObject::kOverwrite);
+      for (int id = 0; id < mDetectorInstances.size(); ++id) {
+        auto& det = mDetectorInstances[id];
+        if (det && mDetectorOutFiles[id]) {
+          mDetectorOutFiles[id]->Write("", TObject::kOverwrite);
+        }
+      }
+      if (mMCHeaderOnlyOutFile) {
+        mMCHeaderOnlyOutFile->Write("", TObject::kOverwrite);
       }
     }
-
     return true;
   }
 
   std::map<uint32_t, uint32_t> mPartsCheckSum; //! mapping event id -> part checksum used to detect when all info
-  std::string mOutFileName; //!
+  std::string mOutFileName;                    //!
 
   // structures for the final flush
-  TFile* mOutFile;                                     //! outfile for kinematics
-  TTree* mOutTree;                                     //! tree (kinematics) associated to mOutFile
-  std::unordered_map<int, TFile*> mDetectorOutFiles;   //! outfiles per detector for hits
-  std::unordered_map<int, TTree*> mDetectorToTTreeMap; //! the trees
+  TFile* mOutFile;             //! outfile for kinematics
+  TTree* mOutTree;             //! tree (kinematics) associated to mOutFile
+  TFile* mMCHeaderOnlyOutFile; //! outfile for header only information
+  TTree* mMCHeaderTree;        //! tree to hold MCHeader branch in mMCHeaderOnlyOutFile;
+
+  template <class K, class V>
+  using Hashtable = tbb::concurrent_unordered_map<K, V>;
+  Hashtable<int, TFile*> mDetectorOutFiles;   //! outfiles per detector for hits
+  Hashtable<int, TTree*> mDetectorToTTreeMap; //! the trees
 
   // intermediate structures to collect data per event
-  std::thread mMergerIOThread;                            //! a thread used to do hit merging and IO flushing asynchronously
-  std::mutex mMapsMtx;                                    //!
+  std::thread mMergerIOThread; //! a thread used to do hit merging and IO flushing asynchronously
   bool mergingInProgress = false;
 
-  std::unordered_map<int, std::vector<std::vector<o2::MCTrack>*>> mMCTrackBuffer;         //! vector of sub-event track vectors; one per event
-  std::unordered_map<int, std::vector<std::vector<o2::TrackReference>*>> mTrackRefBuffer; //!
-  std::unordered_map<int, std::list<o2::data::SubEventInfo*>> mSubEventInfoBuffer;
+  Hashtable<int, std::vector<std::vector<o2::MCTrack>*>> mMCTrackBuffer;         //! vector of sub-event track vectors; one per event
+  Hashtable<int, std::vector<std::vector<o2::TrackReference>*>> mTrackRefBuffer; //!
+  Hashtable<int, std::list<o2::data::SubEventInfo*>> mSubEventInfoBuffer;
+  Hashtable<int, bool> mFlushableEvents; //! collection of events which have completely arrived
 
   int mEventChecksum = 0;   //! checksum for events
   int mNExpectedEvents = 0; //! number of events that we expect to receive
-  std::unordered_map<int, bool> mFlushableEvents; //! collection of events which has completely arrived
-  int mNextFlushID = 1;                           //! EventID to be flushed next
+  int mNextFlushID = 1;     //! EventID to be flushed next
   TStopwatch mTimer;
 
-  bool mAsService = false; //! if run in deamonized mode
+  bool mAsService = false;  //! if run in deamonized mode
+  bool mForwardKine = true; //! if we forward kinematics (tracks, eventheaders) on some output channel
+  bool mWriteToDisc = true; //! if we want to write simulation products to disc
 
   int mPipeToDriver = -1;
 
@@ -785,7 +875,7 @@ class O2HitMerger : public FairMQDevice
   std::string mCurrentOutputDir; // current output folder asked
 
   // channel to PUB status messages to outside subscribers
-  FairMQChannel mPubChannel;
+  fair::mq::Channel mPubChannel;
 
   // init detector instances
   void initDetInstances();
@@ -799,7 +889,7 @@ void O2HitMerger::initHitFiles(std::string prefix)
   // a little helper lambda
   auto isActivated = [](std::string s) -> bool {
     // access user configuration for list of wanted modules
-    auto& modulelist = o2::conf::SimConfig::Instance().getActiveDetectors();
+    auto& modulelist = o2::conf::SimConfig::Instance().getReadoutDetectors();
     auto active = std::find(modulelist.begin(), modulelist.end(), s) != modulelist.end();
     return active; };
 
@@ -820,7 +910,7 @@ void O2HitMerger::initDetInstances()
   // a little helper lambda
   auto isActivated = [](std::string s) -> bool {
     // access user configuration for list of wanted modules
-    auto& modulelist = o2::conf::SimConfig::Instance().getActiveDetectors();
+    auto& modulelist = o2::conf::SimConfig::Instance().getReadoutDetectors();
     auto active = std::find(modulelist.begin(), modulelist.end(), s) != modulelist.end();
     return active; };
 
@@ -842,7 +932,7 @@ void O2HitMerger::initDetInstances()
       counter++;
     }
     if (i == DetID::MFT) {
-      mDetectorInstances[i] = std::move(std::make_unique<o2::mft::Detector>());
+      mDetectorInstances[i] = std::move(std::make_unique<o2::mft::Detector>(true));
       counter++;
     }
     if (i == DetID::TRD) {
@@ -893,9 +983,13 @@ void O2HitMerger::initDetInstances()
       mDetectorInstances[i] = std::move(std::make_unique<o2::zdc::Detector>(true));
       counter++;
     }
+    if (i == DetID::FOC) {
+      mDetectorInstances[i] = std::move(std::make_unique<o2::focal::Detector>(true, gSystem->ExpandPathName("$O2_ROOT/share/Detectors/Geometry/FOC/geometryFiles/geometry_Spaghetti.txt")));
+      counter++;
+    }
 #ifdef ENABLE_UPGRADES
     if (i == DetID::IT3) {
-      mDetectorInstances[i] = std::move(std::make_unique<o2::its3::Detector>(true));
+      mDetectorInstances[i] = std::move(std::make_unique<o2::its::Detector>(true, "IT3"));
       counter++;
     }
     if (i == DetID::TRK) {
@@ -906,10 +1000,30 @@ void O2HitMerger::initDetInstances()
       mDetectorInstances[i] = std::move(std::make_unique<o2::ft3::Detector>(true));
       counter++;
     }
+    if (i == DetID::FCT) {
+      mDetectorInstances[i] = std::move(std::make_unique<o2::fct::Detector>(true));
+      counter++;
+    }
+    if (i == DetID::TF3) {
+      mDetectorInstances[i] = std::move(std::make_unique<o2::iotof::Detector>(true));
+      counter++;
+    }
+    if (i == DetID::RCH) {
+      mDetectorInstances[i] = std::move(std::make_unique<o2::rich::Detector>(true));
+      counter++;
+    }
+    if (i == DetID::MI3) {
+      mDetectorInstances[i] = std::move(std::make_unique<o2::mi3::Detector>(true));
+      counter++;
+    }
+    if (i == DetID::ECL) {
+      mDetectorInstances[i] = std::move(std::make_unique<o2::ecal::Detector>(true));
+      counter++;
+    }
 #endif
   }
   if (counter != DetID::nDetectors) {
-    LOG(WARNING) << " O2HitMerger: Some Detectors are potentially missing in this initialization ";
+    LOG(warning) << " O2HitMerger: Some Detectors are potentially missing in this initialization ";
   }
 }
 

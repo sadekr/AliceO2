@@ -17,24 +17,24 @@
 #include "TOFCompression/CompressorTask.h"
 #include "Framework/ControlService.h"
 #include "Framework/ConfigParamRegistry.h"
-#include "Framework/RawDeviceService.h"
 #include "Framework/DeviceSpec.h"
 #include "Framework/DataSpecUtils.h"
 #include "Framework/InputRecordWalker.h"
-
-#include <fairmq/FairMQDevice.h>
+#include "CommonUtils/VerbosityConfig.h"
 
 using namespace o2::framework;
 
-namespace o2
-{
-namespace tof
+namespace o2::tof
 {
 
 template <typename RDH, bool verbose, bool paranoid>
 void CompressorTask<RDH, verbose, paranoid>::init(InitContext& ic)
 {
-  LOG(INFO) << "Compressor init";
+  if (mPayloadLimit < 0) {
+    LOG(info) << "Compressor init";
+  } else {
+    LOG(info) << "Compressor init with Payload limit at " << mPayloadLimit;
+  }
 
   auto decoderCONET = ic.options().get<bool>("tof-compressor-conet-mode");
   auto decoderVerbose = ic.options().get<bool>("tof-compressor-decoder-verbose");
@@ -51,22 +51,40 @@ void CompressorTask<RDH, verbose, paranoid>::init(InitContext& ic)
     mCompressor.checkSummary();
   };
 
-  ic.services().get<CallbackService>().set(CallbackService::Id::Stop, finishFunction);
+  ic.services().get<CallbackService>().set<CallbackService::Id::Stop>(finishFunction);
 }
 
 template <typename RDH, bool verbose, bool paranoid>
 void CompressorTask<RDH, verbose, paranoid>::run(ProcessingContext& pc)
 {
-  LOG(DEBUG) << "Compressor run";
-
-  auto device = pc.services().get<o2::framework::RawDeviceService>().device();
-  auto outputRoutes = pc.services().get<o2::framework::RawDeviceService>().spec().outputs;
-  auto fairMQChannel = outputRoutes.at(0).channel;
-  FairMQParts partsOut;
+  LOG(debug) << "Compressor run";
 
   /** to store data sorted by subspec id **/
   std::map<int, std::vector<o2::framework::DataRef>> subspecPartMap;
   std::map<int, int> subspecBufferSize;
+
+  // if we see requested data type input with 0xDEADBEEF subspec and 0 payload this means that the "delayed message"
+  // mechanism created it in absence of real data from upstream. Processor should send empty output to not block the workflow
+  {
+    auto& inputs = pc.inputs();
+    static size_t contDeadBeef = 0; // number of times 0xDEADBEEF was seen continuously
+    std::vector<InputSpec> dummy{InputSpec{"dummy", ConcreteDataMatcher{"TOF", "RAWDATA", 0xDEADBEEF}}};
+    for (const auto& ref : InputRecordWalker(inputs, dummy)) {
+      const auto* dh = o2::framework::DataRefUtils::getHeader<o2::header::DataHeader*>(ref);
+      auto payloadSize = DataRefUtils::getPayloadSize(ref);
+      if (payloadSize == 0) {
+        auto maxWarn = o2::conf::VerbosityConfig::Instance().maxWarnDeadBeef;
+        if (++contDeadBeef <= maxWarn) {
+          LOGP(alarm, "Found input [{}/{}/{:#x}] TF#{} 1st_orbit:{} Payload {} : assuming no payload for all links in this TF{}",
+               dh->dataOrigin.str, dh->dataDescription.str, dh->subSpecification, dh->tfCounter, dh->firstTForbit, payloadSize,
+               contDeadBeef == maxWarn ? fmt::format(". {} such inputs in row received, stopping reporting", contDeadBeef) : "");
+        }
+        pc.outputs().cookDeadBeef(Output{"TOF", "CRAWDATA", dh->subSpecification});
+        return;
+      }
+    }
+    contDeadBeef = 0; // if good data, reset the counter
+  }
 
   /** loop over inputs routes **/
   std::vector<InputSpec> sel{InputSpec{"filter", ConcreteDataTypeMatcher{"TOF", "RAWDATA"}}};
@@ -81,6 +99,7 @@ void CompressorTask<RDH, verbose, paranoid>::run(ProcessingContext& pc)
 
     /** store parts in map **/
     auto headerIn = DataRefUtils::getHeader<o2::header::DataHeader*>(ref);
+    auto payloadInSize = DataRefUtils::getPayloadSize(ref);
     auto subspec = headerIn->subSpecification;
     subspecPartMap[subspec].push_back(ref);
 
@@ -88,7 +107,7 @@ void CompressorTask<RDH, verbose, paranoid>::run(ProcessingContext& pc)
     if (!subspecBufferSize.count(subspec)) {
       subspecBufferSize[subspec] = 0;
     }
-    subspecBufferSize[subspec] += headerIn->payloadSize;
+    subspecBufferSize[subspec] += payloadInSize;
     //  }
   }
 
@@ -101,24 +120,31 @@ void CompressorTask<RDH, verbose, paranoid>::run(ProcessingContext& pc)
 
     /** use the first part to define output headers **/
     auto headerOut = *DataRefUtils::getHeader<o2::header::DataHeader*>(firstPart);
-    auto dataProcessingHeaderOut = *DataRefUtils::getHeader<o2::framework::DataProcessingHeader*>(firstPart);
     headerOut.dataDescription = "CRAWDATA";
     headerOut.payloadSize = 0;
     headerOut.splitPayloadParts = 1;
 
     /** initialise output message **/
     auto bufferSize = mOutputBufferSize >= 0 ? mOutputBufferSize + subspecBufferSize[subspec] : std::abs(mOutputBufferSize);
-    auto payloadMessage = device->NewMessage(bufferSize);
-    auto bufferPointer = (char*)payloadMessage->GetData();
+    auto bufferSizeDouble = bufferSize * 2;
+    auto output = Output{headerOut.dataOrigin, "CRAWDATA", headerOut.subSpecification};
+    auto&& v = pc.outputs().makeVector<char>(output);
+    v.resize(bufferSizeDouble);
+    // Better way of doing this would be to used an offset, so that we can resize the vector
+    // as well. However, this should be good enough because bufferSize overestimates the size
+    // of the payload.
+    auto bufferPointer = v.data();
 
     /** loop over subspec parts **/
     for (const auto& ref : parts) {
-
       /** input **/
-      auto headerIn = DataRefUtils::getHeader<o2::header::DataHeader*>(ref);
-      auto dataProcessingHeaderIn = DataRefUtils::getHeader<o2::framework::DataProcessingHeader*>(ref);
       auto payloadIn = ref.payload;
-      auto payloadInSize = headerIn->payloadSize;
+      auto payloadInSize = DataRefUtils::getPayloadSize(ref);
+
+      if (mPayloadLimit > -1 && payloadInSize > mPayloadLimit) {
+        LOG(error) << "Payload larger than limit (" << mPayloadLimit << "), payload = " << payloadInSize;
+        continue;
+      }
 
       /** prepare compressor **/
       mCompressor.setDecoderBuffer(payloadIn);
@@ -134,25 +160,18 @@ void CompressorTask<RDH, verbose, paranoid>::run(ProcessingContext& pc)
       headerOut.payloadSize += payloadOutSize;
     }
 
-    /** finalise output message **/
-    payloadMessage->SetUsedSize(headerOut.payloadSize);
-    o2::header::Stack headerStack{headerOut, dataProcessingHeaderOut};
-    auto headerMessage = device->NewMessage(headerStack.size());
-    std::memcpy(headerMessage->GetData(), headerStack.data(), headerStack.size());
+    if (headerOut.payloadSize > bufferSizeDouble) {
+      headerOut.payloadSize = 0; // put payload to zero, otherwise it will trigger a crash
+    }
 
-    /** add parts **/
-    partsOut.AddPart(std::move(headerMessage));
-    partsOut.AddPart(std::move(payloadMessage));
+    v.resize(headerOut.payloadSize);
+    pc.outputs().adoptContainer(output, std::move(v));
   }
-
-  /** send message **/
-  device->Send(partsOut, fairMQChannel);
 }
 
-template class CompressorTask<o2::header::RAWDataHeaderV6, false, false>;
-template class CompressorTask<o2::header::RAWDataHeaderV6, false, true>;
-template class CompressorTask<o2::header::RAWDataHeaderV6, true, false>;
-template class CompressorTask<o2::header::RAWDataHeaderV6, true, true>;
+template class CompressorTask<o2::header::RAWDataHeader, false, false>;
+template class CompressorTask<o2::header::RAWDataHeader, false, true>;
+template class CompressorTask<o2::header::RAWDataHeader, true, false>;
+template class CompressorTask<o2::header::RAWDataHeader, true, true>;
 
-} // namespace tof
 } // namespace o2

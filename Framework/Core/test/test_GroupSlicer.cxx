@@ -8,14 +8,16 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#define BOOST_TEST_MODULE Test Framework GroupSlicer
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
 
-#include "Framework/AnalysisTask.h"
+#include "Framework/ASoA.h"
 #include "Framework/AnalysisDataModel.h"
+#include "Framework/TableBuilder.h"
+#include "Framework/GroupSlicer.h"
+#include "Framework/ArrowTableSlicingCache.h"
+#include <arrow/util/config.h>
+#include <iostream>
 
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 
 using namespace o2;
 using namespace o2::framework;
@@ -65,13 +67,13 @@ DECLARE_SOA_TABLE(TrksU, "AOD", "TRKSU",
                   test::Y,
                   test::Z);
 
-DECLARE_SOA_TABLE(TrksXU, "AOD", "TRKSX",
+DECLARE_SOA_TABLE(TrksXU, "AOD", "TRKSXU",
                   unsorted::EventId,
                   test::X);
-DECLARE_SOA_TABLE(TrksYU, "AOD", "TRKSY",
+DECLARE_SOA_TABLE(TrksYU, "AOD", "TRKSYU",
                   unsorted::EventId,
                   test::Y);
-DECLARE_SOA_TABLE(TrksZU, "AOD", "TRKSZ",
+DECLARE_SOA_TABLE(TrksZU, "AOD", "TRKSZU",
                   unsorted::EventId,
                   test::Z);
 
@@ -85,7 +87,14 @@ DECLARE_SOA_COLUMN(Lst, lst, std::vector<double>);
 DECLARE_SOA_TABLE(EventExtra, "AOD", "EVTSXTRA", test::Arr, test::Boo, test::Lst);
 
 } // namespace o2::aod
-BOOST_AUTO_TEST_CASE(GroupSlicerOneAssociated)
+TEST_CASE("RelatedByIndex")
+{
+  using Trks = soa::Join<aod::Tracks, aod::TracksExtra>;
+  CHECK(soa::relatedByIndex<aod::Collision, Trks>() == true);
+  CHECK(soa::relatedByIndex<aod::Collision, aod::Tracks>() == true);
+}
+
+TEST_CASE("GroupSlicerOneAssociated")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -104,27 +113,29 @@ BOOST_AUTO_TEST_CASE(GroupSlicerOneAssociated)
   auto trkTable = builderT.finalize();
   aod::Events e{evtTable};
   aod::TrksX t{trkTable};
-  BOOST_CHECK_EQUAL(e.size(), 20);
-  BOOST_CHECK_EQUAL(t.size(), 10 * 20);
+  REQUIRE(e.size() == 20);
+  REQUIRE(t.size() == 10 * 20);
 
   auto tt = std::make_tuple(t);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::TrksX>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s = slices.updateCacheEntry(0, trkTable);
+  o2::framework::GroupSlicer g(e, tt, slices);
 
-  unsigned int count = 0;
+  auto count = 0;
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
-    BOOST_CHECK_EQUAL(gg.globalIndex(), count);
+    REQUIRE(gg.globalIndex() == count);
     auto trks = std::get<aod::TrksX>(as);
-    BOOST_CHECK_EQUAL(trks.size(), 10);
+    REQUIRE(trks.size() == 10);
     for (auto& trk : trks) {
-      BOOST_CHECK_EQUAL(trk.eventId(), count);
+      REQUIRE(trk.eventId() == count);
     }
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(GroupSlicerSeveralAssociated)
+TEST_CASE("GroupSlicerSeveralAssociated")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -171,48 +182,55 @@ BOOST_AUTO_TEST_CASE(GroupSlicerSeveralAssociated)
 
   aod::TrksU tu{trkTableXYZ};
 
-  BOOST_CHECK_EQUAL(e.size(), 20);
-  BOOST_CHECK_EQUAL(tx.size(), 10 * 20);
-  BOOST_CHECK_EQUAL(ty.size(), 20 * 20);
-  BOOST_CHECK_EQUAL(tz.size(), 30 * 20);
+  REQUIRE(e.size() == 20);
+  REQUIRE(tx.size() == 10 * 20);
+  REQUIRE(ty.size() == 20 * 20);
+  REQUIRE(tz.size() == 30 * 20);
 
-  BOOST_CHECK_EQUAL(tu.size(), 10 * 20);
+  REQUIRE(tu.size() == 10 * 20);
 
   auto tt = std::make_tuple(tx, ty, tz, tu);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  auto key = "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>());
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::TrksX>(), key},
+                                 {soa::getLabelFromType<aod::TrksY>(), key},
+                                 {soa::getLabelFromType<aod::TrksZ>(), key}});
+  auto s = slices.updateCacheEntry(0, {trkTableX});
+  s = slices.updateCacheEntry(1, {trkTableY});
+  s = slices.updateCacheEntry(2, {trkTableZ});
+  o2::framework::GroupSlicer g(e, tt, slices);
 
-  unsigned int count = 0;
+  auto count = 0;
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
-    BOOST_CHECK_EQUAL(gg.globalIndex(), count);
+    REQUIRE(gg.globalIndex() == count);
     auto trksx = std::get<aod::TrksX>(as);
     auto trksy = std::get<aod::TrksY>(as);
     auto trksz = std::get<aod::TrksZ>(as);
 
     auto trksu = std::get<aod::TrksU>(as);
 
-    BOOST_CHECK_EQUAL(trksx.size(), 10);
-    BOOST_CHECK_EQUAL(trksy.size(), 20);
-    BOOST_CHECK_EQUAL(trksz.size(), 30);
+    REQUIRE(trksx.size() == 10);
+    REQUIRE(trksy.size() == 20);
+    REQUIRE(trksz.size() == 30);
 
-    BOOST_CHECK_EQUAL(trksu.size(), 10 * 20);
+    REQUIRE(trksu.size() == 10 * 20);
 
     for (auto& trk : trksx) {
-      BOOST_CHECK_EQUAL(trk.eventId(), count);
+      REQUIRE(trk.eventId() == count);
     }
     for (auto& trk : trksy) {
-      BOOST_CHECK_EQUAL(trk.eventId(), count);
+      REQUIRE(trk.eventId() == count);
     }
     for (auto& trk : trksz) {
-      BOOST_CHECK_EQUAL(trk.eventId(), count);
+      REQUIRE(trk.eventId() == count);
     }
 
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedGroups)
+TEST_CASE("GroupSlicerMismatchedGroups")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -234,31 +252,33 @@ BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedGroups)
   auto trkTable = builderT.finalize();
   aod::Events e{evtTable};
   aod::TrksX t{trkTable};
-  BOOST_CHECK_EQUAL(e.size(), 20);
-  BOOST_CHECK_EQUAL(t.size(), 10 * (20 - 5));
+  REQUIRE(e.size() == 20);
+  REQUIRE(t.size() == 10 * (20 - 5));
 
   auto tt = std::make_tuple(t);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::TrksX>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s = slices.updateCacheEntry(0, trkTable);
+  o2::framework::GroupSlicer g(e, tt, slices);
 
-  unsigned int count = 0;
+  auto count = 0;
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
-    BOOST_CHECK_EQUAL(gg.globalIndex(), count);
+    REQUIRE(gg.globalIndex() == count);
     auto trks = std::get<aod::TrksX>(as);
     if (count == 3 || count == 10 || count == 12 || count == 16 || count == 19) {
-      BOOST_CHECK_EQUAL(trks.size(), 0);
+      REQUIRE(trks.size() == 0);
     } else {
-      BOOST_CHECK_EQUAL(trks.size(), 10);
+      REQUIRE(trks.size() == 10);
     }
     for (auto& trk : trks) {
-      BOOST_CHECK_EQUAL(trk.eventId(), count);
+      REQUIRE(trk.eventId() == count);
     }
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedUnassignedGroups)
+TEST_CASE("GroupSlicerMismatchedUnassignedGroups")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -290,31 +310,33 @@ BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedUnassignedGroups)
 
   aod::Events e{evtTable};
   aod::TrksX t{trkTable};
-  BOOST_CHECK_EQUAL(e.size(), 20);
-  BOOST_CHECK_EQUAL(t.size(), (30 + 10 * (20 - 5)));
+  REQUIRE(e.size() == 20);
+  REQUIRE(t.size() == (30 + 10 * (20 - 5)));
 
   auto tt = std::make_tuple(t);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::TrksX>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s = slices.updateCacheEntry(0, trkTable);
+  o2::framework::GroupSlicer g(e, tt, slices);
 
-  unsigned int count = 0;
+  auto count = 0;
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
-    BOOST_CHECK_EQUAL(gg.globalIndex(), count);
+    REQUIRE(gg.globalIndex() == count);
     auto trks = std::get<aod::TrksX>(as);
     if (count == 3 || count == 10 || count == 12 || count == 16 || count == 19) {
-      BOOST_CHECK_EQUAL(trks.size(), 0);
+      REQUIRE(trks.size() == 0);
     } else {
-      BOOST_CHECK_EQUAL(trks.size(), 10);
+      REQUIRE(trks.size() == 10);
     }
     for (auto& trk : trks) {
-      BOOST_CHECK_EQUAL(trk.eventId(), count);
+      REQUIRE(trk.eventId() == count);
     }
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedFilteredGroups)
+TEST_CASE("GroupSlicerMismatchedFilteredGroups")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -338,32 +360,34 @@ BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedFilteredGroups)
   soa::SelectionVector rows{2, 4, 10, 9, 15};
   FilteredEvents e{{evtTable}, {2, 4, 10, 9, 15}};
   aod::TrksX t{trkTable};
-  BOOST_CHECK_EQUAL(e.size(), 5);
-  BOOST_CHECK_EQUAL(t.size(), 10 * (20 - 4));
+  REQUIRE(e.size() == 5);
+  REQUIRE(t.size() == 10 * (20 - 4));
 
   auto tt = std::make_tuple(t);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::TrksX>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s = slices.updateCacheEntry(0, trkTable);
+  o2::framework::GroupSlicer g(e, tt, slices);
 
-  unsigned int count = 0;
+  auto count = 0;
 
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
-    BOOST_CHECK_EQUAL(gg.globalIndex(), rows[count]);
+    REQUIRE(gg.globalIndex() == rows[count]);
     auto trks = std::get<aod::TrksX>(as);
     if (rows[count] == 3 || rows[count] == 10 || rows[count] == 12 || rows[count] == 16) {
-      BOOST_CHECK_EQUAL(trks.size(), 0);
+      REQUIRE(trks.size() == 0);
     } else {
-      BOOST_CHECK_EQUAL(trks.size(), 10);
+      REQUIRE(trks.size() == 10);
     }
     for (auto& trk : trks) {
-      BOOST_CHECK_EQUAL(trk.eventId(), rows[count]);
+      REQUIRE(trk.eventId() == rows[count]);
     }
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedUnsortedFilteredGroups)
+TEST_CASE("GroupSlicerMismatchedUnsortedFilteredGroups")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -387,36 +411,188 @@ BOOST_AUTO_TEST_CASE(GroupSlicerMismatchedUnsortedFilteredGroups)
     }
   }
   auto trkTable = builderT.finalize();
+
+  TableBuilder builderTE;
+  auto trksWriterE = builderTE.cursor<aod::TrksXU>();
+  auto trkTableE = builderTE.finalize();
+
   using FilteredEvents = soa::Filtered<aod::Events>;
   soa::SelectionVector rows{2, 4, 10, 9, 15};
   FilteredEvents e{{evtTable}, {2, 4, 10, 9, 15}};
   soa::SmallGroups<aod::TrksXU> t{{trkTable}, std::move(sel)};
-  BOOST_CHECK_EQUAL(e.size(), 5);
-  BOOST_CHECK_EQUAL(t.size(), 10 * (20 - 4));
+
+  REQUIRE(e.size() == 5);
+  REQUIRE(t.size() == 10 * (20 - 4));
 
   auto tt = std::make_tuple(t);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  ArrowTableSlicingCache slices({}, {{soa::getLabelFromType<aod::TrksXU>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s = slices.updateCacheEntryUnsorted(0, trkTable);
+  o2::framework::GroupSlicer g(e, tt, slices);
 
   unsigned int count = 0;
 
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
-    BOOST_CHECK_EQUAL(gg.globalIndex(), rows[count]);
+    REQUIRE(gg.globalIndex() == rows[count]);
     auto trks = std::get<soa::SmallGroups<aod::TrksXU>>(as);
     if (rows[count] == 3 || rows[count] == 10 || rows[count] == 12 || rows[count] == 16) {
-      BOOST_CHECK_EQUAL(trks.size(), 0);
+      REQUIRE(trks.size() == 0);
     } else {
-      BOOST_CHECK_EQUAL(trks.size(), 10);
+      REQUIRE(trks.size() == 10);
     }
     for (auto& trk : trks) {
-      BOOST_CHECK_EQUAL(trk.eventId(), rows[count]);
+      REQUIRE(trk.eventId() == rows[count]);
+    }
+    ++count;
+  }
+
+  std::vector<int64_t> sele;
+  soa::SmallGroups<aod::TrksXU> te{{trkTableE}, std::move(sele)};
+  auto tte = std::make_tuple(te);
+  o2::framework::GroupSlicer ge(e, tte, slices);
+
+  count = 0;
+  for (auto& slice : ge) {
+    auto as = slice.associatedTables();
+    auto gg = slice.groupingElement();
+    REQUIRE(gg.globalIndex() == rows[count]);
+    auto trks = std::get<soa::SmallGroups<aod::TrksXU>>(as);
+    REQUIRE(trks.size() == 0);
+    ++count;
+  }
+
+  soa::SmallGroupsUnfiltered<aod::TrksXU> tu{{trkTable}, std::vector<int64_t>{}};
+  auto ttu = std::make_tuple(tu);
+  o2::framework::GroupSlicer gu(e, ttu, slices);
+
+  count = 0;
+  for (auto& slice : gu) {
+    auto as = slice.associatedTables();
+    auto gg = slice.groupingElement();
+    REQUIRE(gg.globalIndex() == rows[count]);
+    auto trks = std::get<soa::SmallGroupsUnfiltered<aod::TrksXU>>(as);
+    if (rows[count] == 3 || rows[count] == 10 || rows[count] == 12 || rows[count] == 16) {
+      REQUIRE(trks.size() == 0);
+    } else {
+      REQUIRE(trks.size() == 10);
     }
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(EmptySliceables)
+namespace o2::aod
+{
+namespace parts
+{
+DECLARE_SOA_INDEX_COLUMN(Event, event);
+DECLARE_SOA_COLUMN(Property, property, int);
+DECLARE_SOA_SELF_SLICE_INDEX_COLUMN(Relatives, relatives);
+} // namespace parts
+DECLARE_SOA_TABLE(Parts, "AOD", "PRTS", soa::Index<>, parts::EventId, parts::Property, parts::RelativesIdSlice);
+
+namespace things
+{
+DECLARE_SOA_INDEX_COLUMN(Event, event);
+DECLARE_SOA_INDEX_COLUMN(Part, part);
+} // namespace things
+DECLARE_SOA_TABLE(Things, "AOD", "THNGS", soa::Index<>, things::EventId, things::PartId);
+
+} // namespace o2::aod
+
+template <typename... As>
+static void overwriteInternalIndices(std::tuple<As...>& dest, std::tuple<As...> const& src)
+{
+  (std::get<As>(dest).bindInternalIndicesTo(&std::get<As>(src)), ...);
+}
+
+TEST_CASE("GroupSlicerMismatchedUnsortedFilteredGroupsWithSelfIndex")
+{
+  TableBuilder builderE;
+  auto evtsWriter = builderE.cursor<aod::Events>();
+  for (auto i = 0; i < 20; ++i) {
+    evtsWriter(0, i, 0.5f * i, 2.f * i, 3.f * i);
+  }
+  auto evtTable = builderE.finalize();
+
+  TableBuilder builderP;
+  auto partsWriter = builderP.cursor<aod::Parts>();
+  int filler[2];
+  std::random_device rd;  // a seed source for the random number engine
+  std::mt19937 gen(rd()); // mersenne_twister_engine seeded with rd()
+  std::uniform_int_distribution<> distrib(0, 99);
+
+  for (auto i = 0; i < 100; ++i) {
+
+    filler[0] = distrib(gen);
+    filler[1] = distrib(gen);
+    if (filler[0] > filler[1]) {
+      std::swap(filler[0], filler[1]);
+    }
+    partsWriter(0, std::floor(i / 10.), i, filler);
+  }
+  auto partsTable = builderP.finalize();
+
+  TableBuilder builderT;
+  auto thingsWriter = builderT.cursor<aod::Things>();
+  for (auto i = 0; i < 10; ++i) {
+    thingsWriter(0, i, distrib(gen));
+  }
+  auto thingsTable = builderT.finalize();
+
+  aod::Events e{evtTable};
+  // aod::Parts p{partsTable};
+  aod::Things t{thingsTable};
+  using FilteredParts = soa::Filtered<aod::Parts>;
+  auto size = distrib(gen);
+  soa::SelectionVector rows;
+  for (auto i = 0; i < size; ++i) {
+    rows.push_back(distrib(gen));
+  }
+  FilteredParts fp{{partsTable}, rows};
+  auto associatedTuple = std::make_tuple(fp, t);
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::Parts>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())},
+                                 {soa::getLabelFromType<aod::Things>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s0 = slices.updateCacheEntry(0, partsTable);
+  auto s1 = slices.updateCacheEntry(1, thingsTable);
+  o2::framework::GroupSlicer g(e, associatedTuple, slices);
+
+  overwriteInternalIndices(associatedTuple, associatedTuple);
+
+  // For a grouped case, the recursive access of a slice-self index of a filtered table should have consistent types
+  for (auto& slice : g) {
+    auto as = slice.associatedTables();
+    auto gg = slice.groupingElement();
+    overwriteInternalIndices(as, associatedTuple);
+    auto& ts = std::get<1>(as);
+    ts.bindExternalIndices(&e, &std::get<0>(associatedTuple));
+    for (auto& thing : ts) {
+      if (thing.has_part()) {
+        auto part = thing.part_as<FilteredParts>();
+        REQUIRE(std::same_as<std::decay_t<decltype(part)>::parent_t, FilteredParts>);
+        auto rs = part.relatives_as<std::decay_t<decltype(part)::parent_t>>();
+        REQUIRE(std::same_as<std::decay_t<decltype(rs)>, FilteredParts>);
+        for (auto& r : rs) {
+          REQUIRE(std::same_as<std::decay_t<decltype(r)>::parent_t, FilteredParts>);
+          auto rss = r.relatives_as<std::decay_t<decltype(r)>::parent_t>();
+          REQUIRE(std::same_as<std::decay_t<decltype(rss)>, FilteredParts>);
+          for (auto& rr : rss) {
+            REQUIRE(std::same_as<std::decay_t<decltype(rr)>::parent_t, FilteredParts>);
+            auto rsss = rr.relatives_as<std::decay_t<decltype(rr)>::parent_t>();
+            REQUIRE(std::same_as<std::decay_t<decltype(rsss)>, FilteredParts>);
+            for (auto& rrr : rsss) {
+              REQUIRE(std::same_as<std::decay_t<decltype(rrr)>::parent_t, FilteredParts>);
+              auto rssss = rrr.relatives_as<std::decay_t<decltype(rrr)>::parent_t>();
+              REQUIRE(std::same_as<std::decay_t<decltype(rssss)>, FilteredParts>);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_CASE("EmptySliceables")
 {
   TableBuilder builderE;
   auto evtsWriter = builderE.cursor<aod::Events>();
@@ -431,24 +607,26 @@ BOOST_AUTO_TEST_CASE(EmptySliceables)
 
   aod::Events e{evtTable};
   aod::TrksX t{trkTable};
-  BOOST_CHECK_EQUAL(e.size(), 20);
-  BOOST_CHECK_EQUAL(t.size(), 0);
+  REQUIRE(e.size() == 20);
+  REQUIRE(t.size() == 0);
 
   auto tt = std::make_tuple(t);
-  o2::framework::AnalysisDataProcessorBuilder::GroupSlicer g(e, tt);
+  ArrowTableSlicingCache slices({{soa::getLabelFromType<aod::TrksX>(), "fIndex" + o2::framework::cutString(soa::getLabelFromType<aod::Events>())}});
+  auto s = slices.updateCacheEntry(0, trkTable);
+  o2::framework::GroupSlicer g(e, tt, slices);
 
   unsigned int count = 0;
   for (auto& slice : g) {
     auto as = slice.associatedTables();
     auto gg = slice.groupingElement();
     auto trks = std::get<aod::TrksX>(as);
-    BOOST_CHECK_EQUAL(gg.globalIndex(), count);
-    BOOST_CHECK_EQUAL(trks.size(), 0);
+    REQUIRE(gg.globalIndex() == count);
+    REQUIRE(trks.size() == 0);
     ++count;
   }
 }
 
-BOOST_AUTO_TEST_CASE(ArrowDirectSlicing)
+TEST_CASE("ArrowDirectSlicing")
 {
   int counts[] = {5, 5, 5, 4, 1};
   int offsets[] = {0, 5, 10, 15, 19, 20};
@@ -498,46 +676,80 @@ BOOST_AUTO_TEST_CASE(ArrowDirectSlicing)
     slices_bool.emplace_back(evtETable->column(1)->Slice(offset, counts[i]));
     slices_vec.emplace_back(evtETable->column(2)->Slice(offset, counts[i]));
     offset += counts[i];
-    BOOST_REQUIRE_EQUAL(slices_array[i]->length(), counts[i]);
-    BOOST_REQUIRE_EQUAL(slices_bool[i]->length(), counts[i]);
-    BOOST_REQUIRE_EQUAL(slices_vec[i]->length(), counts[i]);
+    REQUIRE(slices_array[i]->length() == counts[i]);
+    REQUIRE(slices_bool[i]->length() == counts[i]);
+    REQUIRE(slices_vec[i]->length() == counts[i]);
   }
 
   std::vector<arrow::Datum> slices;
   std::vector<uint64_t> offsts;
-  auto status = sliceByColumn("fID", "BigE", b_e.asArrowTable(), 20, &slices, &offsts);
+  auto bk = std::make_pair(soa::getLabelFromType<aod::Events>(), "fID");
+  ArrowTableSlicingCache cache({bk});
+  auto s = cache.updateCacheEntry(0, {evtTable});
+  auto lcache = cache.getCacheFor(bk);
   for (auto i = 0u; i < 5; ++i) {
-    auto tbl = arrow::util::get<std::shared_ptr<arrow::Table>>(slices[i].value);
+    auto [offset, count] = lcache.getSliceFor(i);
+    auto tbl = b_e.asArrowTable()->Slice(offset, count);
     auto ca = tbl->GetColumnByName("fArr");
     auto cb = tbl->GetColumnByName("fBoo");
     auto cv = tbl->GetColumnByName("fLst");
-    BOOST_REQUIRE_EQUAL(ca->length(), counts[i]);
-    BOOST_REQUIRE_EQUAL(cb->length(), counts[i]);
-    BOOST_REQUIRE_EQUAL(cv->length(), counts[i]);
-    BOOST_CHECK(ca->Equals(slices_array[i]));
-    BOOST_CHECK(cb->Equals(slices_bool[i]));
-    BOOST_CHECK(cv->Equals(slices_vec[i]));
+    REQUIRE(ca->length() == counts[i]);
+    REQUIRE(cb->length() == counts[i]);
+    REQUIRE(cv->length() == counts[i]);
+    REQUIRE(ca->Equals(slices_array[i]));
+    REQUIRE(cb->Equals(slices_bool[i]));
+    REQUIRE(cv->Equals(slices_vec[i]));
   }
 
   int j = 0u;
   for (auto i = 0u; i < 5; ++i) {
-    auto tbl = BigE::table_t{arrow::util::get<std::shared_ptr<arrow::Table>>(slices[i].value), static_cast<uint64_t>(offsts[i])};
-    BOOST_CHECK_EQUAL(tbl.size(), counts[i]);
+    auto [offset, count] = lcache.getSliceFor(i);
+    auto tbl = BigE{{b_e.asArrowTable()->Slice(offset, count)}, static_cast<uint64_t>(offset)};
+    REQUIRE(tbl.size() == counts[i]);
     for (auto& row : tbl) {
-      BOOST_CHECK_EQUAL(row.id(), ids[i]);
-      BOOST_CHECK_EQUAL(row.boo(), j % 2 == 0);
+      REQUIRE(row.id() == ids[i]);
+      REQUIRE(row.boo() == (j % 2 == 0));
       auto rid = row.globalIndex();
       auto arr = row.arr();
-      BOOST_CHECK_EQUAL(arr[0], 0.1f * (float)rid);
-      BOOST_CHECK_EQUAL(arr[1], 0.2f * (float)rid);
-      BOOST_CHECK_EQUAL(arr[2], 0.3f * (float)rid);
+      REQUIRE(arr[0] == 0.1f * (float)rid);
+      REQUIRE(arr[1] == 0.2f * (float)rid);
+      REQUIRE(arr[2] == 0.3f * (float)rid);
 
       auto d = row.lst();
-      BOOST_CHECK_EQUAL(d.size(), sizes[i]);
+      REQUIRE(d.size() == (size_t)sizes[i]);
       for (auto z = 0u; z < d.size(); ++z) {
-        BOOST_CHECK_EQUAL(d[z], 0.5 * (double)z);
+        REQUIRE(d[z] == 0.5 * (double)z);
       }
       ++j;
     }
+  }
+}
+
+TEST_CASE("TestSlicingException")
+{
+  int offsets[] = {0, 5, 10, 15, 19, 20};
+  int ids[] = {0, 1, 2, 4, 3};
+
+  TableBuilder builderE;
+  auto evtsWriter = builderE.cursor<aod::Events>();
+  auto step = 0;
+  for (auto i = 0; i < 20; ++i) {
+    if (i >= offsets[step + 1]) {
+      ++step;
+    }
+    evtsWriter(0, ids[step], 0.5f * i, 2.f * i, 3.f * i);
+  }
+  auto evtTable = builderE.finalize();
+
+  auto bk = std::make_pair(soa::getLabelFromType<aod::Events>(), "fID");
+  ArrowTableSlicingCache cache({bk});
+
+  try {
+    auto s = cache.updateCacheEntry(0, {evtTable});
+  } catch (RuntimeErrorRef re) {
+    REQUIRE(std::string{error_from_ref(re).what} == "Table Events index fID is not sorted: next value 3 < previous value 4!");
+    return;
+  } catch (...) {
+    FAIL("Slicing should have failed due to unsorted index");
   }
 }

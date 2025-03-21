@@ -17,11 +17,14 @@
 #include "Framework/DriverControl.h"
 #include "Framework/DriverInfo.h"
 #include "Framework/DeviceMetricsHelper.h"
+#include "Framework/DeviceMetricsInfo.h"
 #include "FrameworkGUIDeviceInspector.h"
 #include "FrameworkGUIDevicesGraph.h"
 #include "FrameworkGUIDataRelayerUsage.h"
 #include "PaletteHelpers.h"
 #include "FrameworkGUIState.h"
+#include "Framework/Signpost.h"
+#include <DebugGUI/icons_font_awesome.h>
 
 #include <fmt/format.h>
 
@@ -30,16 +33,15 @@
 #include <set>
 #include <string>
 #include <cinttypes>
+#include <numeric>
 
+O2_DECLARE_DYNAMIC_LOG(driver);
 // Make sure we can use aggregated initialisers.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 
 // Simplify debugging
 template class std::vector<o2::framework::DeviceMetricsInfo>;
-
-static inline ImVec2 operator+(const ImVec2& lhs, const ImVec2& rhs) { return ImVec2(lhs.x + rhs.x, lhs.y + rhs.y); }
-static inline ImVec2 operator-(const ImVec2& lhs, const ImVec2& rhs) { return ImVec2(lhs.x - rhs.x, lhs.y - rhs.y); }
 
 namespace o2::framework::gui
 {
@@ -67,16 +69,24 @@ ImVec4 colorForLogLevel(LogParsingHelpers::LogLevel logLevel)
   switch (logLevel) {
     case LogParsingHelpers::LogLevel::Info:
       return PaletteHelpers::GREEN;
+    case LogParsingHelpers::LogLevel::Important:
+      return PaletteHelpers::GREEN;
     case LogParsingHelpers::LogLevel::Debug:
-      return ImVec4(153. / 255, 61. / 255, 61. / 255, 255. / 255);
+      return PaletteHelpers::WHITE;
+    case LogParsingHelpers::LogLevel::Alarm:
+      return PaletteHelpers::YELLOW;
     case LogParsingHelpers::LogLevel::Warning:
       return PaletteHelpers::DARK_YELLOW;
     case LogParsingHelpers::LogLevel::Error:
       return PaletteHelpers::RED;
+    case LogParsingHelpers::LogLevel::Critical:
+      return PaletteHelpers::RED;
+    case LogParsingHelpers::LogLevel::Fatal:
+      return PaletteHelpers::RED;
     case LogParsingHelpers::LogLevel::Unknown:
-      return ImVec4(194. / 255, 195. / 255, 199. / 255, 255. / 255);
+      return PaletteHelpers::DARK_RED;
     default:
-      return ImVec4(194. / 255, 195. / 255, 199. / 255, 255. / 255);
+      return PaletteHelpers::DARK_RED;
   };
 }
 
@@ -141,18 +151,12 @@ void displayHistory(const DeviceInfo& info, DeviceControl& control)
       ji = (ji + 1) % historySize;
       continue;
     }
-    // Print matching lines
+    // Print matching lines. Notice we filter twice, once on input, to reduce the
+    // stream, a second time at display time, to avoid showing unrelevant
+    // messages from past.
     if (strstr(line.c_str(), control.logFilter) != nullptr) {
-      auto color = colorForLogLevel(logLevel);
-      // We filter twice, once on input, to reduce the
-      // stream, a second time at display time, to avoid
-      // showing unrelevant messages from past.
       if (logLevel >= control.logLevel) {
-        if (line.find('%', 0) != std::string::npos) {
-          ImGui::TextUnformatted(line.c_str(), line.c_str() + line.size());
-        } else {
-          ImGui::TextColored(color, line.c_str(), line.c_str() + line.size());
-        }
+        ImGui::TextColored(colorForLogLevel(logLevel), "%s", line.c_str());
       }
     }
     ji = (ji + 1) % historySize;
@@ -206,8 +210,8 @@ enum MetricTypes {
 // so that we can display driver and device metrics in the same plot
 // without an if.
 struct AllMetricsStore {
-  std::vector<DeviceMetricsInfo> const* metrics[TOTAL_TYPES_OF_METRICS];
-  std::vector<TopologyNodeInfo> const* specs[TOTAL_TYPES_OF_METRICS];
+  gsl::span<DeviceMetricsInfo const> metrics[TOTAL_TYPES_OF_METRICS];
+  gsl::span<TopologyNodeInfo const> specs[TOTAL_TYPES_OF_METRICS];
 };
 
 void displaySparks(
@@ -225,10 +229,8 @@ void displaySparks(
   ImGui::TableSetupScrollFreeze(2, 0);
   for (size_t i = 0; i < visibleMetricsIndex.size(); ++i) {
     auto& index = visibleMetricsIndex[i];
-    auto& metricsInfos = *metricStore.metrics[index.storeIndex];
-    auto& nodes = *metricStore.specs[index.storeIndex];
+    auto& metricsInfos = metricStore.metrics[index.storeIndex];
     auto& metricsInfo = metricsInfos[index.deviceIndex];
-    auto& label = metricsInfo.metricLabels[index.metricIndex];
     auto& metric = metricsInfo.metrics[index.metricIndex];
     auto& state = metricDisplayStates[index.stateIndex];
 
@@ -243,49 +245,64 @@ void displaySparks(
     static ImPlotAxisFlags rty_axis = ImPlotAxisFlags_NoTickLabels | ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickMarks;
     ImGui::PushID(index.stateIndex);
     HistoData data;
-    data.mod = std::min(metric.filledMetrics, metricsInfo.timestamps[index.metricIndex].size());
+    data.mod = std::min(metric.filledMetrics, metricStorageSize(metric.type));
     data.first = metric.pos - data.mod;
     data.size = metric.filledMetrics;
-    data.time = metricsInfo.timestamps[index.metricIndex].data();
     data.legend = state.legend.c_str();
 
     if (!locked) {
-      ImPlot::SetNextPlotLimitsX((startTime + ImGui::GetTime() - 100) * 1000, (startTime + ImGui::GetTime()) * 1000, ImGuiCond_Always);
-      ImPlot::SetNextPlotLimitsY(metricsInfo.min[index.metricIndex], metricsInfo.max[index.metricIndex] * 1.1, ImGuiCond_Always);
+      ImPlot::SetNextAxisLimits(ImAxis_X1, (startTime + ImGui::GetTime() - 100) * 1000, (startTime + ImGui::GetTime()) * 1000, ImGuiCond_Always);
+      ImPlot::SetNextAxisLimits(ImAxis_Y1, metricsInfo.min[index.metricIndex], metricsInfo.max[index.metricIndex] * 1.1, ImGuiCond_Always);
       rty_axis |= ImPlotAxisFlags_LockMin;
     }
-    if (ImPlot::BeginPlot("##sparks", "time", "value", ImVec2(700, 100), 0, rtx_axis, rty_axis)) {
-      ImPlot::SetPlotYAxis(state.axis);
+    if (ImPlot::BeginPlot("##sparks", ImVec2(700, 100), 0)) {
+      ImPlot::SetupAxes("time", "value", rtx_axis, rty_axis);
+      ImPlot::SetAxis(state.axis);
       switch (metric.type) {
-        case MetricType::Int: {
-          data.points = (void*)metricsInfo.intMetrics[metric.storeIdx].data();
+        case MetricType::Enum: {
+          data.points = (void*)metricsInfo.enumMetrics[metric.storeIdx].data();
+          data.time = metricsInfo.enumTimestamps[metric.storeIdx].data();
 
-          auto getter = [](void* hData, int idx) -> ImPlotPoint {
+          auto getter = [](int idx, void* hData) -> ImPlotPoint {
             auto histoData = reinterpret_cast<HistoData*>(hData);
             size_t pos = (histoData->first + static_cast<size_t>(idx)) % histoData->mod;
-            assert(pos >= 0 && pos < 1024);
+            assert(pos >= 0 && pos < metricStorageSize(MetricType::Enum));
+            return ImPlotPoint(histoData->time[pos], ((int8_t*)(histoData->points))[pos]);
+          };
+          ImPlot::PlotLineG("##plot", getter, &data, data.mod);
+        } break;
+        case MetricType::Int: {
+          data.points = (void*)metricsInfo.intMetrics[metric.storeIdx].data();
+          data.time = metricsInfo.intTimestamps[metric.storeIdx].data();
+
+          auto getter = [](int idx, void* hData) -> ImPlotPoint {
+            auto histoData = reinterpret_cast<HistoData*>(hData);
+            size_t pos = (histoData->first + static_cast<size_t>(idx)) % histoData->mod;
+            assert(pos >= 0 && pos < metricStorageSize(MetricType::Int));
             return ImPlotPoint(histoData->time[pos], ((int*)(histoData->points))[pos]);
           };
           ImPlot::PlotLineG("##plot", getter, &data, data.mod);
         } break;
         case MetricType::Uint64: {
           data.points = (void*)metricsInfo.uint64Metrics[metric.storeIdx].data();
+          data.time = metricsInfo.uint64Timestamps[metric.storeIdx].data();
 
-          auto getter = [](void* hData, int idx) -> ImPlotPoint {
+          auto getter = [](int idx, void* hData) -> ImPlotPoint {
             auto histoData = reinterpret_cast<HistoData*>(hData);
             size_t pos = (histoData->first + static_cast<size_t>(idx)) % histoData->mod;
-            assert(pos >= 0 && pos < 1024);
+            assert(pos >= 0 && pos < metricStorageSize(MetricType::Uint64));
             return ImPlotPoint(histoData->time[pos], ((uint64_t*)histoData->points)[pos]);
           };
           ImPlot::PlotLineG("##plot", getter, &data, data.mod, 0);
         } break;
         case MetricType::Float: {
           data.points = (void*)metricsInfo.floatMetrics[metric.storeIdx].data();
+          data.time = metricsInfo.floatTimestamps[metric.storeIdx].data();
 
-          auto getter = [](void* hData, int idx) -> ImPlotPoint {
+          auto getter = [](int idx, void* hData) -> ImPlotPoint {
             auto histoData = reinterpret_cast<HistoData*>(hData);
             size_t pos = (histoData->first + static_cast<size_t>(idx)) % histoData->mod;
-            assert(pos >= 0 && pos < 1024);
+            assert(pos >= 0 && pos < metricStorageSize(MetricType::Float));
             return ImPlotPoint(histoData->time[pos], ((float*)histoData->points)[pos]);
           };
           ImPlot::PlotLineG("##plot", getter, &data, data.mod, 0);
@@ -301,15 +318,50 @@ void displaySparks(
   ImGui::EndTable();
 }
 
+int formatSI(double value, char* buff, int size, void* user_data)
+{
+  if (value == 0.0) {
+    return snprintf(buff, size, "%.0f", value);
+  }
+  if (value < 10.0) {
+    return snprintf(buff, size, "%.2f", value);
+  }
+  if (value < 1000.0) {
+    return snprintf(buff, size, "%.0f", value);
+  }
+  if (value < 1000000.0) {
+    return snprintf(buff, size, "%.0f k", value / 1000.0);
+  }
+  if (value < 1000000000.0) {
+    return snprintf(buff, size, "%.0f M", value / 1000000.0);
+  }
+  if (value < 1000000000000.0) {
+    return snprintf(buff, size, "%.0f G", value / 1000000000.0);
+  }
+  return snprintf(buff, size, "%.0f T", value / 1000000000000.0);
+}
+
+int formatTimeSinceStart(double value, char* buff, int size, void* user_data)
+{
+  auto* startTime = (int64_t*)user_data;
+  if (value - *startTime < 0) {
+    buff[0] = '\0';
+    return 0;
+  }
+  int64_t seconds = (value - *startTime) / 1000;
+  int64_t minutes = seconds / 60;
+  return snprintf(buff, size, "%02" PRIi64 ":%02" PRIi64, minutes, seconds % 60);
+}
+
 void displayDeviceMetrics(const char* label,
                           size_t rangeBegin, size_t rangeEnd, size_t bins, MetricsDisplayStyle displayType,
                           std::vector<MetricDisplayState>& state,
-                          AllMetricsStore const& metricStore)
+                          AllMetricsStore const& metricStore,
+                          DriverInfo const& driverInfo)
 {
   std::vector<void*> metricsToDisplay;
   std::vector<const char*> deviceNames;
   std::vector<MultiplotData> userData;
-  MetricType metricType;
 #ifdef NDEBUG
   for (size_t si = 0; si < TOTAL_TYPES_OF_METRICS; ++si) {
     assert(metricsStore.metrics[si].size() == metricStore.specs[si].size());
@@ -321,26 +373,21 @@ void displayDeviceMetrics(const char* label,
   size_t minDomain = std::numeric_limits<size_t>::max();
   size_t gmi = 0;
 
-  ImPlotFlags axisFlags = 0;
+  ImPlotAxisFlags axisFlags = 0;
 
   for (size_t si = 0; si < TOTAL_TYPES_OF_METRICS; ++si) {
-    std::vector<DeviceMetricsInfo> const& metricsInfos = *metricStore.metrics[si];
-    auto const& specs = *metricStore.specs[si];
+    gsl::span<DeviceMetricsInfo const> metricsInfos = metricStore.metrics[si];
+    gsl::span<TopologyNodeInfo const> specs = metricStore.specs[si];
     for (int di = 0; di < metricsInfos.size(); ++di) {
       for (size_t mi = 0; mi < metricsInfos[di].metrics.size(); ++mi) {
-        auto& label = metricsInfos[di].metricLabels[mi];
         if (state[gmi].visible == false) {
           gmi++;
           continue;
         }
         auto& metric = metricsInfos[di].metrics[mi];
         deviceNames.push_back(specs[di].label.c_str());
-        metricType = metric.type;
         MultiplotData data;
         data.size = metric.filledMetrics;
-        data.mod = std::min(metric.filledMetrics, metricsInfos[di].timestamps[mi].size());
-        data.first = metric.pos - data.mod;
-        data.X = metricsInfos[di].timestamps[mi].data();
         data.legend = state[gmi].legend.c_str();
         data.type = metric.type;
         data.axis = state[gmi].axis;
@@ -348,23 +395,41 @@ void displayDeviceMetrics(const char* label,
         maxValue[data.axis] = std::max(maxValue[data.axis], metricsInfos[di].max[mi]);
         minDomain = std::min(minDomain, metricsInfos[di].minDomain[mi]);
         maxDomain = std::max(maxDomain, metricsInfos[di].maxDomain[mi]);
-        axisFlags |= data.axis == 1 ? ImPlotFlags_YAxis2 : ImPlotFlags_None;
-        axisFlags |= data.axis == 2 ? ImPlotFlags_YAxis3 : ImPlotFlags_None;
+        axisFlags |= data.axis == 1 ? (ImPlotFlags_)ImPlotFlags_YAxis2 : ImPlotFlags_None;
+        axisFlags |= data.axis == 2 ? (ImPlotFlags_)ImPlotFlags_YAxis3 : ImPlotFlags_None;
         switch (metric.type) {
           case MetricType::Int: {
             data.Y = metricsInfos[di].intMetrics[metric.storeIdx].data();
+            auto& timestamps = metricsInfos[di].intTimestamps[metric.storeIdx];
+            data.mod = std::min(metric.filledMetrics, timestamps.size());
+            data.first = metric.pos - data.mod;
+            data.X = timestamps.data();
+          } break;
+          case MetricType::Enum: {
+            data.Y = metricsInfos[di].enumMetrics[metric.storeIdx].data();
+            auto& timestamps = metricsInfos[di].enumTimestamps[metric.storeIdx];
+            data.mod = std::min(metric.filledMetrics, timestamps.size());
+            data.first = metric.pos - data.mod;
+            data.X = timestamps.data();
           } break;
           case MetricType::Uint64: {
             data.Y = metricsInfos[di].uint64Metrics[metric.storeIdx].data();
+            auto& timestamps = metricsInfos[di].uint64Timestamps[metric.storeIdx];
+            data.mod = std::min(metric.filledMetrics, timestamps.size());
+            data.first = metric.pos - data.mod;
+            data.X = timestamps.data();
           } break;
           case MetricType::Float: {
             data.Y = metricsInfos[di].floatMetrics[metric.storeIdx].data();
+            auto& timestamps = metricsInfos[di].floatTimestamps[metric.storeIdx];
+            data.mod = std::min(metric.filledMetrics, timestamps.size());
+            data.first = metric.pos - data.mod;
+            data.X = timestamps.data();
           } break;
           case MetricType::Unknown:
           case MetricType::String: {
             data.Y = nullptr;
             data.type = MetricType::String;
-            metricType = MetricType::String;
           } break;
         }
 
@@ -379,9 +444,6 @@ void displayDeviceMetrics(const char* label,
     maxValue[ai] = std::max(minValue[ai] + 1.f, maxValue[ai]);
   }
 
-  static size_t lastMinRange = minDomain;
-  static size_t lastMaxRange = maxDomain;
-
   // Nothing to show.
   if (userData.empty()) {
     return;
@@ -390,7 +452,7 @@ void displayDeviceMetrics(const char* label,
     metricsToDisplay.push_back(&(userData[ui]));
   }
 
-  auto getterXY = [](void* hData, int idx) -> ImPlotPoint {
+  auto getterXY = [](int idx, void* hData) -> ImPlotPoint {
     auto histoData = reinterpret_cast<const MultiplotData*>(hData);
     size_t pos = (histoData->first + static_cast<size_t>(idx)) % histoData->mod;
     double x = static_cast<const size_t*>(histoData->X)[pos];
@@ -401,6 +463,8 @@ void displayDeviceMetrics(const char* label,
       y = static_cast<const uint64_t*>(histoData->Y)[pos];
     } else if (histoData->type == MetricType::Float) {
       y = static_cast<const float*>(histoData->Y)[pos];
+    } else if (histoData->type == MetricType::Enum) {
+      y = static_cast<const int8_t*>(histoData->Y)[pos];
     }
     auto point = ImPlotPoint{x, y};
     return point;
@@ -408,21 +472,28 @@ void displayDeviceMetrics(const char* label,
   static bool logScale = false;
   ImGui::Checkbox("Log scale", &logScale);
 
-  ImPlot::SetNextPlotLimitsX(minDomain, maxDomain, ImGuiCond_Once);
-  ImPlot::SetNextPlotTicksX(minDomain, maxDomain, 5);
+  ImPlot::SetNextAxisLimits(ImAxis_X1, minDomain, maxDomain, ImGuiCond_Once);
+
   auto axisPadding = 0.;
   if (displayType == MetricsDisplayStyle::Lines) {
     axisPadding = 0.2;
   }
 
-  for (size_t ai = 0; ai < 3; ++ai) {
-    ImPlot::SetNextPlotLimitsY(minValue[ai] - (maxValue[ai] - minValue[ai]) * axisPadding,
-                               maxValue[ai] * (1. + axisPadding), ImGuiCond_Always, ai);
-  }
+  ImPlot::SetNextAxisLimits(ImAxis_Y1, minValue[0] - (maxValue[0] - minValue[0]) * axisPadding,
+                            maxValue[0] * (1. + axisPadding), ImGuiCond_Always);
+  ImPlot::SetNextAxisLimits(ImAxis_Y2, minValue[1] - (maxValue[1] - minValue[1]) * axisPadding,
+                            maxValue[1] * (1. + axisPadding), ImGuiCond_Always);
+  ImPlot::SetNextAxisLimits(ImAxis_Y3, minValue[2] - (maxValue[2] - minValue[2]) * axisPadding,
+                            maxValue[2] * (1. + axisPadding), ImGuiCond_Always);
 
   switch (displayType) {
     case MetricsDisplayStyle::Histos:
-      if (ImPlot::BeginPlot("##Some plot", "time", "value")) {
+      if (ImPlot::BeginPlot("##Some plot")) {
+        ImPlot::SetupAxes("time", "value");
+        ImPlot::SetupAxisFormat(ImAxis_Y1, formatSI, nullptr);
+        ImPlot::SetupAxisFormat(ImAxis_Y2, formatSI, nullptr);
+        ImPlot::SetupAxisFormat(ImAxis_Y3, formatSI, nullptr);
+        ImPlot::SetupAxisFormat(ImAxis_X1, formatTimeSinceStart, (void*)&driverInfo.startTimeMsFromEpoch);
         for (size_t pi = 0; pi < metricsToDisplay.size(); ++pi) {
           ImGui::PushID(pi);
           auto data = (const MultiplotData*)metricsToDisplay[pi];
@@ -437,13 +508,17 @@ void displayDeviceMetrics(const char* label,
     case MetricsDisplayStyle::Lines: {
       auto xAxisFlags = ImPlotAxisFlags_None;
       auto yAxisFlags = ImPlotAxisFlags_LockMin;
-      //ImPlot::FitNextPlotAxes(true, true, true, true);
-      if (ImPlot::BeginPlot("##Some plot", "time", "value", {-1, -1}, axisFlags, xAxisFlags, yAxisFlags)) {
+      // ImPlot::FitNextPlotAxes(true, true, true, true);
+      if (ImPlot::BeginPlot("##Some plot", {-1, -1}, axisFlags)) {
+        ImPlot::SetupAxes("time", "value", xAxisFlags, yAxisFlags);
+        ImPlot::SetupAxisFormat(ImAxis_Y1, formatSI, nullptr);
+        ImPlot::SetupAxisFormat(ImAxis_Y2, formatSI, nullptr);
+        ImPlot::SetupAxisFormat(ImAxis_Y3, formatSI, nullptr);
+        ImPlot::SetupAxisFormat(ImAxis_X1, formatTimeSinceStart, (void*)&driverInfo.startTimeMsFromEpoch);
         for (size_t pi = 0; pi < metricsToDisplay.size(); ++pi) {
           ImGui::PushID(pi);
           auto data = (const MultiplotData*)metricsToDisplay[pi];
-          const char* label = data->legend;
-          ImPlot::SetPlotYAxis(data->axis);
+          ImPlot::SetAxis(data->axis);
           ImPlot::PlotLineG(data->legend, getterXY, metricsToDisplay[pi], data->mod, 0);
           ImGui::PopID();
         }
@@ -451,7 +526,8 @@ void displayDeviceMetrics(const char* label,
       }
     } break;
     case MetricsDisplayStyle::Stems:
-      if (ImPlot::BeginPlot("##Some plot", "time", "value")) {
+      if (ImPlot::BeginPlot("##Some plot")) {
+        ImPlot::SetupAxes("time", "value");
         for (size_t pi = 0; pi < userData.size(); ++pi) {
           auto data = reinterpret_cast<const MultiplotData*>(metricsToDisplay[pi]);
           // FIXME: display a message for other metrics
@@ -482,23 +558,34 @@ void metricsTableRow(std::vector<MetricIndex> metricIndex,
   ImGui::Text("%d", row);
 
   for (auto index : metricIndex) {
-    auto& metricsInfos = *metricsStore.metrics[index.storeIndex];
+    auto& metricsInfos = metricsStore.metrics[index.storeIndex];
     auto& metricsInfo = metricsInfos[index.deviceIndex];
     auto& info = metricsInfos[index.deviceIndex].metrics[index.metricIndex];
 
     ImGui::TableNextColumn();
-    auto time = metricsInfo.timestamps[index.metricIndex][row];
+    if (info.filledMetrics <= row) {
+      ImGui::Text(" - ");
+      continue;
+    }
     switch (info.type) {
       case MetricType::Int: {
+        auto time = metricsInfo.intTimestamps[info.storeIdx][row];
         ImGui::Text("%i, %" PRIu64, metricsInfo.intMetrics[info.storeIdx][row], (uint64_t)time);
       } break;
       case MetricType::Uint64: {
+        auto time = metricsInfo.uint64Timestamps[info.storeIdx][row];
         ImGui::Text("%" PRIu64 ", %" PRIu64, metricsInfo.uint64Metrics[info.storeIdx][row], (uint64_t)time);
       } break;
       case MetricType::Float: {
+        auto time = metricsInfo.floatTimestamps[info.storeIdx][row];
         ImGui::Text("%f, %" PRIu64, metricsInfo.floatMetrics[info.storeIdx][row], (uint64_t)time);
       } break;
+      case MetricType::Enum: {
+        auto time = metricsInfo.enumTimestamps[info.storeIdx][row];
+        ImGui::Text("%i, %" PRIu64, metricsInfo.enumMetrics[info.storeIdx][row], (uint64_t)time);
+      } break;
       case MetricType::String: {
+        auto time = metricsInfo.stringTimestamps[info.storeIdx][row];
         ImGui::Text("%s, %" PRIu64, metricsInfo.stringMetrics[info.storeIdx][row].data, (uint64_t)time);
       } break;
       default:
@@ -548,7 +635,6 @@ void displayMetrics(gui::WorkspaceGUIState& state,
   auto metricDisplayPos = 0;
   static bool metricSelectorVisible = true;
   static std::vector<MetricDisplayState> metricDisplayState;
-  static bool showInternalMetrics = false;
 
   // Calculate the full timestamp range for the selected metric
   size_t minTime = -1;
@@ -559,7 +645,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
 
   size_t totalMetrics = 0;
   for (auto& metricsInfos : metricsStore.metrics) {
-    for (auto& metricInfo : *metricsInfos) {
+    for (auto& metricInfo : metricsInfos) {
       totalMetrics += metricInfo.metrics.size();
     }
   }
@@ -568,28 +654,41 @@ void displayMetrics(gui::WorkspaceGUIState& state,
     size_t gmi = 0;
     std::vector<MetricDisplayState> newMetricDisplayStates;
     newMetricDisplayStates.resize(totalMetrics);
+    static std::vector<int> order;
+    order.resize(metricDisplayState.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [](int a, int b) {
+      return metricDisplayState[a].legend < metricDisplayState[b].legend;
+    });
+
     for (size_t si = 0; si < TOTAL_TYPES_OF_METRICS; ++si) {
-      auto& metricsInfos = *metricsStore.metrics[si];
-      auto& specs = *metricsStore.specs[si];
+      auto& metricsInfos = metricsStore.metrics[si];
+      auto& specs = metricsStore.specs[si];
       for (size_t di = 0; di < metricsInfos.size(); ++di) {
         auto& metricInfo = metricsInfos[di];
         auto& spec = specs[di];
         for (size_t li = 0; li != metricInfo.metricLabels.size(); ++li) {
           char const* metricLabel = metricInfo.metricLabels[li].label;
+          // find the equal range for the label
+          auto low = std::lower_bound(order.begin(), order.end(), spec.label, [](int a, std::string const& b) {
+            return metricDisplayState[a].legend < b;
+          });
+          auto up = std::upper_bound(low, order.end(), spec.label, [](std::string const& a, int b) {
+            return a < metricDisplayState[b].legend;
+          });
           std::string legend = fmt::format("{}/{}", spec.label, metricLabel);
-          auto hasher = std::hash<std::string>();
-          size_t legendHash = hasher(legend);
-          auto old = std::find_if(metricDisplayState.begin(), metricDisplayState.end(), [&legend, &legendHash](MetricDisplayState const& state) { return state.legendHash == legendHash && state.legend == legend; });
-          if (old != metricDisplayState.end()) {
-            newMetricDisplayStates[gmi].visible = old->visible;
-            newMetricDisplayStates[gmi].axis = old->axis;
+          auto old = std::lower_bound(low, up, legend, [](int a, std::string const& b) {
+            return metricDisplayState[a].legend < b;
+          });
+          if (old != order.end() && metricDisplayState[*old].legend == legend) {
+            newMetricDisplayStates[gmi].visible = metricDisplayState[*old].visible;
+            newMetricDisplayStates[gmi].axis = metricDisplayState[*old].axis;
           } else {
             newMetricDisplayStates[gmi].visible = false;
           }
 
           newMetricDisplayStates[gmi].selected = hasAll(metricLabel, query);
           newMetricDisplayStates[gmi].legend = legend;
-          newMetricDisplayStates[gmi].legendHash = legendHash;
           gmi++;
         }
       }
@@ -604,14 +703,11 @@ void displayMetrics(gui::WorkspaceGUIState& state,
     selectedMetricIndex.clear();
     size_t gmi = 0;
     for (size_t si = 0; si < TOTAL_TYPES_OF_METRICS; ++si) {
-      auto& metricsInfos = *metricsStore.metrics[si];
-      auto& devices = metricsStore.specs[si];
+      auto& metricsInfos = metricsStore.metrics[si];
 
       for (size_t di = 0; di < metricsInfos.size(); ++di) {
         auto& metricInfo = metricsInfos[di];
-        auto& deviceSpec = devices[di];
         for (size_t li = 0; li != metricInfo.metricLabels.size(); ++li) {
-          auto& label = metricInfo.metricLabels[li];
           auto& state = metricDisplayState[gmi];
           if (state.selected) {
             selectedMetricIndex.emplace_back(MetricIndex{si, di, li, gmi});
@@ -626,9 +722,16 @@ void displayMetrics(gui::WorkspaceGUIState& state,
     ImGui::SetNextWindowSize(ImVec2(metricDisplayPos, state.bottomPaneSize), 0);
     ImGui::Begin("Available metrics", nullptr, ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
-    ImGui::Text("Find metrics: ");
+    ImGui::Text(ICON_FA_FILTER);
     ImGui::SameLine();
     ImGui::InputText("##query-metrics", query, MAX_QUERY_SIZE);
+    size_t metricSize = 0;
+    for (auto deviceMetrics : metricsStore.metrics) {
+      metricSize += DeviceMetricsInfoHelpers::metricsStorageSize(deviceMetrics);
+    }
+    // ImGui::Text("Total memory used %zu MB", metricSize / 1000000);
+    ImGui::Text("%zu/%zu matching", selectedMetricIndex.size(), totalMetrics);
+
     static const char* possibleAxis[] = {
       "Y",
       "Y1",
@@ -643,13 +746,11 @@ void displayMetrics(gui::WorkspaceGUIState& state,
       while (clipper.Step()) {
         for (size_t i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
           auto& index = selectedMetricIndex[i];
-          auto& metricsInfos = *metricsStore.metrics[index.storeIndex];
-          auto& nodes = *metricsStore.specs[index.storeIndex];
+          auto& metricsInfos = metricsStore.metrics[index.storeIndex];
+          auto& nodes = metricsStore.specs[index.storeIndex];
           auto& metricInfo = metricsInfos[index.deviceIndex];
           auto& node = nodes[index.deviceIndex];
           auto& label = metricInfo.metricLabels[index.metricIndex];
-          auto& metric = metricInfo.metrics[index.metricIndex];
-          auto& state = metricDisplayState[index.stateIndex];
           ImGui::PushID(index.stateIndex);
           ImGui::TableNextRow();
           ImGui::TableNextColumn();
@@ -684,9 +785,9 @@ void displayMetrics(gui::WorkspaceGUIState& state,
   ImGui::Begin("Devices", nullptr, ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
   if (!metricSelectorVisible) {
-    metricSelectorVisible = ImGui::Button(">> Show metric selector");
+    metricSelectorVisible = ImGui::Button(ICON_FA_CHEVRON_RIGHT "Show metric selector");
   } else {
-    metricSelectorVisible = !ImGui::Button("<< Hide metric selector");
+    metricSelectorVisible = !ImGui::Button(ICON_FA_CHEVRON_LEFT "Hide metric selector");
   }
   static char const* plotStyles[] = {
     "lines",
@@ -714,7 +815,6 @@ void displayMetrics(gui::WorkspaceGUIState& state,
     ImGui::EndCombo();
   }
   ImGui::PopItemWidth();
-  bool locked = false;
 
   size_t gmi = 0;
   int visibleMetrics = 0;
@@ -726,21 +826,39 @@ void displayMetrics(gui::WorkspaceGUIState& state,
   visibleMetricsIndex.clear();
 
   for (size_t si = 0; si < TOTAL_TYPES_OF_METRICS; ++si) {
-    auto& metricsInfos = *metricsStore.metrics[si];
+    auto& metricsInfos = metricsStore.metrics[si];
     for (size_t di = 0; di < metricsInfos.size(); ++di) {
       auto& metricInfo = metricsInfos[di];
       bool deviceVisible = false;
       for (size_t mi = 0; mi < metricInfo.metrics.size(); ++mi) {
-        auto& label = metricInfo.metricLabels[mi];
         auto& state = metricDisplayState[gmi];
         if (state.visible) {
           deviceVisible = true;
           visibleMetrics++;
           auto& metric = metricInfo.metrics[mi];
-          auto& timestamps = metricInfo.timestamps[mi];
+          size_t const* timestamps = nullptr;
+          switch (metric.type) {
+            case MetricType::Int:
+              timestamps = metricInfo.intTimestamps[metric.storeIdx].data();
+              break;
+            case MetricType::Float:
+              timestamps = metricInfo.floatTimestamps[metric.storeIdx].data();
+              break;
+            case MetricType::String:
+              timestamps = metricInfo.stringTimestamps[metric.storeIdx].data();
+              break;
+            case MetricType::Uint64:
+              timestamps = metricInfo.uint64Timestamps[metric.storeIdx].data();
+              break;
+            case MetricType::Enum:
+              timestamps = metricInfo.enumTimestamps[metric.storeIdx].data();
+              break;
+            default:
+              throw std::runtime_error("Unknown metric type");
+          }
 
-          for (size_t ti = 0; ti != metricInfo.timestamps.size(); ++ti) {
-            size_t minRangePos = (metric.pos + ti) % metricInfo.timestamps.size();
+          for (size_t ti = 0; ti != metricStorageSize(metric.type); ++ti) {
+            size_t minRangePos = (metric.pos + ti) % metricStorageSize(metric.type);
             size_t curMinTime = timestamps[minRangePos];
             if (curMinTime == 0) {
               continue;
@@ -750,7 +868,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
               break;
             }
           }
-          size_t maxRangePos = (size_t)(metric.pos) - 1 % metricInfo.timestamps.size();
+          size_t maxRangePos = (size_t)(metric.pos) - 1 % metricStorageSize(metric.type);
           size_t curMaxTime = timestamps[maxRangePos];
           maxTime = std::max(maxTime, curMaxTime);
           visibleMetricsIndex.push_back(MetricIndex{si, di, mi, gmi});
@@ -774,7 +892,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
     case MetricsDisplayStyle::Lines: {
       displayDeviceMetrics("Metrics",
                            minTime, maxTime, 1024,
-                           currentStyle, metricDisplayState, metricsStore);
+                           currentStyle, metricDisplayState, metricsStore, driverInfo);
     } break;
     case MetricsDisplayStyle::Sparks: {
       displaySparks(state.startTime, visibleMetricsIndex, metricDisplayState, metricsStore);
@@ -788,7 +906,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
       int visibleDeviceCount = -1;
       /// Calculate the size of all the metrics for a given device
       for (auto index : visibleMetricsIndex) {
-        auto& metricsInfos = *metricsStore.metrics[index.storeIndex];
+        auto& metricsInfos = metricsStore.metrics[index.storeIndex];
         if (lastDevice != index.deviceIndex) {
           visibleDeviceCount++;
           lastDevice = index.deviceIndex;
@@ -799,7 +917,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
       // The Device name header.
       if (ImGui::BeginTable("##metrics-table", visibleMetricsIndex.size() + 1, ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2{-1, -1})) {
         ImGui::TableSetupColumn("##close button", ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_WidthFixed, 20);
-        for (auto index : visibleMetricsIndex) {
+        for (int i = 0; i < visibleMetricsIndex.size(); ++i) {
           ImGui::TableSetupColumn("##device-header", ImGuiTableColumnFlags_WidthFixed, 100);
         }
         ImGui::TableSetupScrollFreeze(1, 2);
@@ -810,10 +928,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
         lastDevice = -1;
         for (auto index : visibleMetricsIndex) {
           ImGui::TableNextColumn();
-          auto& metricsInfos = *metricsStore.metrics[index.storeIndex];
-          auto& devices = *metricsStore.specs[index.storeIndex];
-          auto& metric = metricsInfos[index.deviceIndex];
-          auto label = metricsInfos[index.deviceIndex].metricLabels[index.metricIndex].label;
+          auto& devices = metricsStore.specs[index.storeIndex];
           if (lastDevice == index.deviceIndex) {
             continue;
           }
@@ -831,7 +946,7 @@ void displayMetrics(gui::WorkspaceGUIState& state,
         lastDevice = -1;
         for (auto index : visibleMetricsIndex) {
           ImGui::TableNextColumn();
-          auto& metricsInfos = *metricsStore.metrics[index.storeIndex];
+          auto& metricsInfos = metricsStore.metrics[index.storeIndex];
           auto& metric = metricsInfos[index.deviceIndex];
           auto label = metricsInfos[index.deviceIndex].metricLabels[index.metricIndex].label;
           ImGui::Text("%s (%" PRIu64 ")", label, (uint64_t)metric.metrics[index.metricIndex].filledMetrics);
@@ -866,10 +981,20 @@ void pushWindowColorDueToStatus(const DeviceInfo& info)
     return;
   }
   switch (info.maxLogLevel) {
+    case LogLevel::Critical:
+      ImGui::PushStyleColor(ImGuiCol_TitleBg, PaletteHelpers::SHADED_RED);
+      ImGui::PushStyleColor(ImGuiCol_TitleBgActive, PaletteHelpers::RED);
+      ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, PaletteHelpers::SHADED_RED);
+      break;
     case LogLevel::Error:
       ImGui::PushStyleColor(ImGuiCol_TitleBg, PaletteHelpers::SHADED_RED);
       ImGui::PushStyleColor(ImGuiCol_TitleBgActive, PaletteHelpers::RED);
       ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, PaletteHelpers::SHADED_RED);
+      break;
+    case LogLevel::Alarm:
+      ImGui::PushStyleColor(ImGuiCol_TitleBg, PaletteHelpers::SHADED_YELLOW);
+      ImGui::PushStyleColor(ImGuiCol_TitleBgActive, PaletteHelpers::YELLOW);
+      ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, PaletteHelpers::SHADED_YELLOW);
       break;
     case LogLevel::Warning:
       ImGui::PushStyleColor(ImGuiCol_TitleBg, PaletteHelpers::SHADED_YELLOW);
@@ -912,12 +1037,10 @@ void displayDriverInfo(DriverInfo const& driverInfo, DriverControl& driverContro
   ImGui::SameLine();
   ImGui::RadioButton("Step", state, static_cast<int>(DriverControlState::STEP));
 
-  auto& registry = driverInfo.configContext->options();
   ImGui::Columns();
 
   ImGui::Text("PID: %d - Control port %d", pid, driverInfo.port);
   ImGui::Text("Frame cost (latency): %.1f(%.1f)ms", driverInfo.frameCost, driverInfo.frameLatency);
-  ImGui::Text("Input parsing cost (latency): %.1f(%.1f)ms", driverInfo.inputProcessingCost, driverInfo.inputProcessingLatency);
   ImGui::Text("State stack (depth %lu)", driverInfo.states.size());
   if (ImGui::Button("SIGCONT all children")) {
     kill(0, SIGCONT);
@@ -949,7 +1072,7 @@ void displayDriverInfo(DriverInfo const& driverInfo, DriverControl& driverContro
       "osascript -e 'tell application \"Terminal\"'"
       " -e 'activate'"
       " -e 'do script \"xcrun xctrace record --output dpl-profile-{0}.trace"
-      " --time-limit 30s --template Time\\\\ Profiler --attach {0} "
+      " --instrument os_signpost --time-limit 30s --template Time\\\\ Profiler --attach {0} "
       " && open dpl-profile-{0}.trace && exit\"'"
       " -e 'end tell'",
       pid);
@@ -960,6 +1083,37 @@ void displayDriverInfo(DriverInfo const& driverInfo, DriverControl& driverContro
 #endif
     int retVal = system(getenv("O2DPLPROFILE"));
     (void)retVal;
+  }
+
+  // FIXME: this should really be a combo box
+#ifdef __APPLE__
+  if (ImGui::Button("Memory Profile")) {
+    std::string pidStr = std::to_string(pid);
+    setenv("O2PROFILEDPID", pidStr.c_str(), 1);
+    auto defaultAppleProfileCommand = fmt::format(
+      "osascript -e 'tell application \"Terminal\"'"
+      " -e 'activate'"
+      " -e 'do script \"xcrun xctrace record --output dpl-profile-{0}.trace"
+      " --instrument os_signpost --time-limit 30s --template Allocations --attach {0} "
+      " && open dpl-profile-{0}.trace && exit\"'"
+      " -e 'end tell'",
+      pid);
+    std::cout << defaultAppleProfileCommand << std::endl;
+    setenv("O2DPLPROFILE", defaultAppleProfileCommand.c_str(), 0);
+    int retVal = system(getenv("O2DPLPROFILE"));
+    (void)retVal;
+  }
+#endif
+
+  static bool selectedSignpost = false;
+  if (ImGui::CollapsingHeader("Signposts", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::Checkbox("Driver", &selectedSignpost)) {
+      if (selectedSignpost) {
+        O2_LOG_ENABLE(driver);
+      } else {
+        O2_LOG_DISABLE(driver);
+      }
+    }
   }
 
   for (size_t i = 0; i < driverInfo.states.size(); ++i) {
@@ -974,6 +1128,7 @@ void displayDriverInfo(DriverInfo const& driverInfo, DriverControl& driverContro
 ///
 std::function<void(void)> getGUIDebugger(std::vector<DeviceInfo> const& infos,
                                          std::vector<DeviceSpec> const& devices,
+                                         std::vector<DataProcessingStates> const& allStates,
                                          std::vector<DataProcessorInfo> const& metadata,
                                          std::vector<DeviceMetricsInfo> const& metricsInfos,
                                          DriverInfo const& driverInfo,
@@ -1009,22 +1164,21 @@ std::function<void(void)> getGUIDebugger(std::vector<DeviceInfo> const& infos,
   std::vector<TopologyNodeInfo> driverNodesInfos;
   driverNodesInfos.push_back(TopologyNodeInfo{"driver"});
 
-  return [&guiState, &infos, &devices, &metadata, &controls, &metricsInfos, &driverInfo, &driverControl, deviceNodesInfos, driverNodesInfos]() {
+  return [&infos, &devices, &allStates, &metadata, &controls, &metricsInfos, &driverInfo, &driverControl, deviceNodesInfos, driverNodesInfos]() {
     ImGuiStyle& style = ImGui::GetStyle();
     style.FrameRounding = 0.;
     style.WindowRounding = 0.;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0x1b / 255.f, 0x1b / 255.f, 0x1b / 255.f, 1.00f);
     style.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0x1b / 255.f, 0x1b / 255.f, 0x1b / 255.f, 1.00f);
 
-    showTopologyNodeGraph(guiState, infos, devices, metadata, controls, metricsInfos);
+    showTopologyNodeGraph(guiState, infos, devices, allStates, metadata, controls, metricsInfos);
 
     AllMetricsStore metricsStore;
-    std::vector<DeviceMetricsInfo> driverMetrics{driverInfo.metrics};
 
-    metricsStore.metrics[DEVICE_METRICS] = &metricsInfos;
-    metricsStore.metrics[DRIVER_METRICS] = &driverMetrics;
-    metricsStore.specs[DEVICE_METRICS] = &deviceNodesInfos;
-    metricsStore.specs[DRIVER_METRICS] = &driverNodesInfos;
+    metricsStore.metrics[DEVICE_METRICS] = gsl::span(metricsInfos);
+    metricsStore.metrics[DRIVER_METRICS] = gsl::span(&driverInfo.metrics, 1);
+    metricsStore.specs[DEVICE_METRICS] = gsl::span(deviceNodesInfos);
+    metricsStore.specs[DRIVER_METRICS] = gsl::span(driverNodesInfos);
     displayMetrics(guiState, driverInfo, infos, metadata, controls, metricsStore);
     displayDriverInfo(driverInfo, driverControl);
 
@@ -1035,8 +1189,6 @@ std::function<void(void)> getGUIDebugger(std::vector<DeviceInfo> const& infos,
       assert(i < infos.size());
       assert(i < devices.size());
       const DeviceInfo& info = infos[i];
-      const DeviceSpec& spec = devices[i];
-      const DeviceMetricsInfo& metrics = metricsInfos[i];
 
       assert(controls.size() == devices.size());
       DeviceControl& control = controls[i];
@@ -1053,6 +1205,9 @@ std::function<void(void)> getGUIDebugger(std::vector<DeviceInfo> const& infos,
         ImGui::InputText("Log stop trigger", control.logStopTrigger, sizeof(control.logStopTrigger));
         ImGui::Checkbox("Stop logging", &control.quiet);
         ImGui::SameLine();
+        if (control.tracingFlags) {
+          control.logLevel = LogParsingHelpers::LogLevel::Debug;
+        }
         ImGui::Combo("Log level", reinterpret_cast<int*>(&control.logLevel), LogParsingHelpers::LOG_LEVELS,
                      (int)LogParsingHelpers::LogLevel::Size, 5);
 
@@ -1071,22 +1226,22 @@ std::function<void(void)> getGUIDebugger(std::vector<DeviceInfo> const& infos,
 void updateMousePos(float x, float y)
 {
   ImGuiIO& io = ImGui::GetIO();
-  io.MousePos = ImVec2(x, y);
+  io.AddMousePosEvent(x, y);
 }
 
 void updateMouseButton(bool clicked)
 {
   ImGuiIO& io = ImGui::GetIO();
-  io.MouseDown[0] = clicked;
+  io.AddMouseButtonEvent(0, clicked);
 }
 
 void updateMouseWheel(int direction)
 {
   ImGuiIO& io = ImGui::GetIO();
   if (direction > 0) {
-    io.MouseWheel++;
+    io.AddMouseWheelEvent(0, 1.0);
   } else {
-    io.MouseWheel--;
+    io.AddMouseWheelEvent(0, -1.0);
   }
 }
 
@@ -1096,16 +1251,52 @@ void updateWindowSize(int x, int y)
   io.DisplaySize = ImVec2(x, y);
 }
 
-void keyDown(char key)
+void keyEvent(char key, bool down)
 {
   ImGuiIO& io = ImGui::GetIO();
-  io.KeysDown[io.KeyMap[key]] = true;
-}
-
-void keyUp(char key)
-{
-  ImGuiIO& io = ImGui::GetIO();
-  io.KeysDown[io.KeyMap[key]] = false;
+  switch (key) {
+    case 0:
+      io.AddKeyEvent(ImGuiKey_Tab, down);
+      break;
+    case 1:
+      io.AddKeyEvent(ImGuiKey_LeftArrow, down);
+      break;
+    case 2:
+      io.AddKeyEvent(ImGuiKey_RightArrow, down);
+      break;
+    case 3:
+      io.AddKeyEvent(ImGuiKey_UpArrow, down);
+      break;
+    case 4:
+      io.AddKeyEvent(ImGuiKey_DownArrow, down);
+      break;
+    case 5:
+      io.AddKeyEvent(ImGuiKey_PageUp, down);
+      break;
+    case 6:
+      io.AddKeyEvent(ImGuiKey_PageDown, down);
+      break;
+    case 7:
+      io.AddKeyEvent(ImGuiKey_Home, down);
+      break;
+    case 8:
+      io.AddKeyEvent(ImGuiKey_End, down);
+      break;
+    case 10:
+      io.AddKeyEvent(ImGuiKey_Delete, down);
+      break;
+    case 11:
+      io.AddKeyEvent(ImGuiKey_Backspace, down);
+      break;
+    case 13:
+      io.AddKeyEvent(ImGuiKey_Enter, down);
+      break;
+    case 14:
+      io.AddKeyEvent(ImGuiKey_Escape, down);
+      break;
+    default:
+      io.AddKeyEvent((ImGuiKey)key, down);
+  }
 }
 
 void charIn(char key)
@@ -1115,5 +1306,3 @@ void charIn(char key)
 }
 
 } // namespace o2::framework::gui
-
-#pragma GCC diagnostic pop

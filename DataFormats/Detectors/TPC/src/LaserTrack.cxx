@@ -18,7 +18,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include <FairMQLogger.h>
+#include <fairlogger/Logger.h>
 
 #include "TFile.h"
 #include "TTree.h"
@@ -39,7 +39,7 @@ void LaserTrackContainer::loadTracksFromFile()
   std::ifstream infile(file, std::ifstream::in);
 
   if (!infile.is_open()) {
-    LOG(ERROR) << "Could not open laser track file " << file;
+    LOG(error) << "Could not open laser track file " << file;
     return;
   }
 

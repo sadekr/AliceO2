@@ -27,21 +27,15 @@
 #include <sstream>
 
 #include "ITStracking/Configuration.h"
-#include "DetectorsBase/MatLayerCylSet.h"
 #include "CommonConstants/MathConstants.h"
 #include "ITStracking/Definitions.h"
 #include "ITStracking/ROframe.h"
 #include "ITStracking/MathUtils.h"
-#include "DetectorsBase/Propagator.h"
 #include "ITStracking/TimeFrame.h"
 #include "ITStracking/Road.h"
 
 #include "DataFormatsITS/TrackITS.h"
 #include "SimulationDataFormat/MCCompLabel.h"
-
-#ifdef CA_DEBUG
-#include "ITStracking/StandaloneDebugger.h"
-#endif
 
 namespace o2
 {
@@ -52,8 +46,6 @@ class GPUChainITS;
 }
 namespace its
 {
-
-class TimeFrame;
 class TrackerTraits;
 
 class Tracker
@@ -67,33 +59,42 @@ class Tracker
   ~Tracker();
 
   void adoptTimeFrame(TimeFrame& tf);
-  void setBz(float bz);
-  float getBz() const;
 
-  void clustersToTracks(std::function<void(std::string s)> = [](std::string s) { std::cout << s << std::endl; });
-  void setSmoothing(bool v) { mApplySmoothing = v; }
-  bool getSmoothing() const { return mApplySmoothing; }
-
+  void clustersToTracks(
+    std::function<void(std::string s)> = [](std::string s) { std::cout << s << std::endl; }, std::function<void(std::string s)> = [](std::string s) { std::cerr << s << std::endl; });
+  void clustersToTracksHybrid(
+    std::function<void(std::string s)> = [](std::string s) { std::cout << s << std::endl; }, std::function<void(std::string s)> = [](std::string s) { std::cerr << s << std::endl; });
   std::vector<TrackITSExt>& getTracks();
 
-  void setCorrType(const o2::base::PropagatorImpl<float>::MatCorrType& type) { mCorrType = type; }
-  void setParameters(const std::vector<MemoryParameters>&, const std::vector<TrackingParameters>&);
+  void setParameters(const std::vector<TrackingParameters>&);
+  std::vector<TrackingParameters>& getParameters() { return mTrkParams; }
   void getGlobalConfiguration();
-  bool isMatLUT() const { return o2::base::Propagator::Instance()->getMatLUT() && (mCorrType == o2::base::PropagatorImpl<float>::MatCorrType::USEMatCorrLUT); }
+  void setBz(float);
+  void setCorrType(const o2::base::PropagatorImpl<float>::MatCorrType type);
+  bool isMatLUT() const;
+  void setNThreads(int n);
+  int getNThreads() const;
+  std::uint32_t mTimeFrameCounter = 0;
 
  private:
-  track::TrackParCov buildTrackSeed(const Cluster& cluster1, const Cluster& cluster2, const Cluster& cluster3,
-                                    const TrackingFrameInfo& tf3);
-  template <typename... T>
-  void initialiseTimeFrame(T&&... args);
-  void computeTracklets();
-  void computeCells();
+  void initialiseTimeFrame(int& iteration);
+  void computeTracklets(int& iteration, int& iROFslice, int& iVertex);
+  void computeCells(int& iteration);
   void findCellsNeighbours(int& iteration);
   void findRoads(int& iteration);
+
+  void initialiseTimeFrameHybrid(int& iteration);
+  void computeTrackletsHybrid(int& iteration, int& iROFslice, int& iVertex);
+  void computeCellsHybrid(int& iteration);
+  void findCellsNeighboursHybrid(int& iteration);
+  void findRoadsHybrid(int& iteration);
+  void findTracksHybrid(int& iteration);
+
+  void findShortPrimaries();
   void findTracks();
-  void extendTracks();
-  bool fitTrack(TrackITSExt& track, int start, int end, int step, const float chi2cut = o2::constants::math::VeryBig, const float maxQoverPt = o2::constants::math::VeryBig);
-  void traverseCellsTree(const int, const int);
+  void extendTracks(int& iteration);
+
+  // MC interaction
   void computeRoadsMClabels();
   void computeTracksMClabels();
   void rectifyClusterIndices();
@@ -101,44 +102,18 @@ class Tracker
   template <typename... T>
   float evaluateTask(void (Tracker::*)(T...), const char*, std::function<void(std::string s)> logger, T&&... args);
 
-  TrackerTraits* mTraits = nullptr;                      /// Observer pointer, not owned by this class
-  TimeFrame* mTimeFrame = nullptr;                       /// Observer pointer, not owned by this class
+  TrackerTraits* mTraits = nullptr; /// Observer pointer, not owned by this class
+  TimeFrame* mTimeFrame = nullptr;  /// Observer pointer, not owned by this class
 
-  std::vector<MemoryParameters> mMemParams;
   std::vector<TrackingParameters> mTrkParams;
-
-  bool mCUDA = false;
-  bool mApplySmoothing = false;
-  o2::base::PropagatorImpl<float>::MatCorrType mCorrType = o2::base::PropagatorImpl<float>::MatCorrType::USEMatCorrLUT;
-  float mBz = 5.f;
-  std::uint32_t mTimeFrameCounter = 0;
   o2::gpu::GPUChainITS* mRecoChain = nullptr;
 
-#ifdef CA_DEBUG
-  StandaloneDebugger* mDebugger;
-#endif
+  unsigned int mNumberOfRuns{0};
 };
 
-inline void Tracker::setParameters(const std::vector<MemoryParameters>& memPars, const std::vector<TrackingParameters>& trkPars)
+inline void Tracker::setParameters(const std::vector<TrackingParameters>& trkPars)
 {
-  mMemParams = memPars;
   mTrkParams = trkPars;
-}
-
-inline float Tracker::getBz() const
-{
-  return mBz;
-}
-
-inline void Tracker::setBz(float bz)
-{
-  mBz = bz;
-}
-
-template <typename... T>
-void Tracker::initialiseTimeFrame(T&&... args)
-{
-  mTimeFrame->initialise(std::forward<T>(args)...);
 }
 
 template <typename... T>
@@ -147,7 +122,7 @@ float Tracker::evaluateTask(void (Tracker::*task)(T...), const char* taskName, s
 {
   float diff{0.f};
 
-  if (constants::DoTimeBenchmarks) {
+  if constexpr (constants::DoTimeBenchmarks) {
     auto start = std::chrono::high_resolution_clock::now();
     (this->*task)(std::forward<T>(args)...);
     auto end = std::chrono::high_resolution_clock::now();
@@ -162,6 +137,20 @@ float Tracker::evaluateTask(void (Tracker::*task)(T...), const char* taskName, s
       sstream << std::setw(2) << " - " << taskName << " completed in: " << diff << " ms";
     }
     logger(sstream.str());
+
+    if (mTrkParams[0].SaveTimeBenchmarks) {
+      std::stringstream str2file;
+      std::string taskNameStr(taskName);
+      std::transform(taskNameStr.begin(), taskNameStr.end(), taskNameStr.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      std::replace(taskNameStr.begin(), taskNameStr.end(), ' ', '_');
+      str2file << taskNameStr << "\t" << diff;
+      std::ofstream file;
+      file.open("its_time_benchmarks.txt", std::ios::app);
+      file << str2file.str() << std::endl;
+      file.close();
+    }
+
   } else {
     (this->*task)(std::forward<T>(args)...);
   }

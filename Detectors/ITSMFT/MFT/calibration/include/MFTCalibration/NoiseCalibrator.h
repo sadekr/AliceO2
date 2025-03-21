@@ -17,6 +17,7 @@
 #include <string>
 
 #include "DataFormatsITSMFT/NoiseMap.h"
+#include "DataFormatsITSMFT/TopologyDictionary.h"
 #include "DetectorsCalibration/TimeSlotCalibration.h"
 #include "DetectorsCalibration/TimeSlot.h"
 #include "gsl/span"
@@ -37,13 +38,12 @@ class NoiseCalibrator
 {
  public:
   NoiseCalibrator() = default;
-  NoiseCalibrator(float prob)
+  NoiseCalibrator(float prob, float relErr = 0.2) : mProbabilityThreshold(prob), mProbRelErr(relErr)
   {
-    mProbabilityThreshold = prob;
+    mMinROFs = 1.1 * o2::itsmft::NoiseMap::getMinROFs(prob, relErr);
+    LOGP(info, "Expect at least {} ROFs needed to apply threshold {} with relative error {}", mMinROFs, mProbabilityThreshold, mProbRelErr);
   }
   ~NoiseCalibrator() = default;
-
-  void setThreshold(unsigned int t) { mThreshold = t; }
 
   bool processTimeFrame(calibration::TFType tf,
                         gsl::span<const o2::itsmft::Digit> const& digits,
@@ -55,13 +55,17 @@ class NoiseCalibrator
                         gsl::span<const o2::itsmft::ROFRecord> const& rofs);
 
   void finalize();
+  void setMinROFs(long n) { mMinROFs = n; }
+  void setClusterDictionary(const o2::itsmft::TopologyDictionary* d) { mDict = d; }
 
   const o2::itsmft::NoiseMap& getNoiseMap() const { return mNoiseMap; }
 
  private:
+  const o2::itsmft::TopologyDictionary* mDict = nullptr;
   o2::itsmft::NoiseMap mNoiseMap{936};
   float mProbabilityThreshold = 1e-6f;
-  unsigned int mThreshold = 100;
+  float mProbRelErr = 0.2; // relative error on channel noise to apply the threshold
+  long mMinROFs = 0;
   unsigned int mNumberOfStrobes = 0;
 };
 

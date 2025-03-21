@@ -11,8 +11,8 @@
 
 /**
  * @defgroup DetectorEMCAL EMCAL
- * @brief EMCAL simulation and reconstruction 
- * 
+ * @brief EMCAL simulation and reconstruction
+ *
  * See \ref refDetectorsEMCAL for more information
  */
 
@@ -20,7 +20,7 @@
  * @defgroup EMCALbase EMCAL base
  * @brief Main EMCAL components
  * @ingroup DetectorEMCAL
- * 
+ *
  * Main EMCAL components used in various libraries
  * - Geometry
  * - Mapping
@@ -31,28 +31,35 @@
  * @defgroup EMCALcalibration EMCAL calibration
  * @brief EMCAL calibration objects
  * @ingroup DetectorEMCAL
- * 
+ *
  * EMCAL calibration objects for
  * - Bad channel map
  * - Time calibration
+ * - Time slewing parameters
  * - Gain calibration
  * - Temperature calibration
+ * - FEE DCS parameters
+ * - Pedestal data
+ * In addition providing an interface convenient CCDB access and methods
+ * to recalibrate add cell level.
  */
 
 /**
- * @defgroup EMCALCalib EMCAL calib
+ * @defgroup EMCALcalib EMCAL calib
  * @brief EMCAL bad channel calibration
  * @ingroup DetectorEMCAL
- * 
- * Performs the EMCal bad channel calibration. 
- * 
+ *
+ * EMCAL calibrator performing
+ * - Bad channel calibration
+ * - Time calibration
+ * and corresponding workflows for calibration tasks.
  */
 
 /**
  * @defgroup EMCALsimulation EMCAL simulation
  * @brief EMCAL simulation code
  * @ingroup DetectorEMCAL
- * 
+ *
  * EMCAL simulation package. See \ref refEMCALsimulation
  * for more information
  */
@@ -61,16 +68,16 @@
  * @defgroup EMCALreconstruction EMCAL reconstruction
  * @brief EMCAL reconstruction code
  * @ingroup DetectorEMCAL
- * 
+ *
  * EMCAL reconstruction package. See \ref refEMCALreconstruction
  * for more information
  */
 
 /**
-  * @defgroup EMCALworkflow EMCAL workflow
-  * @brief EMCAL reconstruction workflow
-  * @ingroup DetectorEMCAL
-  * 
-  * EMCAL reconstruction workflow package. See \ref refEMCALworkflow
-  * for more information.
-  */
+ * @defgroup EMCALworkflow EMCAL workflow
+ * @brief EMCAL reconstruction workflow
+ * @ingroup DetectorEMCAL
+ *
+ * EMCAL reconstruction workflow package. See \ref refEMCALworkflow
+ * for more information.
+ */

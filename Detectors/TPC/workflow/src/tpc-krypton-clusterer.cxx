@@ -11,6 +11,8 @@
 
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <thread>
 
 #include "Algorithm/RangeTokenizer.h"
 #include "Framework/WorkflowSpec.h"
@@ -27,16 +29,15 @@
 #include "DataFormatsTPC/KrCluster.h"
 #include "TPCBase/Sector.h"
 #include "TPCWorkflow/KryptonClustererSpec.h"
+#include "TPCWorkflow/FileWriterSpec.h"
+#include "TPCReaderWorkflow/TPCSectorCompletionPolicy.h"
 
 using namespace o2::framework;
 using namespace o2::tpc;
 
-// customize the completion policy
-void customize(std::vector<o2::framework::CompletionPolicy>& policies)
-{
-  using o2::framework::CompletionPolicy;
-  policies.push_back(CompletionPolicyHelpers::defineByName("tpc-krypton-clusterer.*", CompletionPolicy::CompletionOp::Consume));
-}
+// Global variable used to transport data to the completion policy
+std::vector<InputSpec> gPolicyData;
+unsigned long gTpcSectorMask = 0xFFFFFFFFF;
 
 // we need to add workflow options before including Framework/runDataProcessing
 void customize(std::vector<ConfigParamSpec>& workflowOptions)
@@ -50,7 +51,7 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
     {"outputFile", VariantType::String, "./tpcBoxClusters.root", {"output file name for the box cluster root file"}},
     {"lanes", VariantType::Int, defaultlanes, {"Number of parallel processing lanes."}},
     {"sectors", VariantType::String, sectorDefault.c_str(), {"List of TPC sectors, comma separated ranges, e.g. 0-3,7,9-15"}},
-    {"disable-writer", VariantType::Bool, false, {"disable the root tree writer"}},
+    {"writer-type", VariantType::String, "local", {"Writer type (local, EPN, none)"}},
   };
 
   std::swap(workflowOptions, options);
@@ -60,6 +61,18 @@ void customize(std::vector<ConfigParamSpec>& workflowOptions)
 
 template <typename T>
 using BranchDefinition = MakeRootTreeWriterSpec::BranchDefinition<T>;
+
+enum class WriterType {
+  Local,
+  EPN,
+  None,
+};
+
+const std::unordered_map<std::string, WriterType> WriterMap{
+  {"local", WriterType::Local},
+  {"EPN", WriterType::EPN},
+  {"none", WriterType::None},
+};
 
 WorkflowSpec defineDataProcessing(ConfigContext const& config)
 {
@@ -76,7 +89,13 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
   const auto tpcSectors = o2::RangeTokenizer::tokenize<int>(config.options().get<std::string>("sectors"));
   const auto nSectors = (int)tpcSectors.size();
   const auto nLanes = std::min(config.options().get<int>("lanes"), nSectors);
-  const auto disableWriter = config.options().get<bool>("disable-writer");
+
+  WriterType writerType;
+  try {
+    writerType = WriterMap.at(config.options().get<std::string>("writer-type"));
+  } catch (std::out_of_range&) {
+    throw std::invalid_argument(std::string("invalid writer-type type: ") + config.options().get<std::string>("writer-type"));
+  }
 
   WorkflowSpec workflow;
 
@@ -85,6 +104,12 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
   }
 
   std::vector<int> laneConfiguration = tpcSectors; // Currently just a copy of the tpcSectors, why?
+
+  gTpcSectorMask = 0;
+  for (auto s : tpcSectors) {
+    gTpcSectorMask |= (1ul << s);
+  }
+  gPolicyData.emplace_back(o2::framework::InputSpec{"data", o2::framework::ConcreteDataTypeMatcher{"TPC", "KRCLUSTERS"}});
 
   WorkflowSpec parallelProcessors;
   parallelProcessors.emplace_back(getKryptonClustererSpec());
@@ -95,7 +120,7 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
     [&laneConfiguration](size_t index) { return laneConfiguration[index]; });
   workflow.insert(workflow.end(), parallelProcessors.begin(), parallelProcessors.end());
 
-  if (!disableWriter) {
+  if (writerType == WriterType::Local) {
     //////////////////////////////////////////////////////////////////////////////////////////////
     //
     // generation of processor specs for various types of outputs
@@ -172,7 +197,9 @@ WorkflowSpec defineDataProcessing(ConfigContext const& config)
                                       BranchDefinition<KrClusterOutputType>{InputSpec{"data", "TPC", "KRCLUSTERS", 0},
                                                                             "TPCBoxCluster",
                                                                             "boxcluster-branch-name"}));
-  } // if (disableWriter)
+  } else if (writerType == WriterType::EPN) {
+    workflow.push_back(getFileWriterSpec<KrCluster>("data:TPC/KRCLUSTERS", BranchType::Krypton));
+  }
 
   return workflow;
 }

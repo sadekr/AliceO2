@@ -29,16 +29,15 @@ namespace o2
 namespace align
 {
 
-class AlignableSensorITS : public AlignableSensor
+class AlignableSensorITS final : public AlignableSensor
 {
  public:
   AlignableSensorITS() = default;
   AlignableSensorITS(const char* name, int vid, int iid, Controller* ctr);
-  ~AlignableSensorITS() override = default;
-  //
-  //  virtual AlignmentPoint* TrackPoint2AlgPoint(int pntId, const AliTrackPointArray* trpArr, const AliESDtrack* t);
-
-  void setTrackingFrame() override;
+  ~AlignableSensorITS() final = default;
+  void prepareMatrixT2L() final;
+  void prepareMatrixL2G(bool reco = false) final;
+  void prepareMatrixL2GIdeal() final;
   //
  protected:
   //

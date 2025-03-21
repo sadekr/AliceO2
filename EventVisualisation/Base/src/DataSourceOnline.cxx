@@ -22,34 +22,73 @@
 #include <TFile.h>
 #include <TPRegexp.h>
 #include <TObject.h>
+#include <filesystem>
+#include <chrono>
+#include <fairlogger/Logger.h>
 
 namespace o2
 {
 namespace event_visualisation
 {
+std::vector<std::string> DataSourceOnline::sourceFilextensions = {".json", ".root", ".eve"};
 
-std::vector<std::pair<VisualisationEvent, EVisualisationGroup>> DataSourceOnline::getVisualisationList(int no)
+std::vector<std::pair<VisualisationEvent, EVisualisationGroup>>
+  DataSourceOnline::getVisualisationList(int no, float minTime, float maxTime, float range)
 {
+  auto start = std::chrono::high_resolution_clock::now();
+
   std::vector<std::pair<VisualisationEvent, EVisualisationGroup>> res;
+  if (getEventCount() == 2) {
+    this->setRunNumber(-1); // No available data to display
+    return res;             // 2 means there are no real data = we have only "virtual" positions
+  }
   if (no < getEventCount()) {
     assert(no >= 0);
 
     mFileWatcher.setCurrentItem(no);
     VisualisationEvent vEvent = this->mDataReader->getEvent(mFileWatcher.currentFilePath());
-    /*
-    for(auto filter = EVisualisationGroup::ITS;
-        filter != EVisualisationGroup::NvisualisationGroups;
-        filter = static_cast<EVisualisationGroup>(static_cast<int>(filter) + 1)) {
-      auto filtered = VisualisationEvent(vEvent, filter);
-      res.push_back(std::make_pair(filtered, filter));  // we can switch on/off data
+
+    this->setRunNumber(vEvent.getRunNumber());
+    this->setRunType(vEvent.getRunType());
+    this->setFirstTForbit(vEvent.getFirstTForbit());
+    this->setCreationTime(vEvent.getCreationTime());
+
+    this->setTrackMask(vEvent.getTrkMask());
+    this->setClusterMask(vEvent.getClMask());
+
+    auto write_time = std::filesystem::last_write_time(mFileWatcher.currentFilePath());
+    auto duration = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+      write_time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+    auto duration_time = std::chrono::system_clock::to_time_t(duration);
+
+    char time_str[100];
+    std::strftime(time_str, sizeof(time_str), "%a %b %d %H:%M:%S %Y", std::localtime(&duration_time));
+
+    this->setFileTime(time_str);
+
+    double period = vEvent.getMaxTimeOfTracks() - vEvent.getMinTimeOfTracks();
+    if (period > 0) {
+      this->mTimeFrameMinTrackTime = minTime * period / range + vEvent.getMinTimeOfTracks();
+      this->mTimeFrameMaxTrackTime = maxTime * period / range + vEvent.getMinTimeOfTracks();
+    } else {
+      this->mTimeFrameMinTrackTime = vEvent.getMinTimeOfTracks();
+      this->mTimeFrameMaxTrackTime = vEvent.getMaxTimeOfTracks();
     }
-    */
-    res.push_back(std::make_pair(vEvent, EVisualisationGroup::TPC)); // temporary
+
+    for (auto filter = EVisualisationGroup::ITS;
+         filter != EVisualisationGroup::NvisualisationGroups;
+         filter = static_cast<EVisualisationGroup>(static_cast<int>(filter) + 1)) {
+      auto filtered = VisualisationEvent(vEvent, filter, this->mTimeFrameMinTrackTime, this->mTimeFrameMaxTrackTime);
+      res.push_back(std::make_pair(filtered, filter)); // we can switch on/off data
+    }
   }
+  auto stop = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+  LOGF(info, "getVisualisationList: ", duration.count());
   return res;
 }
 
-DataSourceOnline::DataSourceOnline(const std::string path) : mFileWatcher(path)
+DataSourceOnline::DataSourceOnline(const std::vector<std::string>& path) : mFileWatcher(path, sourceFilextensions)
 {
 }
 
@@ -71,6 +110,11 @@ bool DataSourceOnline::refresh()
 Int_t DataSourceOnline::getCurrentEvent()
 {
   return mFileWatcher.getPos();
+}
+
+o2::detectors::DetID::mask_t DataSourceOnline::getDetectorsMask()
+{
+  return o2::dataformats::GlobalTrackID::getSourcesDetectorsMask(mTrackMask);
 }
 
 } // namespace event_visualisation

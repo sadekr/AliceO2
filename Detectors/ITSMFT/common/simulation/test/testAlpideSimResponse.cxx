@@ -16,16 +16,19 @@
 #include <iostream>
 #include "ITSMFTSimulation/AlpideSimResponse.h"
 #include "FairLogger.h"
+#include <TFile.h>
 
 using namespace o2::itsmft;
 
 BOOST_AUTO_TEST_CASE(AlpideSimResponse_test)
 {
   // test for the templated Descriptor struct
-  AlpideSimResponse resp;
-  resp.initData();
+  std::string responseFile = "$(O2_ROOT)/share/Detectors/ITSMFT/data/AlpideResponseData/AlpideResponseData.root";
+  auto file = TFile::Open(responseFile.data());
+  AlpideSimResponse resp = *(o2::itsmft::AlpideSimResponse*)file->Get("response1");
+
   float vCol = 1.e-4, vRow = 1.e-4, vDepth = 10.e-4;
-  LOG(INFO) << "Checking response from vRow:" << vCol << " vCol:" << vCol
+  LOG(info) << "Checking response from vRow:" << vCol << " vCol:" << vCol
             << " Depth:" << vDepth;
   bool flipCol, flipRow;
   auto respMat = resp.getResponse(vRow, vCol, resp.getDepthMax() - vDepth, flipRow, flipCol);
@@ -33,7 +36,7 @@ BOOST_AUTO_TEST_CASE(AlpideSimResponse_test)
   respMat->print(flipRow, flipCol);
   // repsonse at central pixel for electron close to the surface should be >>0
   int pixCen = respMat->getNPix() / 2;
-  LOG(INFO) << "Response at central pixel " << pixCen << ":" << pixCen
+  LOG(info) << "Response at central pixel " << pixCen << ":" << pixCen
             << " is " << respMat->getValue(pixCen, pixCen, flipRow, flipCol);
   BOOST_CHECK(respMat->getValue(pixCen, pixCen, flipRow, flipCol) > 1e-6);
   //
@@ -44,6 +47,6 @@ BOOST_AUTO_TEST_CASE(AlpideSimResponse_test)
       norm += respMat->getValue(ir, ic, flipRow, flipCol);
     }
   }
-  LOG(INFO) << "Total response to 1 electron: " << norm;
+  LOG(info) << "Total response to 1 electron: " << norm;
   BOOST_CHECK(norm > 0.1);
 }

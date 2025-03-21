@@ -90,15 +90,23 @@ std::ostream& operator<<(std::ostream& stream, ChannelType_t chantype);
 namespace constants
 {
 
-constexpr int OVERFLOWCUT = 950;             ///< sample overflow
-constexpr int ORDER = 2;                     ///< Order of shaping stages of the signal conditioning unit
-constexpr double TAU = 2.35;                 ///< Approximate shaping time
-constexpr Double_t EMCAL_TIMESAMPLE = 100.;  ///< Width of a timebin in nanoseconds
-constexpr Double_t EMCAL_ADCENERGY = 0.0162; ///< Energy of one ADC count in GeV/c^2
-constexpr Int_t EMCAL_HGLGFACTOR = 16;       ///< Conversion from High to Low Gain
-constexpr Int_t EMCAL_HGLGTRANSITION = 800;  ///< Transition from High to Low Gain
-constexpr Int_t EMCAL_MAXTIMEBINS = 15;      ///< Maximum number of time bins for time response
+constexpr int OVERFLOWCUT = 950;               ///< sample overflow
+constexpr int LG_SUPPRESSION_CUT = 880;        ///< LG bunch suppression ADC value
+constexpr int ORDER = 2;                       ///< Order of shaping stages of the signal conditioning unit
+constexpr double TAU = 2.35;                   ///< Approximate shaping time
+constexpr Double_t EMCAL_TIMESAMPLE = 100.;    ///< Width of a timebin in nanoseconds
+constexpr Double_t EMCAL_ADCENERGY = 0.0162;   ///< Energy of one ADC count in GeV/c^2
+constexpr Int_t EMCAL_HGLGFACTOR = 16;         ///< Conversion from High to Low Gain
+constexpr Int_t EMCAL_HGLGTRANSITION = 1024;   ///< Transition from High to Low Gain
+constexpr Int_t EMCAL_MAXTIMEBINS = 15;        ///< Maximum number of time bins for time response
+constexpr int MAX_RANGE_ADC = 0x3FF;           ///< Dynamic range of the ADCs (10 bit ADC)
+constexpr double EMCAL_TRU_ADCENERGY = 0.0786; ///< resolution of the TRU digitizer, @TODO check exact value
 } // namespace constants
+
+namespace triggerbits
+{
+constexpr uint32_t Inc = 0x1 << 20; ///< trigger bit marking incomplete event
+}
 
 enum FitAlgorithm {
   Standard = 0,  ///< Standard raw fitter
@@ -106,6 +114,35 @@ enum FitAlgorithm {
   NeuralNet = 2, ///< Neural net raw fitter
   NONE = 3
 };
+
+enum STUtype_t {
+  ESTU = 0, ///< EMCAL STU
+  DSTU = 1  ///< DCAL STU
+};
+
+namespace STUparam //[0]->EMCAL STU, [1]->DCAL STU
+{
+constexpr int FeeID[2] = {44, 45};                ///< FEE_ID in RDH
+constexpr int NTRU[2] = {32, 14};                 ///< number of TRUs
+constexpr int CFG_nWords[2] = {17, 17};           ///< number of configuration words
+constexpr int L1JetIndex_nWords[2] = {11, 11};    ///< number of words with Jet indices
+constexpr int L0index_nWords[2] = {96, 42};       ///< number of words with null data
+constexpr int L1GammaIndex_nWords[2] = {128, 56}; ///< number of words with Gamma indices
+constexpr int Raw_nWords[2] = {1536, 672};        ///< number of words with ADC
+constexpr int SubregionsEta[2] = {12, 12};        ///< number of subregions over eta
+constexpr int SubregionsPhi[2] = {16, 10};        ///< number of subregions over phi
+constexpr int PaloadSizeFull[2] = {1928, 866};    ///< number of words in full payload = 1944/882-16
+constexpr int PaloadSizeShort[2] = {391, 193};    ///< number of words in shorts payload = 407/209-16
+} // namespace STUparam
+
+namespace TRUparam
+{
+constexpr int Nchannels = 96;             ///< number of FastORs per TRU
+constexpr int NchannelsOverEta = 8;       ///< number of FastORs over Eta for full- and 2/3-size SMs
+constexpr int NchannelsOverPhi = 12;      ///< number of FastORs over Phi for full- and 2/3-size SMs
+constexpr int NchannelsOverEta_long = 24; ///< number of FastORs over Eta for 1/3-size SMs
+constexpr int NchannelsOverPhi_long = 4;  ///< number of FastORs over Phi for 1/3-size SMs
+} // namespace TRUparam
 
 } // namespace emcal
 } // namespace o2

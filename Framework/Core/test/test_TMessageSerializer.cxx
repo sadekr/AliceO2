@@ -9,18 +9,39 @@
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
 
-#define BOOST_TEST_MODULE Test Framework AlgorithmSpec
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
-
 #include "Framework/TMessageSerializer.h"
+#include "Framework/RuntimeError.h"
+#include <fairmq/TransportFactory.h>
 #include "TestClasses.h"
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
+#include <utility>
 
 using namespace o2::framework;
 
-BOOST_AUTO_TEST_CASE(TestTMessageSerializer)
+class ExceptionMatcher : public Catch::Matchers::MatcherBase<RuntimeErrorRef>
 {
+  std::string m_expected;
+  mutable std::string m_actual;
+
+ public:
+  ExceptionMatcher(std::string exp) : m_expected(std::move(exp)) {}
+  bool match(RuntimeErrorRef const& ref) const override
+  {
+    auto& e = error_from_ref(ref);
+    m_actual = std::string(e.what);
+    return std::string(e.what) == m_expected;
+  }
+  std::string describe() const override
+  {
+    std::ostringstream ss;
+    ss << " special exception has value of " << m_expected << " but got " << m_actual;
+    return ss.str();
+  }
+};
+
+TEST_CASE("TestTMessageSerializer")
+{
+  o2::framework::clean_all_runtime_errors();
   const char* testname = "testname";
   const char* testtitle = "testtitle";
   using namespace o2::framework;
@@ -29,30 +50,27 @@ BOOST_AUTO_TEST_CASE(TestTMessageSerializer)
   array.SetOwner();
   array.Add(new TNamed(testname, testtitle));
 
-  FairTMessage msg;
-  TMessageSerializer::serialize(msg, &array);
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  auto msg = transport->CreateMessage(4096);
+  FairOutputTBuffer buffer(*msg);
+  TMessageSerializer::serialize(buffer, &array);
 
-  auto buf = as_span(msg);
-  BOOST_CHECK_EQUAL(buf.size(), msg.BufferSize());
-  BOOST_CHECK_EQUAL(static_cast<void*>(buf.data()), static_cast<void*>(msg.Buffer()));
+  FairInputTBuffer msg2((char*)msg->GetData(), msg->GetSize());
   // test deserialization with TObject as target class (default)
-  auto out = TMessageSerializer::deserialize(buf);
+  auto out = TMessageSerializer::deserialize(msg2);
 
-  TObjArray* outarr = dynamic_cast<TObjArray*>(out.get());
-  BOOST_CHECK_EQUAL(out.get(), outarr);
-  TNamed* named = dynamic_cast<TNamed*>(outarr->At(0));
-  BOOST_CHECK_EQUAL(static_cast<void*>(named), static_cast<void*>(outarr->At(0)));
-  BOOST_CHECK_EQUAL(named->GetName(), testname);
-  BOOST_CHECK_EQUAL(named->GetTitle(), testtitle);
+  auto* outarr = dynamic_cast<TObjArray*>(out.get());
+  REQUIRE(out.get() == outarr);
+  auto* named = dynamic_cast<TNamed*>(outarr->At(0));
+  REQUIRE(static_cast<void*>(named) == static_cast<void*>(outarr->At(0)));
+  REQUIRE(named->GetName() == std::string(testname));
+  REQUIRE(named->GetTitle() == std::string(testtitle));
 
   // test deserialization with a wrong target class and check the exception
-  BOOST_CHECK_EXCEPTION(TMessageSerializer::deserialize<TNamed>(buf),
-                        RuntimeErrorRef,
-                        [](RuntimeErrorRef const& ref) {
-                          auto& e = error_from_ref(ref);
-                          std::string expected("can not convert serialized class TObjArray into target class TNamed");
-                          return expected == e.what;
-                        });
+  REQUIRE_THROWS_AS(TMessageSerializer::deserialize<TNamed>(msg2), o2::framework::RuntimeErrorRef);
+
+  REQUIRE_THROWS_MATCHES(TMessageSerializer::deserialize<TNamed>(msg2), o2::framework::RuntimeErrorRef,
+                         ExceptionMatcher("can not convert serialized class TObjArray into target class TNamed"));
 }
 
 bool check_expected(RuntimeErrorRef const& ref)
@@ -62,31 +80,37 @@ bool check_expected(RuntimeErrorRef const& ref)
   return expected == e.what;
 };
 
-BOOST_AUTO_TEST_CASE(TestTMessageSerializer_NonTObject)
+TEST_CASE("TestTMessageSerializer_NonTObject")
 {
   using namespace o2::framework;
   std::vector<o2::test::Polymorphic> data{{0xaffe}, {0xd00f}};
 
   TClass* cl = TClass::GetClass("std::vector<o2::test::Polymorphic>");
-  BOOST_REQUIRE(cl != nullptr);
+  REQUIRE(cl != nullptr);
 
-  FairTMessage msg;
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  auto msg = transport->CreateMessage(4096);
+  FairOutputTBuffer buffer(*msg);
   char* in = reinterpret_cast<char*>(&data);
-  TMessageSerializer::serialize(msg, in, cl);
+  TMessageSerializer::serialize(buffer, in, cl);
+  FairInputTBuffer msg2((char*)msg->GetData(), msg->GetSize());
 
-  auto out = TMessageSerializer::deserialize<std::vector<o2::test::Polymorphic>>(as_span(msg));
-  BOOST_REQUIRE(out);
-  BOOST_CHECK((*out.get()).size() == 2);
-  BOOST_CHECK((*out.get())[0] == o2::test::Polymorphic(0xaffe));
-  BOOST_CHECK((*out.get())[1] == o2::test::Polymorphic(0xd00f));
+  auto out = TMessageSerializer::deserialize<std::vector<o2::test::Polymorphic>>(msg2);
+  REQUIRE(out);
+  REQUIRE((*out.get()).size() == 2);
+  REQUIRE((*out.get())[0] == o2::test::Polymorphic(0xaffe));
+  REQUIRE((*out.get())[1] == o2::test::Polymorphic(0xd00f));
 
   // test deserialization with a wrong target class and check the exception
-  BOOST_CHECK_EXCEPTION(TMessageSerializer::deserialize(as_span(msg)), RuntimeErrorRef, check_expected);
+  REQUIRE_THROWS_AS(TMessageSerializer::deserialize(msg2), RuntimeErrorRef);
 }
 
-BOOST_AUTO_TEST_CASE(TestTMessageSerializer_InvalidBuffer)
+TEST_CASE("TestTMessageSerializer_InvalidBuffer")
 {
   const char* buffer = "this is for sure not a serialized ROOT object";
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  auto msg = transport->CreateMessage(strlen(buffer) + 8);
+  memcpy((char*)msg->GetData() + 8, buffer, strlen(buffer));
   // test deserialization of invalid buffer and check the exception
   // FIXME: at the moment, TMessage fails directly with a segfault, which it shouldn't do
   /*
@@ -101,10 +125,24 @@ BOOST_AUTO_TEST_CASE(TestTMessageSerializer_InvalidBuffer)
   // test deserialization of invalid target class and check the exception
   struct Dummy {
   };
-  BOOST_CHECK_EXCEPTION(TMessageSerializer::deserialize<Dummy>((std::byte*)buffer, strlen(buffer)),
-                        RuntimeErrorRef,
-                        [](RuntimeErrorRef const& ref) {
-                          auto& err = error_from_ref(ref);
-                          return strcmp(err.what, "class is not ROOT-serializable") != 0;
-                        });
+  auto matcher = ExceptionMatcher("class is not ROOT-serializable: ZL22CATCH2_INTERNAL_TEST_4vE5Dummy");
+  FairInputTBuffer msg2((char*)msg->GetData(), msg->GetSize());
+  REQUIRE_THROWS_MATCHES(TMessageSerializer::deserialize<Dummy>(msg2), o2::framework::RuntimeErrorRef, matcher);
+}
+
+TEST_CASE("TestTMessageSerializer_CheckExpansion")
+{
+  const char* buffer = "this is for sure not a serialized ROOT object";
+  auto transport = fair::mq::TransportFactory::CreateTransportFactory("zeromq");
+  auto msg = transport->CreateMessage(strlen(buffer) + 8);
+  FairOutputTBuffer msg2(*msg);
+  // The buffer starts after 8 bytes.
+  REQUIRE(msg2.Buffer() == (char*)msg->GetData() + 8);
+  // The first 8 bytes of the buffer store the pointer to the message itself.
+  REQUIRE(*(fair::mq::Message**)msg->GetData() == msg.get());
+  // Notice that TBuffer does the same trick with the reallocation function,
+  // so in the end the useful buffer size is the message size minus 16.
+  REQUIRE(msg2.BufferSize() == (msg->GetSize() - 16));
+  // This will not fit the original buffer size, so the buffer will be expanded.
+  msg2.Expand(100);
 }

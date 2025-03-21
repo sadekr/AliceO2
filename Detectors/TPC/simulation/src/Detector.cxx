@@ -13,8 +13,9 @@
 #include "TPCSimulation/Detector.h"
 #include "TPCSimulation/Point.h"
 #include "TPCBase/ParameterGas.h"
+#include "TPCBase/ParameterDetector.h"
 
-#include "SimulationDataFormat/Stack.h"
+#include "DetectorsBase/Stack.h"
 #include "SimulationDataFormat/TrackReference.h"
 
 #include "FairVolume.h" // for FairVolume
@@ -29,7 +30,7 @@
 #include "FairGeoInterface.h"
 #include "FairRun.h"
 #include "FairRuntimeDb.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "FairRootManager.h"
 
 #include "TSystem.h"
@@ -64,7 +65,7 @@ using namespace o2::tpc;
 Detector::Detector(Bool_t active) : o2::base::DetImpl<Detector>("TPC", active), mGeoFileName()
 {
   for (int i = 0; i < Sector::MAXSECTOR; ++i) {
-    mHitsPerSectorCollection[i] = o2::utils::createSimVector<o2::tpc::HitGroup>(); //new std::vector<o2::tpc::HitGroup>;
+    mHitsPerSectorCollection[i] = o2::utils::createSimVector<o2::tpc::HitGroup>(); // new std::vector<o2::tpc::HitGroup>;
   }
 }
 
@@ -79,7 +80,7 @@ Detector::Detector(const Detector& rhs)
     mGeoFileName(rhs.mGeoFileName)
 {
   for (int i = 0; i < Sector::MAXSECTOR; ++i) {
-    mHitsPerSectorCollection[i] = o2::utils::createSimVector<o2::tpc::HitGroup>(); //new std::vector<o2::tpc::HitGroup>;new std::vector<o2::tpc::HitGroup>;
+    mHitsPerSectorCollection[i] = o2::utils::createSimVector<o2::tpc::HitGroup>(); // new std::vector<o2::tpc::HitGroup>;new std::vector<o2::tpc::HitGroup>;
   }
 }
 
@@ -104,9 +105,12 @@ Bool_t Detector::ProcessHits(FairVolume* vol)
 {
   mStepCounter++;
   auto& gasParam = ParameterGas::Instance();
+  auto& detParam = ParameterDetector::Instance();
+  const Int_t kMaxDistRef = 15;       // maximal difference between 2 stored references - the parameter should be 15 cm as default
+  static Double_t lastReferenceR = 0; // keeps last reference point in radius (cm)
 
   /* This method is called from the MC stepping for the sensitive volume only */
-  //   LOG(INFO) << "tpc::ProcessHits";
+  //   LOG(info) << "tpc::ProcessHits";
   const double trackCharge = fMC->TrackCharge();
   if (static_cast<int>(trackCharge) == 0) {
 
@@ -149,6 +153,34 @@ Bool_t Detector::ProcessHits(FairVolume* vol)
   if (fMC->IsTrackEntering() || fMC->IsTrackExiting()) {
     stack->addTrackReference(o2::TrackReference(position.X(), position.Y(), position.Z(), momentum.X(), momentum.Y(),
                                                 momentum.Z(), fMC->TrackLength(), time, trackID, GetDetId()));
+    lastReferenceR = fMC->TrackLength();
+  }
+  if (TMath::Abs(lastReferenceR - fMC->TrackLength()) > kMaxDistRef) { /// we can speedup
+    stack->addTrackReference(o2::TrackReference(position.X(), position.Y(), position.Z(), momentum.X(), momentum.Y(),
+                                                momentum.Z(), fMC->TrackLength(), time, trackID, GetDetId()));
+    lastReferenceR = fMC->TrackLength();
+  }
+
+  // ---| remove clusters between the IFC and the FC strips |---
+  // those should not enter the active readout area
+  // do coarse selection before, to limit number of transformations
+  if (detParam.ExcludeFCGap) {
+    const auto rCluster = std::sqrt(position.X() * position.X() + position.Y() * position.Y());
+    const float rodRin = 81.5 + 2.2;    // radial position of the inner field cage rods + radial size of the field cage rods
+    const float rodRout = 254.25 + 2.2; // radial position of the outer field cage rods + radial size of the field cage rods
+    const float fcLxIn = 82.428409;     // position of the inner FC strips in local x = cos(10 deg) * rodRin;
+    const float fcLxOut = 252.55395;    // position of the outer FC strips in local x = cos(10 deg) * rodRin;
+
+    if (rCluster < rodRin || rCluster > fcLxOut) {
+      const int sectorIDnonShift = static_cast<int>(Sector::ToSector(position.X(), position.Y(), position.Z()));
+      const double alpha = TMath::DegToRad() * (10. + sectorIDnonShift * 20.);
+      const double cs = std::cos(-alpha), sn = std::sin(-alpha);
+      const auto localX = position.X() * cs - position.Y() * sn;
+      // fine cut
+      if (localX < fcLxIn || localX > fcLxOut) {
+        return kFALSE;
+      }
+    }
   }
 
   // ===| CONVERT THE ENERGY LOSS TO IONIZATION ELECTRONS |=====================
@@ -198,7 +230,7 @@ Bool_t Detector::ProcessHits(FairVolume* vol)
     numberOfElectrons += nel_step;
   }
 
-  // LOG(INFO) << "tpc::AddHit" << FairLogger::endl << "Eloss: "
+  // LOG(info) << "tpc::AddHit" << FairLogger::endl << "Eloss: "
   //<< fMC->Edep() << ", Nelectrons: "
   //<< numberOfElectrons;
 
@@ -223,15 +255,27 @@ Bool_t Detector::ProcessHits(FairVolume* vol)
     mHitCounter++;
     mElectronCounter += numberOfElectrons;
     currentgroup->addHit(position.X(), position.Y(), position.Z(), time, numberOfElectrons);
+
+    // add last buffered hit, which was not yet added to the currentgroup
+    if (mHitLast.GetEnergyLoss() >= 0) {
+      currentgroup->addHit(mHitLast.GetX(), mHitLast.GetY(), mHitLast.GetZ(), mHitLast.GetTime(), mHitLast.GetEnergyLoss());
+      mHitLast.mELoss = -1;
+      groupCounter++;
+      mHitCounter++;
+      mElectronCounter += mHitLast.GetEnergyLoss();
+    }
   }
   // finish group
   else {
     oldTrackId = trackID;
     oldSectorId = sectorID;
     groupCounter = 0;
+
+    // buffer this hit, otherwise it wouldnt be stored in the HitGroup
+    mHitLast = ElementalHit(position.X(), position.Y(), position.Z(), time, numberOfElectrons);
   }
 
-  // LOG(INFO) << "tpc::AddHit" << FairLogger::endl
+  // LOG(info) << "tpc::AddHit" << FairLogger::endl
   //<< "   -- " << trackNumberID <<","  << volumeID << " " << vol->GetName()
   //<< ", Pos: (" << position.X() << ", "  << position.Y() <<", "<<  position.Z()<< ", " << r << ") "
   //<< ", Mom: (" << momentum.Px() << ", " << momentum.Py() << ", "  <<  momentum.Pz() << ") "
@@ -296,6 +340,8 @@ void Detector::CreateMaterials()
   // Origin: Marek Kowalski  IFJ, Krakow, Marek.Kowalski@ifj.edu.pl
   //-----------------------------------------------------------------
 
+  const auto& gasParam = ParameterGas::Instance();
+
   Int_t iSXFLD = 2;
   Float_t sXMGMX = 10.0;
   // init the field tracking params
@@ -306,6 +352,23 @@ void Detector::CreateMaterials()
   Float_t wmat[7]; // proportions
 
   Float_t density;
+
+  // TODO: load pressure and temperature values from CCDB
+  const Double_t pressure = gasParam.Pressure;                // in mbar
+  const Double_t temperature = gasParam.Temperature + 273.15; // in K
+
+  // densities were taken for these values
+  const Double_t t1 = 293.15;  // 20°C in K
+  const Double_t p1 = 1013.25; // 1 atm in mbars
+
+  // sanity check - temperature between 10 and 30 deg, pressure between 800 and 1200 mbar
+  Double_t ptCorr = 1.;
+  if (TMath::Abs(temperature - 293.15) > 10. || TMath::Abs(pressure - 1000.) > 200.) {
+    ptCorr = 1.;
+  } else {
+    ptCorr = (pressure * t1) / (p1 * temperature);
+  }
+  LOG(info) << "Setting gas density correction to: " << ptCorr;
 
   //***************** Gases *************************
 
@@ -326,7 +389,7 @@ void Detector::CreateMaterials()
 
   density = 1.842e-3;
 
-  o2::base::Detector::Mixture(10, "CO2", amat, zmat, density, 2, wmat);
+  o2::base::Detector::Mixture(10, "CO2", amat, zmat, density * ptCorr, 2, wmat);
   //
   // Air
   //
@@ -341,7 +404,7 @@ void Detector::CreateMaterials()
   //
   density = 0.001205;
 
-  o2::base::Detector::Mixture(11, "Air", amat, zmat, density, 2, wmat);
+  o2::base::Detector::Mixture(11, "Air", amat, zmat, density * ptCorr, 2, wmat);
 
   //----------------------------------------------------------------
   // drift gases 5 mixtures, 5 materials
@@ -409,7 +472,7 @@ void Detector::CreateMaterials()
   //
   // densities (NTP)
   //
-  Float_t dens[6] = {0.839e-3, 1.661e-3, 1.842e-3, 1.251e-3, 3.466e-3, 0.668e-3};
+  Float_t dens[6] = {0.839e-3, 1.661e-3, 1.842e-3, 1.165e-3, 3.466e-3, 0.668e-3};
   //
   density = 0.;
   for (Int_t i = 0; i < 6; i++) {
@@ -447,9 +510,9 @@ void Detector::CreateMaterials()
   }
 
   //
-  o2::base::Detector::Mixture(12, gname1.Data(), amat1, zmat1, density, cnt, wmat1); // nonsensitive
-  o2::base::Detector::Mixture(13, gname2.Data(), amat1, zmat1, density, cnt, wmat1); // sensitive
-  o2::base::Detector::Mixture(40, gname3.Data(), amat1, zmat1, density, cnt, wmat1); // sensitive Kr
+  o2::base::Detector::Mixture(12, gname1.Data(), amat1, zmat1, density * ptCorr, cnt, wmat1); // nonsensitive
+  o2::base::Detector::Mixture(13, gname2.Data(), amat1, zmat1, density * ptCorr, cnt, wmat1); // sensitive
+  o2::base::Detector::Mixture(40, gname3.Data(), amat1, zmat1, density * ptCorr, cnt, wmat1); // sensitive Kr
 
   //----------------------------------------------------------------------
   //               solid materials
@@ -905,7 +968,7 @@ void Detector::ConstructTPCGeometry()
   //
 
   //   if (!mParam) {
-  //     LOG(ERROR) << "TPC Parameters not available, cannot create Geometry";
+  //     LOG(error) << "TPC Parameters not available, cannot create Geometry";
   //     return;
   //   }
 
@@ -1132,7 +1195,7 @@ void Detector::ConstructTPCGeometry()
   //  Outer field cage guard rings. Inner placed in the drift gas, outer placed in the outer insulator (CO2)
   //
   auto* ogri = new TGeoTube(257.985, 258., 0.6);      // placed in the drift volume
-  auto* ogro = new TGeoTube(260.0676, 260.0826, 0.6); //placed in the outer insulator
+  auto* ogro = new TGeoTube(260.0676, 260.0826, 0.6); // placed in the outer insulator
   //
   auto* ogriv = new TGeoVolume("TPC_OGRI", ogri, m3);
   auto* ogrov = new TGeoVolume("TPC_OGRO", ogro, m3);
@@ -1388,8 +1451,8 @@ void Detector::ConstructTPCGeometry()
   // guard rings for IFC - outer placed in inner insulator, inner placed in the drift gas (3 different radii)
   // AL, 1.2 cm wide, 0.015 cm thick, volumes TPC_IGR1 - outer, TPC_IGR2-4 - inner
   //
-  auto* igro = new TGeoTube(76.6624, 76.6774, 0.6); //inner part, ends at inner radius of the IFC
-  auto* igrio = new TGeoTube(78.845, 78.86, 0.6);   //outer part
+  auto* igro = new TGeoTube(76.6624, 76.6774, 0.6); // inner part, ends at inner radius of the IFC
+  auto* igrio = new TGeoTube(78.845, 78.86, 0.6);   // outer part
   auto* igrim = new TGeoTube(78.795, 78.81, 0.6);
   auto* igric = new TGeoTube(78.785, 78.8, 0.6);
   //
@@ -1441,7 +1504,7 @@ void Detector::ConstructTPCGeometry()
   auto* cd2 = new TGeoTubeSeg(60.6262, 61.1862, 69.8, 0.05, 119.95);
   auto* cd3 = new TGeoTubeSeg(60.6462, 61.1662, 69.8, 0.05, 119.95);
   auto* cd4 = new TGeoTubeSeg(60.6562, 61.1562, 69.8, 0.05, 119.95);
-  auto* tepox4 = new TGeoTubeSeg(60.6224, 61.19, 69.8, 359.95, 0.05); //epoxy glue 0.01 deg
+  auto* tepox4 = new TGeoTubeSeg(60.6224, 61.19, 69.8, 359.95, 0.05); // epoxy glue 0.01 deg
   //
   TGeoMedium* sm6 = gGeoManager->GetMedium("TPC_Prepreg1");
   TGeoMedium* sm8 = gGeoManager->GetMedium("TPC_Epoxyfm");
@@ -1453,8 +1516,8 @@ void Detector::ConstructTPCGeometry()
   //
   // joints between sections 1 deg prepreg1 placed in nomex at lower and upper radius + 0.1 deg of glue (epoxy)
   //
-  auto* cdjl = new TGeoTubeSeg(60.6562, 60.6762, 69.8, 0., 1.0); //lower, to be rotated when positioned
-  auto* cdju = new TGeoTubeSeg(61.1362, 61.1562, 69.8, 0., 1.0); //upper, to be rotated when positioned
+  auto* cdjl = new TGeoTubeSeg(60.6562, 60.6762, 69.8, 0., 1.0); // lower, to be rotated when positioned
+  auto* cdju = new TGeoTubeSeg(61.1362, 61.1562, 69.8, 0., 1.0); // upper, to be rotated when positioned
   //
   auto* cdjlv = new TGeoVolume("TPC_CDJL", cdjl, sm6);
   auto* cdjuv = new TGeoVolume("TPC_CDJU", cdju, sm6);
@@ -1632,10 +1695,10 @@ void Detector::ConstructTPCGeometry()
   //
   // connectors alu body & strong back
   //
-  auto* conn = new TGeoBBox(0.4, 0.24, 1.937);         //connectors alu body
-  auto* connv = new TGeoVolume("TPC_RCCON", conn, m6); //makrolon
+  auto* conn = new TGeoBBox(0.4, 0.24, 1.937);         // connectors alu body
+  auto* connv = new TGeoVolume("TPC_RCCON", conn, m6); // makrolon
   //
-  auto* connb = new TGeoBBox(0.5, 0.25, 2.375); //connectors strong back
+  auto* connb = new TGeoBBox(0.5, 0.25, 2.375); // connectors strong back
   auto* connbv = new TGeoVolume("TPC_RCCONB", connb, m6);
   //
   // strong back
@@ -1650,7 +1713,7 @@ void Detector::ConstructTPCGeometry()
   ifstream in;
   in.open(fileName.Data(), ios_base::in); // asci file
   if (!in.is_open()) {
-    LOG(FATAL) << "Cannot open input file : " << fileName.Data();
+    LOG(fatal) << "Cannot open input file : " << fileName.Data();
   }
   for (Int_t i = 0; i < 132; i++) {
     Double_t x, z, ang;
@@ -1664,8 +1727,8 @@ void Detector::ConstructTPCGeometry()
     auto* rrr = new TGeoRotation();
     rrr->RotateY(ang);
     //
-    ibdv->AddNode(connv, i + 1, new TGeoCombiTrans(x, 4.05, z, rrr));         //connectors alu body
-    icsbv->AddNode(connbv, i + 1, new TGeoCombiTrans(x, 0., z + 1.725, rrr)); //connectors strong back
+    ibdv->AddNode(connv, i + 1, new TGeoCombiTrans(x, 4.05, z, rrr));         // connectors alu body
+    icsbv->AddNode(connbv, i + 1, new TGeoCombiTrans(x, 0., z + 1.725, rrr)); // connectors strong back
   }
   in.close();
   //
@@ -1681,7 +1744,7 @@ void Detector::ConstructTPCGeometry()
   // pad plane G10 3.2 mm thick
   //
   auto* icpp = new TGeoTrd1(14.5974, 23.3521, 0.16, 24.825);
-  auto* icppv = new TGeoVolume("TPC_IPP", icpp, m4); //pad plane
+  auto* icppv = new TGeoVolume("TPC_IPP", icpp, m4); // pad plane
   //
   // gem
   //
@@ -1694,11 +1757,11 @@ void Detector::ConstructTPCGeometry()
   //
   auto* iroc = new TGeoVolumeAssembly("TPC_IROC");
   //
-  iroc->AddNode(ibdv, 1);                                          //main body
-  iroc->AddNode(icv, 1, new TGeoTranslation(0., 3.1, -1.725));     //cap
-  iroc->AddNode(icsbv, 1, new TGeoTranslation(0., 4.54, -1.725));  //strong back
-  iroc->AddNode(icppv, 1, new TGeoTranslation(0., 4.95, -1.725));  //pad plane
-  iroc->AddNode(icgemv, 1, new TGeoTranslation(0., 5.21, -1.725)); //gem
+  iroc->AddNode(ibdv, 1);                                          // main body
+  iroc->AddNode(icv, 1, new TGeoTranslation(0., 3.1, -1.725));     // cap
+  iroc->AddNode(icsbv, 1, new TGeoTranslation(0., 4.54, -1.725));  // strong back
+  iroc->AddNode(icppv, 1, new TGeoTranslation(0., 4.95, -1.725));  // pad plane
+  iroc->AddNode(icgemv, 1, new TGeoTranslation(0., 5.21, -1.725)); // gem
   //
   // OROC
   //
@@ -1744,11 +1807,11 @@ void Detector::ConstructTPCGeometry()
   //
   // connectors, identical as for iroc, but I prefer to have separate volumes for better control
   //
-  auto* conno = new TGeoBBox(0.4, 0.4, 1.937);            //alu body
-  auto* connov = new TGeoVolume("TPC_RCCONO", conno, m6); //makrolon
+  auto* conno = new TGeoBBox(0.4, 0.4, 1.937);            // alu body
+  auto* connov = new TGeoVolume("TPC_RCCONO", conno, m6); // makrolon
   //
   auto* connob = new TGeoBBox(0.5, 0.25, 2.375);
-  auto* connobv = new TGeoVolume("TPC_RCCONOB", connob, m6); //strong back
+  auto* connobv = new TGeoVolume("TPC_RCCONOB", connob, m6); // strong back
   //
   // cap
   //
@@ -1775,9 +1838,9 @@ void Detector::ConstructTPCGeometry()
   //
   // ogemh1 - first "hole" ends at z = 36.25, ogemh2 - second "hole" starts at z = 74.15
   //
-  new TGeoTrd1("ogemh1", 22.548, 28.579, 0.1, 17.625); //ogemh1 - lower hole
-  new TGeoTrd1("ogemh2", 28.949, 35.297, 0.1, 18.45);  //ogemh2 - middle hole
-  new TGeoTrd1("ogemh3", 35.667, 42.332, 0.1, 19.425); //ogemh3 - upper hole
+  new TGeoTrd1("ogemh1", 22.548, 28.579, 0.1, 17.625); // ogemh1 - lower hole
+  new TGeoTrd1("ogemh2", 28.949, 35.297, 0.1, 18.45);  // ogemh2 - middle hole
+  new TGeoTrd1("ogemh3", 35.667, 42.332, 0.1, 19.425); // ogemh3 - upper hole
   //
   auto* tr2 = new TGeoTranslation("tr2", 0., 0., 18.125 - 57.1);
   auto* tr3 = new TGeoTranslation("tr3", 0., 0., 55.2 - 57.1);
@@ -1794,7 +1857,7 @@ void Detector::ConstructTPCGeometry()
   fileName += "/Detectors/Geometry/TPC/conn_oroc.dat";
   in.open(fileName.Data(), ios_base::in); // asci file
   if (!in.is_open()) {
-    LOG(FATAL) << "Cannot open input file : " << fileName.Data();
+    LOG(fatal) << "Cannot open input file : " << fileName.Data();
   }
   for (Int_t i = 0; i < 232; i++) {
     Double_t x, z, ang;
@@ -3071,23 +3134,23 @@ void Detector::LoadGeometryFromFile()
 {
   // ===| Read the TPC geometry from file |=====================================
   if (mGeoFileName.IsNull()) {
-    LOG(FATAL) << "TPC geometry file name not set";
+    LOG(fatal) << "TPC geometry file name not set";
     return;
   }
 
   TFile* fGeoFile = TFile::Open(mGeoFileName);
   if (!fGeoFile || !fGeoFile->IsOpen() || fGeoFile->IsZombie()) {
-    LOG(FATAL) << "Could not open TPC geometry file '" << mGeoFileName << "'";
+    LOG(fatal) << "Could not open TPC geometry file '" << mGeoFileName << "'";
     return;
   }
 
   TGeoVolume* tpcVolume = dynamic_cast<TGeoVolume*>(fGeoFile->Get("TPC_M"));
   if (!tpcVolume) {
-    LOG(FATAL) << "Could not retrieve TPC geometry from file '" << mGeoFileName << "'";
+    LOG(fatal) << "Could not retrieve TPC geometry from file '" << mGeoFileName << "'";
     return;
   }
 
-  LOG(INFO) << "Loaded TPC geometry from file '" << mGeoFileName << "'";
+  LOG(info) << "Loaded TPC geometry from file '" << mGeoFileName << "'";
   TGeoVolume* alice = gGeoManager->GetVolume("barrel");
   alice->AddNode(tpcVolume, 1, new TGeoTranslation(0., 30., 0.));
 }
@@ -3107,7 +3170,7 @@ void Detector::defineSensitiveVolumes()
     TString volumeName = volumeNames[ivol];
     v = geoManager->GetVolume(volumeName.Data());
     if (!v) {
-      LOG(ERROR) << "Could not find volume '" << volumeName << "'";
+      LOG(error) << "Could not find volume '" << volumeName << "'";
       continue;
     }
 
@@ -3118,7 +3181,7 @@ void Detector::defineSensitiveVolumes()
   // Special sensitive volume parameters in case FLUKA is used as transport engine
   auto vmc = TVirtualMC::GetMC();
   if (strcmp(vmc->GetName(), "TFluka") == 0) {
-    LOG(INFO) << "Setting special FLUKA parameters for  TPC Driftgas";
+    LOG(info) << "Setting special FLUKA parameters for  TPC Driftgas";
     auto& mgr = o2::base::MaterialManager::Instance();
     Int_t index = mgr.getMediumID("TPC", kDriftGas2);
     vmc->Gstpar(index, "PRIMIO_E", 20.77);
@@ -3178,3 +3241,11 @@ std::string Detector::getHitBranchNames(int probe) const
 }
 
 ClassImp(o2::tpc::Detector);
+
+// Define Factory method for calling from the outside
+extern "C" {
+o2::base::Detector* create_detector_tpc(bool active)
+{
+  return o2::tpc::Detector::create(active);
+}
+}

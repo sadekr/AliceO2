@@ -33,7 +33,7 @@ ClusterPattern::ClusterPattern(int nRow, int nCol, const unsigned char patt[MaxP
 unsigned char ClusterPattern::getByte(int n) const
 {
   if (n < 0 || n > MaxPatternBytes + 1) {
-    LOG(ERROR) << "Invalid element of the pattern";
+    LOG(error) << "Invalid element of the pattern";
     return -1;
   } else {
     return mBitmap[n];
@@ -73,7 +73,7 @@ std::ostream& operator<<(std::ostream& os, const ClusterPattern& pattern)
   unsigned char tempChar = 0;
   int s = 0;
   int ic = 0;
-  for (unsigned int i = 2; i < pattern.getUsedBytes() + 2; i++) {
+  for (int i = 2; i < pattern.getUsedBytes() + 2; i++) {
     tempChar = pattern.mBitmap[i];
     s = 128; // 0b10000000
     while (s > 0) {
@@ -102,6 +102,11 @@ std::ostream& operator<<(std::ostream& os, const ClusterPattern& pattern)
   return os;
 }
 
+void ClusterPattern::print() const
+{
+  std::cout << *this << "\n";
+}
+
 int ClusterPattern::getNPixels() const
 {
   int n = 0, nBytes = getUsedBytes();
@@ -126,7 +131,7 @@ int ClusterPattern::getCOG(int rowSpan, int colSpan, const unsigned char patt[Ma
   if (nBits % 8 != 0) {
     nBytes++;
   }
-  for (unsigned int i = 0; i < nBytes; i++) {
+  for (int i = 0; i < nBytes; i++) {
     unsigned char tempChar = patt[i];
     int s = 128; // 0b10000000
     while (s > 0) {

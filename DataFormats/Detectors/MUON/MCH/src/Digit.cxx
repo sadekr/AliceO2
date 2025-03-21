@@ -66,7 +66,33 @@ bool Digit::operator==(const Digit& other) const
          mPadID == other.mPadID &&
          mADC == other.mADC &&
          mTFtime == other.mTFtime &&
-         mNofSamples == other.mNofSamples;
+         mNofSamples == other.mNofSamples &&
+         mIsSaturated == other.mIsSaturated;
+}
+
+bool Digit::operator<(const Digit& other) const
+{
+  if (mDetID == other.mDetID) {
+    if (mPadID == other.mPadID) {
+      if (mTFtime == other.mTFtime) {
+        if (mADC == other.mADC) {
+          if (mNofSamples == other.mNofSamples) {
+            return mIsSaturated != other.mIsSaturated;
+          } else {
+            return mNofSamples < other.mNofSamples;
+          }
+        } else {
+          return mADC < other.mADC;
+        }
+      } else {
+        return mTFtime < other.mTFtime;
+      }
+    } else {
+      return mPadID < other.mPadID;
+    }
+  } else {
+    return mDetID < other.mDetID;
+  }
 }
 
 } // namespace o2::mch

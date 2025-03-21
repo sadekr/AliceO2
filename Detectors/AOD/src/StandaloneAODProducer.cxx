@@ -86,7 +86,7 @@ void fillMCollisionTable(o2::steer::MCKinematicsReader const& mcreader)
     //                  mccollision::PosX, mccollision::PosY, mccollision::PosZ, mccollision::T, mccollision::Weight,
     //                 mccollision::ImpactParameter);
 
-    mcCollCursor(0, 0 /*bcID*/, 0 /*genID*/, header.GetX(), header.GetY(), header.GetZ(), time, 1. /*weight*/, header.GetB());
+    mcCollCursor(0, 0 /*bcID*/, 0 /*genID*/, header.GetX(), header.GetY(), header.GetZ(), time, 1. /*weight*/, header.GetB(), 0.0);
 
     index++;
   }
@@ -94,7 +94,7 @@ void fillMCollisionTable(o2::steer::MCKinematicsReader const& mcreader)
 
   TFile outfile("aod.root", "UPDATE");
   {
-    TableToTree t2t(mccoltable, &outfile, aod::MetadataTrait<o2::aod::McCollisions>::metadata::tableLabel());
+    TableToTree t2t(mccoltable, &outfile, aod::description_str(aod::signature<o2::aod::McCollisions::ref>()).data());
     t2t.addAllBranches();
     t2t.process();
   }
@@ -111,9 +111,9 @@ void fillCollisionAndTrackTable()
   auto tpctracks = fetchTracks<o2::tpc::TrackTPC>("tpctracks.root", "tpcrec", "TPCTracks");
   auto itstracks = fetchTracks<o2::its::TrackITS>("o2trac_its.root", "o2sim", "ITSTrack");
   auto itstpctracks = fetchTracks<o2::dataformats::TrackTPCITS>("o2match_itstpc.root", "matchTPCITS", "TPCITS");
-  LOG(INFO) << "FOUND " << tpctracks->size() << " TPC tracks";
-  LOG(INFO) << "FOUND " << itstracks->size() << " ITS tracks";
-  LOG(INFO) << "FOUND " << itstpctracks->size() << " ITCTPC tracks";
+  LOG(info) << "FOUND " << tpctracks->size() << " TPC tracks";
+  LOG(info) << "FOUND " << itstracks->size() << " ITS tracks";
+  LOG(info) << "FOUND " << itstpctracks->size() << " ITCTPC tracks";
 
   if (t) {
     auto br = t->GetBranch("PrimaryVertex");
@@ -138,7 +138,7 @@ void fillCollisionAndTrackTable()
       auto collCursor = collBuilder.cursor<o2::aod::Collisions>();
 
       TableBuilder trackBuilder;
-      auto trackCursor = trackBuilder.cursor<o2::aod::Tracks>();
+      auto trackCursor = trackBuilder.cursor<o2::aod::StoredTracks>();
 
       int index = 0;
       for (auto& v : *vertices) {
@@ -173,7 +173,7 @@ void fillCollisionAndTrackTable()
           } else if (source == o2::dataformats::VtxTrackIndex::Source::ITSTPC) {
             track = &((*itstpctracks)[trackindex.getIndex()]);
           } else {
-            LOG(WARNING) << "Unsupported track source";
+            LOG(warning) << "Unsupported track source";
           }
 
           //DECLARE_SOA_TABLE_FULL(StoredTracks, "Tracks", "AOD", "TRACK:PAR",
@@ -190,7 +190,7 @@ void fillCollisionAndTrackTable()
           std::array<float, 3> pxpypz;
           track->getPxPyPzGlo(pxpypz);
           trackCursor(0, index, 0 /* CORRECT THIS */, track->getX(), track->getAlpha(), track->getY(), track->getZ(), track->getSnp(), track->getTgl(),
-                      track->getPt() /*CHECK!!*/, track->getPhi(), pxpypz[0], pxpypz[1], pxpypz[2]);
+                      track->getPt() /*CHECK!!*/);
         }
         index++;
       }
@@ -200,12 +200,12 @@ void fillCollisionAndTrackTable()
       f.Close();
       TFile outfile("aod.root", "RECREATE");
       {
-        TableToTree t2t(colltable, &outfile, aod::MetadataTrait<o2::aod::Collisions>::metadata::tableLabel());
+        TableToTree t2t(colltable, &outfile, aod::description_str(aod::signature<o2::aod::Collisions::ref>()).data());
         t2t.addAllBranches();
         t2t.process();
       }
       {
-        TableToTree t2t(tracktable, &outfile, "Tracks" /* aod::MetadataTrait<o2::aod::Tracks>::metadata::tableLabel() */);
+        TableToTree t2t(tracktable, &outfile, aod::description_str(aod::signature<o2::aod::StoredTracks::ref>()).data());
         t2t.addAllBranches();
         t2t.process();
       }

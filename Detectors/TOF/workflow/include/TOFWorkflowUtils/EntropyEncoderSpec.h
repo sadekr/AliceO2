@@ -29,19 +29,21 @@ namespace tof
 class EntropyEncoderSpec : public o2::framework::Task
 {
  public:
-  EntropyEncoderSpec();
+  EntropyEncoderSpec(bool selIR);
   ~EntropyEncoderSpec() override = default;
   void run(o2::framework::ProcessingContext& pc) final;
   void init(o2::framework::InitContext& ic) final;
   void endOfStream(o2::framework::EndOfStreamContext& ec) final;
+  void finaliseCCDB(o2::framework::ConcreteDataMatcher& matcher, void* obj) final;
 
  private:
   o2::tof::CTFCoder mCTFCoder;
+  bool mSelIR = false;
   TStopwatch mTimer;
 };
 
 /// create a processor spec
-framework::DataProcessorSpec getEntropyEncoderSpec();
+framework::DataProcessorSpec getEntropyEncoderSpec(bool selIR = false);
 
 } // namespace tof
 } // namespace o2

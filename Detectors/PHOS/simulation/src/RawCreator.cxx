@@ -26,7 +26,7 @@
 #include "DataFormatsPHOS/TriggerRecord.h"
 #include "PHOSBase/Geometry.h"
 #include "PHOSSimulation/RawWriter.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 namespace bpo = boost::program_options;
 
@@ -83,9 +83,9 @@ int main(int argc, const char** argv)
   // if needed, create output directory
   if (!std::filesystem::exists(outputdir)) {
     if (!std::filesystem::create_directories(outputdir)) {
-      LOG(FATAL) << "could not create output directory " << outputdir;
+      LOG(fatal) << "could not create output directory " << outputdir;
     } else {
-      LOG(INFO) << "created output directory " << outputdir;
+      LOG(info) << "created output directory " << outputdir;
     }
   }
 
@@ -97,6 +97,8 @@ int main(int argc, const char** argv)
   o2::phos::RawWriter::FileFor_t granularity = o2::phos::RawWriter::FileFor_t::kFullDet;
   if (filefor == "all") {
     granularity = o2::phos::RawWriter::FileFor_t::kFullDet;
+  } else if (filefor == "crorc") {
+    granularity = o2::phos::RawWriter::FileFor_t::kCRORC;
   } else if (filefor == "link") {
     granularity = o2::phos::RawWriter::FileFor_t::kLink;
   }
@@ -107,7 +109,7 @@ int main(int argc, const char** argv)
   rawwriter.init();
 
   // Loop over all entries in the tree, where each tree entry corresponds to a time frame
-  for (auto en : *treereader) {
+  while (treereader->Next()) {
     rawwriter.digitsToRaw(*digitbranch, *triggerbranch);
   }
   rawwriter.getWriter().writeConfFile("PHS", "RAWDATA", o2::utils::Str::concat_string(outputdir, "/PHSraw.cfg"));

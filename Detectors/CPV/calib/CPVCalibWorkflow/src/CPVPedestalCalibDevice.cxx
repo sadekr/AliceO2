@@ -13,7 +13,7 @@
 #include "CCDB/CcdbApi.h"
 #include "CCDB/CcdbObjectInfo.h"
 #include <string>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "CommonDataFormat/InteractionRecord.h"
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/ControlService.h"
@@ -33,7 +33,7 @@ using namespace o2::cpv;
 void CPVPedestalCalibDevice::init(o2::framework::InitContext& ic)
 {
 
-  //Create histograms for mean and RMS
+  // Create histograms for mean and RMS
   short n = 3 * o2::cpv::Geometry::kNumberOfCPVPadsPhi * o2::cpv::Geometry::kNumberOfCPVPadsZ;
   mMean = std::unique_ptr<TH2F>(new TH2F("Mean", "Mean", n, 0.5, n + 0.5, 500, 0., 500.));
 }
@@ -50,22 +50,22 @@ void CPVPedestalCalibDevice::run(o2::framework::ProcessingContext& ctx)
       try {
         rawreader.next();
       } catch (RawErrorType_t e) {
-        LOG(ERROR) << "Raw decoding error " << (int)e;
-        //if problem in header, abandon this page
+        LOG(error) << "Raw decoding error " << (int)e;
+        // if problem in header, abandon this page
         if (e == RawErrorType_t::kRDH_DECODING) {
           break;
         }
-        //if problem in payload, try to continue
+        // if problem in payload, try to continue
         continue;
       }
-      auto& header = rawreader.getRawHeader();
-      auto triggerBC = o2::raw::RDHUtils::getTriggerBC(header);
-      auto triggerOrbit = o2::raw::RDHUtils::getTriggerOrbit(header);
+      // auto& header = rawreader.getRawHeader();
+      //       auto triggerBC = o2::raw::RDHUtils::getTriggerBC(header);
+      //       auto triggerOrbit = o2::raw::RDHUtils::getTriggerOrbit(header);
       // use the decoder to decode the raw data, and extract signals
       o2::cpv::RawDecoder decoder(rawreader);
       RawErrorType_t err = decoder.decode();
       if (err != kOK) {
-        //TODO handle severe errors
+        // TODO handle severe errors
         continue;
       }
       // Loop over all the channels
@@ -74,15 +74,15 @@ void CPVPedestalCalibDevice::run(o2::framework::ProcessingContext& ctx)
         unsigned short absId = ac.Address;
         mMean->Fill(absId, ac.Charge);
       }
-    } //RawReader::hasNext
+    } // RawReader::hasNext
   }
 }
 
 void CPVPedestalCalibDevice::endOfStream(o2::framework::EndOfStreamContext& ec)
 {
 
-  LOG(INFO) << "[CPVPedestalCalibDevice - endOfStream]";
-  //calculate stuff here
+  LOG(info) << "[CPVPedestalCalibDevice - endOfStream]";
+  // calculate stuff here
   calculatePedestals();
   checkPedestals();
   sendOutput(ec.outputs());
@@ -106,21 +106,21 @@ void CPVPedestalCalibDevice::sendOutput(DataAllocator& output)
     const auto now = std::chrono::system_clock::now();
     long timeStart = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
     info.setStartValidityTimestamp(timeStart);
-    info.setEndValidityTimestamp(99999999999999);
+    info.setEndValidityTimestamp(o2::ccdb::CcdbObjectInfo::INFINITE_TIMESTAMP);
     std::map<std::string, std::string> md;
     info.setMetaData(md);
 
-    LOG(INFO) << "Sending object CPV/Calib/Pedestals";
+    LOG(info) << "Sending object CPV/Calib/Pedestals";
 
     header::DataHeader::SubSpecificationType subSpec{(header::DataHeader::SubSpecificationType)0};
     output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBPayload, "CPV_PEDESTALS", subSpec}, *image.get());
     output.snapshot(Output{o2::calibration::Utils::gDataOriginCDBWrapper, "CPV_PEDESTALS", subSpec}, info);
   }
-  //Anyway send change to QC
-  LOG(INFO) << "[CPVPedestalCalibDevice - run] Writing ";
-  output.snapshot(o2::framework::Output{"CPV", "PEDDIFF", 0, o2::framework::Lifetime::Timeframe}, mPedDiff);
+  // Anyway send change to QC
+  LOG(info) << "[CPVPedestalCalibDevice - run] Writing ";
+  output.snapshot(o2::framework::Output{"CPV", "PEDDIFF", 0}, mPedDiff);
 
-  //Write pedestal distributions to calculate bad map
+  // Write pedestal distributions to calculate bad map
   std::string filename = mPath + "CPVPedestals.root";
   TFile f(filename.data(), "RECREATE");
   mMean->Write();
@@ -132,7 +132,7 @@ void CPVPedestalCalibDevice::calculatePedestals()
 
   mPedestals.reset(new Pedestals());
 
-  //Calculate mean of pedestal distributions
+  // Calculate mean of pedestal distributions
   for (unsigned short i = mMean->GetNbinsX(); i > 0; i--) {
     TH1D* pr = mMean->ProjectionY(Form("proj%d", i), i, i);
     short pedMean = std::min(255, int(pr->GetMean()));
@@ -143,8 +143,8 @@ void CPVPedestalCalibDevice::calculatePedestals()
 
 void CPVPedestalCalibDevice::checkPedestals()
 {
-  //Compare pedestals to current ones stored in CCDB
-  //and send difference to QC to check
+  // Compare pedestals to current ones stored in CCDB
+  // and send difference to QC to check
   if (!mUseCCDB) {
     mUpdateCCDB = true;
     return;
@@ -171,10 +171,10 @@ o2::framework::DataProcessorSpec o2::cpv::getPedestalCalibSpec(bool useCCDB, boo
 {
 
   std::vector<o2::framework::OutputSpec> outputs;
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "CPV_PEDESTALS"});
-  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "CPV_PEDESTALS"});
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBPayload, "CPV_PEDESTALS"}, o2::framework::Lifetime::Sporadic);
+  outputs.emplace_back(ConcreteDataTypeMatcher{o2::calibration::Utils::gDataOriginCDBWrapper, "CPV_PEDESTALS"}, o2::framework::Lifetime::Sporadic);
 
-  outputs.emplace_back("CPV", "PEDDIFF", 0, o2::framework::Lifetime::Timeframe);
+  outputs.emplace_back("CPV", "PEDDIFF", 0, o2::framework::Lifetime::Sporadic);
 
   return o2::framework::DataProcessorSpec{"PedestalCalibSpec",
                                           o2::framework::select("A:CPV/RAWDATA"),

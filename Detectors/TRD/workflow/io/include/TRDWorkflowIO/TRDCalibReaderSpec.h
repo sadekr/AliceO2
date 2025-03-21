@@ -20,6 +20,9 @@
 #include "Framework/DataProcessorSpec.h"
 #include "Framework/Task.h"
 #include "DataFormatsTRD/AngularResidHistos.h"
+#include "DataFormatsTRD/GainCalibHistos.h"
+#include "DataFormatsTRD/PHData.h"
+#include <vector>
 
 namespace o2
 {
@@ -40,7 +43,9 @@ class TRDCalibReader : public o2::framework::Task
   std::unique_ptr<TTree> mTree;
   std::string mInFileName{"trdangreshistos.root"};
   std::string mInTreeName{"calibdata"};
-  std::vector<o2::trd::AngularResidHistos> mAngResids, *mAngResidPtr = &mAngResids;
+  o2::trd::AngularResidHistos mAngResids, *mAngResidPtr = &mAngResids;
+  std::vector<o2::trd::PHData> mPHData, *mPHDataPtr = &mPHData;
+  std::vector<int> mGainData, *mGainDataPtr = &mGainData;
 };
 
 /// create a processor spec

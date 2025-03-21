@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 #include "CommonConstants/LHCConstants.h"
 #include "EMCALBase/RCUTrailer.h"
+#include <fairlogger/Logger.h>
 
 using namespace o2::emcal;
 
@@ -32,6 +33,29 @@ void RCUTrailer::reset()
   mAltroConfig.mWord1 = 0;
   mAltroConfig.mWord2 = 0;
   mIsInitialized = false;
+}
+
+bool RCUTrailer::checkLastTrailerWord(uint32_t trailerword)
+{
+  const int MIN_FWVERSION = 2;
+  const int MAX_FWVERSION = 2;
+  if ((trailerword >> 30) != 3) {
+    return false;
+  }
+  auto firmwarevesion = (trailerword >> 16) & 0xFF;
+  auto trailerSize = (trailerword & 0x7F);
+  if (firmwarevesion < MIN_FWVERSION || firmwarevesion > MAX_FWVERSION) {
+    return false;
+  }
+  if (trailerSize < 2) {
+    return false;
+  }
+  if (firmwarevesion == 2) {
+    if (trailerSize < 9) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void RCUTrailer::constructFromRawPayload(const gsl::span<const uint32_t> payloadwords)
@@ -53,15 +77,16 @@ void RCUTrailer::constructFromRawPayload(const gsl::span<const uint32_t> payload
   mTrailerSize = trailerSize;
 
   trailerSize -= 2; // Cut first and last trailer words as they are handled separately
+  int foundTrailerWords = 0;
   for (; trailerSize > 0; trailerSize--) {
     word = payloadwords[--index];
     if ((word >> 30) != 2) {
-      std::cerr << "Missing RCU trailer identifier pattern!\n";
       continue;
     }
+    foundTrailerWords++;
     int parCode = (word >> 26) & 0xF;
     int parData = word & 0x3FFFFFF;
-    // std::cout << "Found trailer word 0x" << std::hex << word << "(Par code: " << std::dec << parCode << ", Par data: 0x" << std::hex << parData << std::dec << ")";
+    // std::cout << "Found trailer word 0x" << std::hex << word << "(Par code: " << std::dec << parCode << ", Par data: 0x" << std::hex << parData << std::dec << ")" << std::endl;
     switch (parCode) {
       case 1:
         // ERR_REG1
@@ -93,11 +118,19 @@ void RCUTrailer::constructFromRawPayload(const gsl::span<const uint32_t> payload
         mAltroConfig.mWord2 = parData & 0x1FFFFFF;
         break;
       default:
-        std::cerr << "Undefined parameter code " << parCode << ", ignore it !\n";
+        LOG(warning) << "RCU trailer: Undefined parameter code " << parCode << " in word " << index << " (0x" << std::hex << word << std::dec << "), ignoring word";
+        mWordCorruptions++;
         break;
     }
   }
-  mPayloadSize = payloadwords[--index] & 0x3FFFFFF;
+  auto lastword = payloadwords[--index];
+  if (lastword >> 30 == 2) {
+    mPayloadSize = lastword & 0x3FFFFFF;
+    foundTrailerWords++;
+  }
+  if (foundTrailerWords + 1 < mTrailerSize) { // Must account for the first word which was chopped
+    throw Error(Error::ErrorType_t::DECODING_INVALID, fmt::format("Corrupted trailer words: {:d} word(s) not having trailer marker", mTrailerSize - foundTrailerWords).data());
+  }
   mIsInitialized = true;
 }
 
@@ -119,7 +152,7 @@ double RCUTrailer::getTimeSampleNS() const
       tSample = 8.;
       break;
     default:
-      throw Error(Error::ErrorType_t::SAMPLINGFREQ_INVALID, fmt::format("Invalid sampling frequency value %d !", int(fq)).data());
+      throw Error(Error::ErrorType_t::SAMPLINGFREQ_INVALID, fmt::format("Invalid sampling frequency value {:d} !", int(fq)).data());
   }
 
   return tSample * o2::constants::lhc::LHCBunchSpacingNS;
@@ -139,7 +172,7 @@ void RCUTrailer::setTimeSamplePhaseNS(uint64_t triggertime, uint64_t timesample)
       sample = 2;
       break;
     default:
-      throw Error(Error::ErrorType_t::SAMPLINGFREQ_INVALID, fmt::format("invalid time sample: %f", timesample).data());
+      throw Error(Error::ErrorType_t::SAMPLINGFREQ_INVALID, fmt::format(fmt::runtime("invalid time sample: {:f}"), timesample).data());
   };
   mAltroConfig.mSampleTime = sample;
   // calculate L1 phase
@@ -151,7 +184,7 @@ double RCUTrailer::getL1PhaseNS() const
   double tSample = getTimeSampleNS(),
          phase = static_cast<double>(mAltroConfig.mL1Phase) * o2::constants::lhc::LHCBunchSpacingNS;
   if (phase >= tSample) {
-    throw Error(Error::ErrorType_t::L1PHASE_INVALID, fmt::format("Invalid L1 trigger phase (%e ns (phase) >= %e ns (sampling time)) !", phase, tSample).data());
+    throw Error(Error::ErrorType_t::L1PHASE_INVALID, fmt::format("Invalid L1 trigger phase ({:e} ns (phase) >= {:e} ns (sampling time)) !", phase, tSample).data());
   }
   return phase;
 }
@@ -218,8 +251,8 @@ void RCUTrailer::printStream(std::ostream& stream) const
          << "Sparse readout:                            " << (isSparseReadout() ? "yes" : "no") << "\n"
          << "AltroCFG1:                                 0x" << std::hex << mAltroConfig.mWord1 << "\n"
          << "AltroCFG2:                                 0x" << std::hex << mAltroConfig.mWord2 << "\n"
-         << "Sampling time:                             " << timesample << " ns\n"
-         << "L1 Phase:                                  " << l1phase << " ns\n"
+         << "Sampling time:                             " << std::dec << timesample << " ns\n"
+         << "L1 Phase:                                  " << std::dec << l1phase << " ns (" << mAltroConfig.mL1Phase << ")\n"
          << std::dec << std::fixed;
   if (errors.size()) {
     stream << "Errors: \n"

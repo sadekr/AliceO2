@@ -34,20 +34,23 @@
 #include "DataFormatsParameters/GRPObject.h"
 #include "DataFormatsTPC/TPCSectorHeader.h"
 #include "TPCBase/CDBInterface.h"
+#include "TPCBase/ParameterGEM.h"
 #include "DataFormatsTPC/Digit.h"
 #include "TPCSimulation/Digitizer.h"
 #include "TPCSimulation/Detector.h"
+#include "TPCSpaceCharge/SpaceCharge.h"
 #include "DetectorsBase/BaseDPLDigitizer.h"
 #include "DetectorsBase/Detector.h"
+#include "TPCCalibration/VDriftHelper.h"
 #include "CommonDataFormat/RangeReference.h"
 #include "SimConfig/DigiParams.h"
 #include <filesystem>
-#include "TH3.h"
+#include "Framework/CCDBParamSpec.h"
 
 using namespace o2::framework;
 using SubSpecificationType = o2::framework::DataAllocator::SubSpecificationType;
 using DigiGroupRef = o2::dataformats::RangeReference<int, int>;
-using SC = o2::tpc::SpaceCharge<double>;
+using SC = o2::tpc::SpaceCharge<float>;
 
 namespace o2
 {
@@ -106,70 +109,29 @@ using namespace o2::base;
 class TPCDPLDigitizerTask : public BaseDPLDigitizer
 {
  public:
-  TPCDPLDigitizerTask(bool internalwriter) : mInternalWriter(internalwriter), BaseDPLDigitizer(InitServices::FIELD | InitServices::GEOM)
+  TPCDPLDigitizerTask(bool internalwriter, int distortionType) : mInternalWriter(internalwriter), BaseDPLDigitizer(InitServices::FIELD | InitServices::GEOM), mDistortionType(distortionType)
   {
   }
 
   void initDigitizerTask(framework::InitContext& ic) override
   {
-    LOG(INFO) << "Initializing TPC digitization";
+    LOG(info) << "Initializing TPC digitization";
 
     mLaneId = ic.services().get<const o2::framework::DeviceSpec>().rank;
 
     mWithMCTruth = o2::conf::DigiParams::Instance().mctruth;
-    auto useDistortions = ic.options().get<int>("distortionType");
     auto triggeredMode = ic.options().get<bool>("TPCtriggered");
+    mRecalcDistortions = !(ic.options().get<bool>("do-not-recalculate-distortions"));
+    const int nthreadsDist = ic.options().get<int>("n-threads-distortions");
+    SC::setNThreads(nthreadsDist);
+    mUseCalibrationsFromCCDB = ic.options().get<bool>("TPCuseCCDB");
+    mMeanLumiDistortions = ic.options().get<float>("meanLumiDistortions");
+    mMeanLumiDistortionsDerivative = ic.options().get<float>("meanLumiDistortionsDerivative");
 
-    if (useDistortions > 0) {
-      if (useDistortions == 1) {
-        LOG(INFO) << "Using realistic space-charge distortions.";
-      } else {
-        LOG(INFO) << "Using constant space-charge distortions.";
-      }
-      auto readSpaceChargeString = ic.options().get<std::string>("readSpaceCharge");
-      std::vector<std::string> readSpaceCharge;
-      std::stringstream ssSpaceCharge(readSpaceChargeString);
-      while (ssSpaceCharge.good()) {
-        std::string substr;
-        getline(ssSpaceCharge, substr, ',');
-        readSpaceCharge.push_back(substr);
-      }
-      if (readSpaceCharge[0].size() != 0) { // use pre-calculated space-charge object
-        if (std::filesystem::exists(readSpaceCharge[0])) {
-          TFile fileSC(readSpaceCharge[0].data(), "READ");
-          mDigitizer.setUseSCDistortions(fileSC);
-        } else {
-          LOG(ERROR) << "Space-charge object or file not found!";
-        }
-      } else { // create new space-charge object either with empty TPC or an initial space-charge density provided by histogram
-        SC::SCDistortionType distortionType = useDistortions == 2 ? SC::SCDistortionType::SCDistortionsConstant : SC::SCDistortionType::SCDistortionsRealistic;
-        auto inputHistoString = ic.options().get<std::string>("initialSpaceChargeDensity");
-        std::vector<std::string> inputHisto;
-        std::stringstream ssHisto(inputHistoString);
-        while (ssHisto.good()) {
-          std::string substr;
-          getline(ssHisto, substr, ',');
-          inputHisto.push_back(substr);
-        }
-        std::unique_ptr<TH3> hisSCDensity;
-        if (std::filesystem::exists(inputHisto[0])) {
-          auto fileSCInput = std::unique_ptr<TFile>(TFile::Open(inputHisto[0].data()));
-          if (fileSCInput->FindKey(inputHisto[1].data())) {
-            hisSCDensity.reset((TH3*)fileSCInput->Get(inputHisto[1].data()));
-            hisSCDensity->SetDirectory(nullptr);
-          }
-        }
-        if (hisSCDensity.get() != nullptr) {
-          LOG(INFO) << "TPC: Providing initial space-charge density histogram: " << hisSCDensity->GetName();
-          mDigitizer.setUseSCDistortions(distortionType, hisSCDensity.get());
-        } else {
-          if (distortionType == SC::SCDistortionType::SCDistortionsConstant) {
-            LOG(ERROR) << "Input space-charge density histogram or file not found!";
-          }
-        }
-      }
-    }
+    LOG(info) << "TPC calibrations from CCDB: " << mUseCalibrationsFromCCDB;
+
     mDigitizer.setContinuousReadout(!triggeredMode);
+    mDigitizer.setDistortionScaleType(mDistortionType);
 
     // we send the GRP data once if the corresponding output channel is available
     // and set the flag to false after
@@ -227,20 +189,81 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
     }
   }
 
+  void finaliseCCDB(framework::ConcreteDataMatcher& matcher, void* obj)
+  {
+    if (mTPCVDriftHelper.accountCCDBInputs(matcher, obj)) {
+      return;
+    }
+    if (matcher == ConcreteDataMatcher(o2::header::gDataOriginTPC, "TPCDIST", 0)) {
+      LOGP(info, "Updating distortion map");
+      mDigitizer.setUseSCDistortions(static_cast<SC*>(obj));
+      if (mMeanLumiDistortions >= 0) {
+        mDigitizer.setMeanLumiDistortions(mMeanLumiDistortions);
+      }
+    }
+    if (matcher == ConcreteDataMatcher(o2::header::gDataOriginTPC, "TPCDISTDERIV", 0)) {
+      LOGP(info, "Updating reference distortion map");
+      mDigitizer.setSCDistortionsDerivative(static_cast<SC*>(obj));
+      if (mMeanLumiDistortionsDerivative >= 0) {
+        mDigitizer.setMeanLumiDistortionsDerivative(mMeanLumiDistortionsDerivative);
+      }
+    }
+    if (matcher == ConcreteDataMatcher(o2::header::gDataOriginTPC, "TPCGASPARAM", 0)) {
+      LOGP(info, "TPC gas param updated");
+      ParameterGas::Instance().printKeyValues(true, true);
+    }
+    if (matcher == ConcreteDataMatcher(o2::header::gDataOriginTPC, "TPCGEMPARAM", 0)) {
+      LOGP(info, "TPC GEM param updated");
+      ParameterGEM::Instance().printKeyValues(true, true);
+    }
+  }
+
   void run(framework::ProcessingContext& pc)
   {
-    LOG(INFO) << "Processing TPC digitization";
+    LOG(info) << "Processing TPC digitization";
 
     /// For the time being use the defaults for the CDB
     auto& cdb = o2::tpc::CDBInterface::instance();
-    cdb.setUseDefaults();
+    cdb.setUseDefaults(!mUseCalibrationsFromCCDB);
+    // whatever are global settings for CCDB usage, we have to extract the TPC vdrift from CCDB for anchored simulations
+    mTPCVDriftHelper.extractCCDBInputs(pc);
+    pc.inputs().get<ParameterGas*>("gasparam");
+    pc.inputs().get<ParameterGEM*>("gemparam");
+    if (mDistortionType) {
+      pc.inputs().get<SC*>("tpcdistortions");
+      if (mDistortionType == 2) {
+        pc.inputs().get<SC*>("tpcdistortionsderiv");
+        mDigitizer.setLumiScaleFactor();
+        if (mRecalcDistortions) {
+          mDigitizer.recalculateDistortions();
+        }
+      }
+    }
+
+    if (mTPCVDriftHelper.isUpdated()) {
+      const auto& vd = mTPCVDriftHelper.getVDriftObject();
+      LOGP(info, "Updating TPC fast transform map with new VDrift factor of {} wrt reference {} and DriftTimeOffset correction {} wrt {} from source {}",
+           vd.corrFact, vd.refVDrift, vd.timeOffsetCorr, vd.refTimeOffset, mTPCVDriftHelper.getSourceName());
+      mDigitizer.setVDrift(vd.getVDrift());
+      mDigitizer.setTDriftOffset(vd.getTimeOffset());
+      mTPCVDriftHelper.acknowledgeUpdate();
+    }
+
+    if (std::filesystem::exists("ThresholdMap.root")) {
+      LOG(info) << "TPC: Using zero suppression map from 'ThresholdMap.root'";
+      cdb.setThresholdMapFromFile("ThresholdMap.root");
+    }
+
     if (std::filesystem::exists("GainMap.root")) {
-      LOG(INFO) << "TPC: Using gain map from 'GainMap.root'";
+      LOG(info) << "TPC: Using gain map from 'GainMap.root'";
       cdb.setGainMapFromFile("GainMap.root");
     }
 
     for (auto it = pc.inputs().begin(), end = pc.inputs().end(); it != end; ++it) {
       for (auto const& inputref : it) {
+        if (inputref.spec->lifetime == o2::framework::Lifetime::Condition) { // process does not need conditions
+          continue;
+        }
         process(pc, inputref);
         if (mInternalWriter) {
           mInternalROOTFlushTTree->SetEntries(mFlushCounter);
@@ -250,7 +273,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
           delete mInternalROOTFlushFile;
           mInternalROOTFlushFile = nullptr;
         }
-        //TODO: make generic reset method?
+        // TODO: make generic reset method?
         mFlushCounter = 0;
         mDigitCounter = 0;
       }
@@ -264,7 +287,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
     auto context = pc.inputs().get<o2::steer::DigitizationContext*>(inputref);
     context->initSimChains(o2::detectors::DetID::TPC, mSimChains);
     auto& irecords = context->getEventRecords();
-    LOG(INFO) << "TPC: Processing " << irecords.size() << " collisions";
+    LOG(info) << "TPC: Processing " << irecords.size() << " collisions";
     if (irecords.size() == 0) {
       return;
     }
@@ -274,22 +297,22 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
     // we publish the GRP data once if the output channel is there
     if (mWriteGRP && pc.outputs().isAllowed({"TPC", "ROMode", 0})) {
       auto roMode = isContinuous ? o2::parameters::GRPObject::CONTINUOUS : o2::parameters::GRPObject::PRESENT;
-      LOG(INFO) << "TPC: Sending ROMode= " << (mDigitizer.isContinuousReadout() ? "Continuous" : "Triggered")
+      LOG(info) << "TPC: Sending ROMode= " << (mDigitizer.isContinuousReadout() ? "Continuous" : "Triggered")
                 << " to GRPUpdater from channel " << dh->subSpecification;
-      pc.outputs().snapshot(Output{"TPC", "ROMode", 0, Lifetime::Timeframe}, roMode);
+      pc.outputs().snapshot(Output{"TPC", "ROMode", 0}, roMode);
     }
     mWriteGRP = false;
 
     // extract which sector to treat
     auto const* sectorHeader = DataRefUtils::getHeader<TPCSectorHeader*>(inputref);
     if (sectorHeader == nullptr) {
-      LOG(ERROR) << "TPC: Sector header missing, skipping processing";
+      LOG(error) << "TPC: Sector header missing, skipping processing";
       return;
     }
     auto sector = sectorHeader->sector();
     mSector = sector;
     mListOfSectors.push_back(sector);
-    LOG(INFO) << "TPC: Processing sector " << sector;
+    LOG(info) << "TPC: Processing sector " << sector;
     // the active sectors need to be propagated
     uint64_t activeSectors = 0;
     activeSectors = sectorHeader->activeSectors;
@@ -303,7 +326,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
         return ContainerType(nullptr);
       } else {
         // default case
-        return &pc.outputs().make<std::vector<o2::tpc::Digit>>(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(dh->subSpecification), Lifetime::Timeframe, header});
+        return &pc.outputs().make<std::vector<o2::tpc::Digit>>(Output{"TPC", "DIGITS", static_cast<SubSpecificationType>(dh->subSpecification), header});
       }
     };
     // lambda that snapshots the common mode vector to be sent out; prepares and attaches header with sector information
@@ -312,8 +335,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
       header.activeSectors = activeSectors;
       if (!mInternalWriter) {
         // note that snapshoting only works with non-const references (to be fixed?)
-        pc.outputs().snapshot(Output{"TPC", "COMMONMODE", static_cast<SubSpecificationType>(dh->subSpecification), Lifetime::Timeframe,
-                                     header},
+        pc.outputs().snapshot(Output{"TPC", "COMMONMODE", static_cast<SubSpecificationType>(dh->subSpecification), header},
                               const_cast<std::vector<o2::tpc::CommonMode>&>(commonMode));
       }
     };
@@ -323,7 +345,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
       header.activeSectors = activeSectors;
       if (mWithMCTruth) {
         if (!mInternalWriter) {
-          auto& sharedlabels = pc.outputs().make<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(Output{"TPC", "DIGITSMCTR", static_cast<SubSpecificationType>(dh->subSpecification), Lifetime::Timeframe, header});
+          auto& sharedlabels = pc.outputs().make<o2::dataformats::ConstMCTruthContainer<o2::MCCompLabel>>(Output{"TPC", "DIGITSMCTR", static_cast<SubSpecificationType>(dh->subSpecification), header});
           labels.flatten_to(sharedlabels);
         }
       }
@@ -333,9 +355,8 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
       o2::tpc::TPCSectorHeader header{sector};
       header.activeSectors = activeSectors;
       if (!mInternalWriter) {
-        LOG(INFO) << "TPC: Send TRIGGERS for sector " << sector << " channel " << dh->subSpecification << " | size " << events.size();
-        pc.outputs().snapshot(Output{"TPC", "DIGTRIGGERS", static_cast<SubSpecificationType>(dh->subSpecification), Lifetime::Timeframe,
-                                     header},
+        LOG(info) << "TPC: Send TRIGGERS for sector " << sector << " channel " << dh->subSpecification << " | size " << events.size();
+        pc.outputs().snapshot(Output{"TPC", "DIGTRIGGERS", static_cast<SubSpecificationType>(dh->subSpecification), header},
                               const_cast<std::vector<DigiGroupRef>&>(events));
       }
     };
@@ -370,7 +391,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
       mLabels.clear();
       mCommonMode.clear();
       mDigitizer.flush(mDigits, mLabels, mCommonMode, finalFlush);
-      LOG(INFO) << "TPC: Flushed " << mDigits.size() << " digits, " << mLabels.getNElements() << " labels and " << mCommonMode.size() << " common mode entries";
+      LOG(info) << "TPC: Flushed " << mDigits.size() << " digits, " << mLabels.getNElements() << " labels and " << mCommonMode.size() << " common mode entries";
 
       if (mInternalWriter) {
         // the natural place to write out this independent datachunk immediately ...
@@ -400,7 +421,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
     // (aka loop over all the interaction records)
     for (int collID = 0; collID < irecords.size(); ++collID) {
       const double eventTime = irecords[collID].getTimeNS() / 1000.f;
-      LOG(INFO) << "TPC: Event time " << eventTime << " us";
+      LOG(info) << "TPC: Event time " << eventTime << " us";
       mDigitizer.setEventTime(eventTime);
       if (!isContinuous) {
         mDigitizer.setStartTime(eventTime);
@@ -418,7 +439,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
         std::vector<o2::tpc::HitGroup> hitsRight;
         context->retrieveHits(mSimChains, getBranchNameLeft(sector).c_str(), part.sourceID, part.entryID, &hitsLeft);
         context->retrieveHits(mSimChains, getBranchNameRight(sector).c_str(), part.sourceID, part.entryID, &hitsRight);
-        LOG(DEBUG) << "TPC: Found " << hitsLeft.size() << " hit groups left and " << hitsRight.size() << " hit groups right in collision " << collID << " eventID " << part.entryID;
+        LOG(debug) << "TPC: Found " << hitsLeft.size() << " hit groups left and " << hitsRight.size() << " hit groups right in collision " << collID << " eventID " << part.entryID;
 
         mDigitizer.process(hitsLeft, eventID, sourceID);
         mDigitizer.process(hitsRight, eventID, sourceID);
@@ -433,7 +454,7 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
 
     // final flushing step; getting everything not yet written out
     if (isContinuous) {
-      LOG(INFO) << "TPC: Final flush";
+      LOG(info) << "TPC: Final flush";
       flushDigitsAndLabels(true);
       eventAccum.emplace_back(0, mDigitCounter); // all digits are grouped to 1 super-event pseudo-triggered mode
     }
@@ -447,11 +468,12 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
     }
 
     timer.Stop();
-    LOG(INFO) << "TPC: Digitization took " << timer.CpuTime() << "s";
+    LOG(info) << "TPC: Digitization took " << timer.CpuTime() << "s";
   }
 
  private:
   o2::tpc::Digitizer mDigitizer;
+  o2::tpc::VDriftHelper mTPCVDriftHelper{};
   std::vector<TChain*> mSimChains;
   std::vector<o2::tpc::Digit> mDigits;
   o2::dataformats::MCTruthContainer<o2::MCCompLabel> mLabels;
@@ -466,9 +488,14 @@ class TPCDPLDigitizerTask : public BaseDPLDigitizer
   bool mWriteGRP = false;
   bool mWithMCTruth = true;
   bool mInternalWriter = false;
+  bool mUseCalibrationsFromCCDB = false;
+  int mDistortionType = 0;
+  float mMeanLumiDistortions = -1;
+  float mMeanLumiDistortionsDerivative = -1;
+  bool mRecalcDistortions = false;
 };
 
-o2::framework::DataProcessorSpec getTPCDigitizerSpec(int channel, bool writeGRP, bool mctruth, bool internalwriter)
+o2::framework::DataProcessorSpec getTPCDigitizerSpec(int channel, bool writeGRP, bool mctruth, bool internalwriter, int distortionType)
 {
   // create the full data processor spec using
   //  a name identifier
@@ -490,32 +517,49 @@ o2::framework::DataProcessorSpec getTPCDigitizerSpec(int channel, bool writeGRP,
   }
   if (writeGRP) {
     outputs.emplace_back("TPC", "ROMode", 0, Lifetime::Timeframe);
-    LOG(DEBUG) << "TPC: Channel " << channel << " will supply ROMode";
+    LOG(debug) << "TPC: Channel " << channel << " will supply ROMode";
   }
 
+  std::vector<InputSpec> inputs{InputSpec{"collisioncontext", "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe}};
   return DataProcessorSpec{
     id.str().c_str(),
-    Inputs{InputSpec{"collisioncontext", "SIM", "COLLISIONCONTEXT", static_cast<SubSpecificationType>(channel), Lifetime::Timeframe}},
+    inputs,
     outputs,
-    AlgorithmSpec{adaptFromTask<TPCDPLDigitizerTask>(internalwriter)},
-    Options{{"distortionType", VariantType::Int, 0, {"Distortion type to be used. 0 = no distortions (default), 1 = realistic distortions (not implemented yet), 2 = constant distortions"}},
-            {"initialSpaceChargeDensity", VariantType::String, "", {"Path to root file containing TH3 with initial space-charge density and name of the TH3 (comma separated)"}},
-            {"readSpaceCharge", VariantType::String, "", {"Path to root file containing pre-calculated space-charge object and name of the object (comma separated)"}},
-            {"TPCtriggered", VariantType::Bool, false, {"Impose triggered RO mode (default: continuous)"}}}};
+    AlgorithmSpec{adaptFromTask<TPCDPLDigitizerTask>(internalwriter, distortionType)},
+    Options{
+      {"TPCtriggered", VariantType::Bool, false, {"Impose triggered RO mode (default: continuous)"}},
+      {"TPCuseCCDB", VariantType::Bool, false, {"true: load calibrations from CCDB; false: use random calibratoins"}},
+      {"meanLumiDistortions", VariantType::Float, -1.f, {"override lumi of distortion object if >=0"}},
+      {"meanLumiDistortionsDerivative", VariantType::Float, -1.f, {"override lumi of derivative distortion object if >=0"}},
+      {"do-not-recalculate-distortions", VariantType::Bool, false, {"Do not recalculate the distortions"}},
+      {"n-threads-distortions", VariantType::Int, 4, {"Number of threads used for the calculation of the distortions"}},
+    }};
 }
 
-o2::framework::WorkflowSpec getTPCDigitizerSpec(int nLanes, std::vector<int> const& sectors, bool mctruth, bool internalwriter)
+o2::framework::WorkflowSpec getTPCDigitizerSpec(int nLanes, std::vector<int> const& sectors, bool mctruth, bool internalwriter, int distortionType)
 {
   // channel parameter is deprecated in the TPCDigitizer processor, all descendants
   // are initialized not to publish GRP mode, but the channel will be added to the first
   // processor after the pipelines have been created. The processor will decide upon
   // the index in the ParallelContext whether to publish
-  WorkflowSpec pipelineTemplate{getTPCDigitizerSpec(0, false, mctruth, internalwriter)};
+  WorkflowSpec pipelineTemplate{getTPCDigitizerSpec(0, false, mctruth, internalwriter, distortionType)};
   // override the predefined name, index will be added by parallelPipeline method
   pipelineTemplate[0].name = "TPCDigitizer";
   WorkflowSpec pipelines = parallelPipeline(
     pipelineTemplate, nLanes, [size = sectors.size()]() { return size; }, [&sectors](size_t index) { return sectors[index]; });
   // add the channel for the GRP information to the first processor
+  for (auto& spec : pipelines) {
+    o2::tpc::VDriftHelper::requestCCDBInputs(spec.inputs); // add the same CCDB request to each pipeline
+    spec.inputs.emplace_back("gasparam", o2::header::gDataOriginTPC, "TPCGASPARAM", 0, Lifetime::Condition, ccdbParamSpec(o2::tpc::CDBTypeMap.at(o2::tpc::CDBType::ParGas)));
+    spec.inputs.emplace_back("gemparam", o2::header::gDataOriginTPC, "TPCGEMPARAM", 0, Lifetime::Condition, ccdbParamSpec(o2::tpc::CDBTypeMap.at(o2::tpc::CDBType::ParGEM)));
+    if (distortionType) {
+      spec.inputs.emplace_back("tpcdistortions", o2::header::gDataOriginTPC, "TPCDIST", 0, Lifetime::Condition, ccdbParamSpec(o2::tpc::CDBTypeMap.at(o2::tpc::CDBType::DistortionMapMC), {}, 1)); // time-dependent
+      // load derivative map in case scaling was requested
+      if (distortionType == 2) {
+        spec.inputs.emplace_back("tpcdistortionsderiv", o2::header::gDataOriginTPC, "TPCDISTDERIV", 0, Lifetime::Condition, ccdbParamSpec(o2::tpc::CDBTypeMap.at(o2::tpc::CDBType::DistortionMapDerivMC), {}, 1)); // time-dependent
+      }
+    }
+  }
   pipelines[0].outputs.emplace_back("TPC", "ROMode", 0, Lifetime::Timeframe);
   return pipelines;
 }

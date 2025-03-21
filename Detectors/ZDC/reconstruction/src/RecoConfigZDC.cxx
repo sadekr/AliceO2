@@ -14,12 +14,21 @@
 
 using namespace o2::zdc;
 
+void RecoConfigZDC::setBit(uint32_t ibit, bool val)
+{
+  if (ibit >= 0 && ibit < NTDCChannels) {
+    bitset[ibit] = val;
+  } else {
+    LOG(fatal) << __func__ << " channel " << ibit << " not in allowed range";
+  }
+}
+
 void RecoConfigZDC::setSearch(uint32_t ich, int val)
 {
   if (ich >= 0 && ich < NTDCChannels) {
     tdc_search[ich] = val;
   } else {
-    LOG(FATAL) << __func__ << " channel " << ich << " not in allowed range";
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
   }
 }
 
@@ -28,7 +37,7 @@ int RecoConfigZDC::getSearch(uint32_t ich) const
   if (ich >= 0 && ich < NTDCChannels) {
     return tdc_search[ich];
   } else {
-    LOG(FATAL) << __func__ << " channel " << ich << " not in allowed range";
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
     return -1;
   }
 }
@@ -42,27 +51,27 @@ void RecoConfigZDC::setIntegration(uint32_t ich, int beg, int end, int beg_ped, 
 
   if (ich >= 0 && ich < NChannels) {
     if (beg < sig_l || beg > sig_h) {
-      LOG(FATAL) << "Integration start = " << beg << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << sig_l << "-" << sig_h << "]";
+      LOG(fatal) << "Integration start = " << beg << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << sig_l << "-" << sig_h << "]";
       return;
     }
     if (end < sig_l || end > sig_h) {
-      LOG(FATAL) << "Integration end = " << beg << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << sig_l << "-" << sig_h << "]";
+      LOG(fatal) << "Integration end = " << beg << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << sig_l << "-" << sig_h << "]";
       return;
     }
     if (end < beg) {
-      LOG(FATAL) << "Inconsistent integration range for signal " << ich << " (" << ChannelNames[ich] << "): [" << beg << "-" << end << "]";
+      LOG(fatal) << "Inconsistent integration range for signal " << ich << " (" << ChannelNames[ich] << "): [" << beg << "-" << end << "]";
       return;
     }
     if (beg_ped < ped_l || beg_ped > ped_h) {
-      LOG(FATAL) << "Pedestal integration start = " << beg_ped << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << ped_l << "-" << ped_h << "]";
+      LOG(fatal) << "Pedestal integration start = " << beg_ped << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << ped_l << "-" << ped_h << "]";
       return;
     }
     if (end_ped < ped_l || end_ped > ped_h) {
-      LOG(FATAL) << "Pedestal integration end = " << end_ped << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << ped_l << "-" << ped_h << "]";
+      LOG(fatal) << "Pedestal integration end = " << end_ped << " for signal " << ich << " (" << ChannelNames[ich] << ") not in allowed range [" << ped_l << "-" << ped_h << "]";
       return;
     }
     if (end_ped < beg_ped) {
-      LOG(FATAL) << "Inconsistent integration range for pedestal " << ich << " (" << ChannelNames[ich] << "): [" << beg_ped << "-" << end_ped << "]";
+      LOG(fatal) << "Inconsistent integration range for pedestal " << ich << " (" << ChannelNames[ich] << "): [" << beg_ped << "-" << end_ped << "]";
       return;
     }
     beg_int[ich] = beg;
@@ -70,16 +79,35 @@ void RecoConfigZDC::setIntegration(uint32_t ich, int beg, int end, int beg_ped, 
     beg_ped_int[ich] = beg_ped;
     end_ped_int[ich] = end_ped;
   } else {
-    LOG(FATAL) << __func__ << " channel " << ich << " not in allowed range";
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
   }
 }
 
-void RecoConfigZDC::print()
+void RecoConfigZDC::setPedThreshold(int32_t ich, float high, float low)
 {
+  if (ich >= 0 && ich < NChannels) {
+    ped_thr_hi[ich] = high;
+    ped_thr_lo[ich] = low;
+  } else {
+    LOG(fatal) << __func__ << " channel " << ich << " not in allowed range";
+  }
+}
+
+void RecoConfigZDC::print() const
+{
+  LOGF(info, "RecoConfigZDC:%s%s%s%s%s%s%s",
+       (low_pass_filter ? " LowPassFilter" : ""),
+       (full_interpolation ? " FullInterpolation" : ""),
+       (extendedSearch ? " ExtendedSearch" : " NormalSearch"),
+       (corr_signal ? " CorrSignal" : ""),
+       (corr_background ? " CorrBackground" : ""),
+       (storeEvPileup ? " StoreEvPileup(EvE)" : " DontStoreEvPileup(EvE)"),
+       (triggerCondition == 0x1 ? " SINGLEtrigger" : (triggerCondition == 0x3 ? " DOUBLEtrigger" : (triggerCondition == 0x7 ? "TRIPLEtrigger" : "WRONGtrigger"))));
   for (int itdc = 0; itdc < NTDCChannels; itdc++) {
-    LOG(INFO) << itdc << " " << ChannelNames[TDCSignal[itdc]] << " search= " << tdc_search[itdc] << " = " << tdc_search[itdc] * FTDCVal << " ns";
+    LOG(info) << itdc << " " << ChannelNames[TDCSignal[itdc]] << " search= " << tdc_search[itdc] << " = " << tdc_search[itdc] * FTDCVal << " ns" << (bitset[itdc] ? " BITSET" : "");
   }
   for (Int_t ich = 0; ich < NChannels; ich++) {
-    LOG(INFO) << ChannelNames[ich] << " integration: signal=[" << beg_int[ich] << ":" << end_int[ich] << "] pedestal=[" << beg_ped_int[ich] << ":" << end_ped_int[ich] << "]";
+    LOG(info) << ChannelNames[ich] << " integration: signal=[" << beg_int[ich] << ":" << end_int[ich] << "] pedestal=[" << beg_ped_int[ich] << ":" << end_ped_int[ich]
+              << "] thresholds (" << ped_thr_hi[ich] << ", " << ped_thr_lo[ich] << ")";
   }
 }

@@ -5,7 +5,7 @@
 ## Full system test overview and quickstart guide
 
 The full system test consists of 2 parts (detailed below):
-* The time frame generation part, which runs the simulation, digitization, raw conversion, and other misc tasks.
+* The time frame generation part, which runs the simulation, embedding (if needed), digitization, raw conversion, and other misc tasks.
 * A DPL workflow, which can run the synchronous and the asynchronous reconstruction.
 
 The relevant scripts are `/prodtests/full_system_test.sh` and all scripts in `/prodtests/full-system-test`.
@@ -30,12 +30,17 @@ For a simulation of a full 128 orbit time frame, run
 ```
 NEvents=650 NEventsQED=30000 SHMSIZE=128000000000 TPCTRACKERSCRATCHMEMORY=30000000000 $O2_ROOT/prodtests/full_system_test.sh
 ```
+To simulate collisions with an embedded signal one can set 'D0_EMBEDDING=1' while also supplying a config file with the desired settings using 'FST_EMBEDDING_CONFIG'. For an example configuration see '/prodtests/full-system-test/pythia8.cfg' and to generate a specific configuration one can use '${O2DPG_ROOT}/MC/config/common/pythia8/utils/mkpy8cfg.py'. Additional examples can be found in '/run/SimExamples/'
+```
+DO_EMBEDDING=1 NEvents=5 NEventsQED=100 $O2_ROOT/prodtests/full_system_test.sh
+```
 
 ## Full system test time frame generation part
 
 The generation part (in `prodtests/full_system_test.sh` runs the following steps:
 * Simulate the QED collisions
 * Simulate the collisions
+* Simulate a signal to embed (optional)
 * Digitize all data, by default split between in 2 phases for TRD and non-TRD to reduce the memory footprint (configured via `$SPLITTRDDIGI`).
 * Run TRD trap simulation
 * Optionally create optimized dictionaries for ITS and MFT
@@ -57,13 +62,16 @@ The full system test workflow scripts consist of 3 shell scripts:
 
 One can either run the `dpl-workflow.sh` standalone (with `EXTINPUT=0`) or in parallel with one of the other scripts in separate shells (with `EXTINPUT=1`)
 
-In addition, there is the shared `setenv.sh` script which sets default configuration options, and there is the additional benchmark script:
+There are the additional benchmark script:
 * `start_tmux.sh` : This starts the full test in the configuration for the EPN with 2 NUMA domains, 512 GB RAM, 8 GPUs.
    It will run tmux with 3 sessions, running twice the `dpl-workflow.sh` and once one of the external input scripts (selected via `dd` and `rr` command line option).
    * Please note that `start_tmux.sh` overrides several of the environment options (see below) with the defaults for the EPN.
      The only relevant options for `start_tmux.sh` should be `TFDELAY` and `GPUMEMSIZE`.
    * Note also that while `dpl-workflow.sh` is a generic flexible script that can be used for actual operation, `start_tmux.sh` is a benchmark script to demonstrate how the full workflow is supposed to run on the EPN.
      It is meant for standalone tests and not to really start the actual processing on the EPN.
+* `shm-tool.sh` : This starts the SHM management tool in the configuration for start_tmux.sh. This can be used to mimic the fast memory allocation / gpu registration on the EPNs. (See te JIRA ticket for details)
+
+In any case, the shared `setenv.sh` script sets default configuration options.
 
 The `dpl-workflow.sh` can run both the synchronous and the asynchronous workflow, selected via the `SYNCMODE` option (see below), but note the following constraints.
 * By default, it will run the full chain (EPN + FLP parts) such that it can operate as a full standalone benchmark processing simulated raw data.
@@ -72,14 +80,13 @@ The `dpl-workflow.sh` can run both the synchronous and the asynchronous workflow
 All settings are configured via environment variables.
 The default settings (if no env variable is exported) are defined in `setenv.sh` which is sourced by all other scripts.
 (Please note that `start_tmux.sh` overrides a couple of options with EPN defaults).
-The environment variables are documented here: https://github.com/AliceO2Group/O2DataProcessing/blob/dev/common/README.md
+The environment variables are documented here: https://github.com/AliceO2Group/O2DPG/blob/master/DATA/common/README.md
 
 ## Files produced / required by the full system test
 
-The full system test can use the following input files:
-* Material budget: `matbud.root` with the material budget (used if available by the workflows to speed up material queries).
-* CTF ANS dictionaries: `ctf_dictionary.root` (if `CREATECTFDICT=0` is set).
-* ITS and MFT pattern dictionaries: `ITSdictionary.bin` and `MFTdictionary.bin` can be provided externally, or they can be produced automatically if `GENERATE_ITSMFT_DICTIONARIES=1` is set.
+The local files like geometry, material LUT etc. are not anymore needed for reconstruction and calibration workflows, but some QC workflows still need
+* geometry file o2sim_geometry-aligned.root
+* old-style (dummy) monolitic GRP file o2sim_grp.root
 
 The full system test produces the following output:
 * QED simulation output in the folder `qed`.
@@ -87,3 +94,8 @@ The full system test produces the following output:
 * Digits from `o2-sim-digitizer-workflow` and TRD tracklets.
 * Depending on the options mentioned above, `ctf_dictionary.root` and `ITSdictionary.bin` / `MFTdictionary.bin`.
 * RAW files in `raw/[DETECTOR_NAME]`
+
+By default the `dpl-workflow.sh` adds sub-workflows with the option `--disable-root-output`, preventing initialization of writer devices (therefore the intermediate reconstruction files are not produced).
+This behaviour can be overridden by passing `DISABLE_ROOT_OUTPUT=0` which will trigger storing all intermediate reconstruction files as well as the creation of the `o2_tfidinfo.root` file containing timing information of every processed TF (produced by `o2-tfidinfo-writer-workflow`).
+In case intermediate files of only a few workflows are needed, instead of enabling all writers via `DISABLE_ROOT_OUTPUT=0` one can enable those of particular devices only by passing `ENABLE_ROOT_OUTPUT_<workflow_name_with_underscores>=`.
+I.e. to enable storing the output of the `o2-its-reco-workflow` it is enough to prepend the script by `ENABLE_ROOT_OUTPUT_o2_its_reco_workflow=`. The `o2-tfidinfo-writer-workflow` will be invoked if there is at least one workflow with root outputs enabled.

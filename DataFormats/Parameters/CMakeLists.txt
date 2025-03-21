@@ -11,16 +11,27 @@
 
 o2_add_library(DataFormatsParameters
                SOURCES src/GRPObject.cxx
-                       src/LHCIFData.cxx
-               PUBLIC_LINK_LIBRARIES FairRoot::Base O2::CommonConstants
-                                     O2::CommonTypes
+                       src/GRPLHCIFData.cxx
+                       src/GRPECSObject.cxx
+                       src/GRPMagField.cxx
+                       src/AggregatedRunInfo.cxx
+                PUBLIC_LINK_LIBRARIES FairRoot::Base O2::CommonConstants
+                                     O2::CommonTypes O2::CCDB
                                      O2::DetectorsCommonDataFormats)
 
 o2_target_root_dictionary(DataFormatsParameters
-                          HEADERS include/DataFormatsParameters/GRPObject.h
-                                  include/DataFormatsParameters/LHCIFData.h
+                          HEADERS include/DataFormatsParameters/ECSDataAdapters.h
+                                  include/DataFormatsParameters/GRPObject.h
+                                  include/DataFormatsParameters/GRPLHCIFData.h
+                                  include/DataFormatsParameters/GRPECSObject.h
+                                  include/DataFormatsParameters/GRPMagField.h
+                                  include/DataFormatsParameters/AggregatedRunInfo.h
                           LINKDEF src/ParametersDataLinkDef.h)
 
+o2_add_executable(simgrp-tool
+                  COMPONENT_NAME grp
+                  SOURCES src/GRPTool.cxx
+                  PUBLIC_LINK_LIBRARIES Boost::program_options O2::DataFormatsParameters O2::SimConfig)
 
 # note we are explicitely giving the LINKDEF parameter as the LinkDef does not
 # follow the usual naming scheme [module]LinkDef.h

@@ -11,11 +11,18 @@
 
 o2_add_library(EventVisualisationBase
                SOURCES src/ConfigurationManager.cxx
+                       src/DataSource.cxx
                        src/DataSourceOnline.cxx
+                       src/DataSourceOffline.cxx
                        src/GeometryManager.cxx
                        src/FileWatcher.cxx
-               PUBLIC_LINK_LIBRARIES ROOT::Eve
-                                     O2::CCDB 
+                       src/DirectoryLoader.cxx
+                       src/EveConfParam.cxx
+        PUBLIC_LINK_LIBRARIES ROOT::Eve
+                                     O2::CCDB
                                      O2::EventVisualisationDataConverter
                                      O2::DetectorsBase
 )
+
+o2_target_root_dictionary(EventVisualisationBase
+                          HEADERS include/EventVisualisationBase/EveConfParam.h)

@@ -23,7 +23,8 @@
 #include "Framework/ConcreteDataMatcher.h"
 #include "Framework/RawDeviceService.h"
 #include "Framework/DeviceSpec.h"
-#include <fairmq/FairMQDevice.h>
+#include <fairmq/Device.h>
+#include <fairmq/Parts.h>
 
 #include "Headers/RAWDataHeader.h"
 #include "DataFormatsTOF/RawDataFormat.h"
@@ -50,10 +51,14 @@ class FileProxyTask : public Task
     if (mRDHversion == 6) {
       return readFLPv6();
     }
+    if (mRDHversion == 7) {
+      return readFLPv7();
+    }
     return 0;
   };
   long readFLPv4();
   long readFLPv6();
+  long readFLPv7();
   long readCONET();
 
   bool mStatus = false;
@@ -149,6 +154,37 @@ long FileProxyTask::readFLPv6()
   return payload;
 }
 
+long FileProxyTask::readFLPv7()
+{
+  /** read input file **/
+  char* pointer = mBuffer;
+  if (!mFile.read(pointer, 64)) {
+    std::cout << " --- Cannot read input file: " << strerror(errno) << std::endl;
+    mStatus = true;
+    return 0;
+  }
+  long payload = 64;
+  auto rdh = reinterpret_cast<o2::header::RAWDataHeaderV7*>(pointer);
+  while (!rdh->stop) {
+    if (!mFile.read(pointer + rdh->headerSize, rdh->offsetToNext - rdh->headerSize)) {
+      std::cout << " --- Cannot read input file: " << strerror(errno) << std::endl;
+      mStatus = true;
+      return 0;
+    }
+    payload += (rdh->offsetToNext - rdh->headerSize);
+    pointer += rdh->offsetToNext;
+    if (!mFile.read(pointer, 64)) {
+      std::cout << " --- Cannot read input file: " << strerror(errno) << std::endl;
+      mStatus = true;
+      return 0;
+    }
+    payload += 64;
+    rdh = reinterpret_cast<o2::header::RAWDataHeaderV7*>(pointer);
+  }
+
+  return payload;
+}
+
 long FileProxyTask::readCONET()
 {
 
@@ -220,7 +256,7 @@ void FileProxyTask::run(ProcessingContext& pc)
   std::memcpy(headerMessage->GetData(), headerStack.data(), headerStack.size());
 
   /** send **/
-  FairMQParts parts;
+  fair::mq::Parts parts;
   parts.AddPart(std::move(headerMessage));
   parts.AddPart(std::move(payloadMessage));
   device->Send(parts, fairMQChannel);
@@ -252,6 +288,6 @@ WorkflowSpec defineDataProcessing(ConfigContext const& cfgc)
                         {"atc-file-proxy-input-filename", VariantType::String, "", {"Input file name"}},
                         {"atc-file-proxy-start-from", VariantType::Int, 0, {"Start reading from byte"}},
                         {"atc-file-proxy-dump-data", VariantType::Bool, false, {"Dump data"}},
-                        {"atc-file-proxy-rdh-version", VariantType::Int, 4, {"RDH version"}},
+                        {"atc-file-proxy-rdh-version", VariantType::Int, 7, {"RDH version"}},
                         {"atc-file-proxy-conet-mode", VariantType::Bool, false, {"CONET mode"}}}}};
 }

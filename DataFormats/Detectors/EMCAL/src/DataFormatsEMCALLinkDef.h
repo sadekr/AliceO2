@@ -24,6 +24,11 @@
 #pragma link C++ class o2::emcal::MCLabel + ;
 #pragma link C++ class o2::emcal::ErrorTypeFEE + ;
 
+#pragma read \
+  sourceClass = "o2::emcal::Cell" targetClass = "o2::emcal::Cell" source = "UShort_t mCellWords[3]" version = "[1]" include = "iostream" target = "mEnergy,mTimestamp,mTowerID,mChannelType" code = "{const char * oldwords = reinterpret_cast<const char *>(onfile.mCellWords); mEnergy=o2::emcal::Cell::getEnergyFromPackedBitfieldV0(oldwords); mTimestamp=o2::emcal::Cell::getTimeFromPackedBitfieldV0(oldwords); mTowerID=o2::emcal::Cell::getTowerFromPackedBitfieldV0(oldwords); mChannelType=o2::emcal::Cell::getCellTypeFromPackedBitfieldV0(oldwords);}"
+#pragma read \
+  sourceClass = "o2::emcal::Cell" targetClass = "o2::emcal::Cell" source = "char mCellWords[6]" version = "[2]" include = "iostream" target = "mEnergy,mTimestamp,mTowerID,mChannelType" code = "{mEnergy=o2::emcal::Cell::getEnergyFromPackedBitfieldV0(onfile.mCellWords); mTimestamp=o2::emcal::Cell::getTimeFromPackedBitfieldV0(onfile.mCellWords); mTowerID=o2::emcal::Cell::getTowerFromPackedBitfieldV0(onfile.mCellWords); mChannelType=o2::emcal::Cell::getCellTypeFromPackedBitfieldV0(onfile.mCellWords);}"
+
 #pragma link C++ class std::vector < o2::emcal::TriggerRecord> + ;
 #pragma link C++ class std::vector < o2::emcal::Cell> + ;
 #pragma link C++ class std::vector < o2::emcal::Digit> + ;
@@ -37,8 +42,6 @@
 // For channel type in digits and cells
 #pragma link C++ enum o2::emcal::ChannelType_t + ;
 
-#pragma link C++ class std::vector < o2::emcal::Cluster> + ;
-
 #pragma link C++ class o2::emcal::EventData < o2::emcal::Cell> + ;
 #pragma link C++ class o2::emcal::EventData < o2::emcal::Digit> + ;
 #pragma link C++ class o2::emcal::EventHandler < o2::emcal::Cell> + ;
@@ -46,6 +49,6 @@
 
 #pragma link C++ struct o2::emcal::CTFHeader + ;
 #pragma link C++ struct o2::emcal::CTF + ;
-#pragma link C++ class o2::ctf::EncodedBlocks < o2::emcal::CTFHeader, 7, uint32_t> + ;
+#pragma link C++ class o2::ctf::EncodedBlocks < o2::emcal::CTFHeader, 8, uint32_t> + ;
 
 #endif

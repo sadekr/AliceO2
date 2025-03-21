@@ -27,7 +27,7 @@
 #include "SimConfig/SimConfig.h"
 #include "SimConfig/SimParams.h"
 #include <TRandom.h>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "TGeoManager.h"
 #include "TGeoVolume.h"
 #include "TGeoPgon.h"
@@ -42,7 +42,7 @@ void Cave::createMaterials()
   Int_t isxfld;
   Float_t sxmgmx;
   o2::base::Detector::initFieldTrackingParams(isxfld, sxmgmx);
-  LOG(INFO) << "Field in CAVE: " << isxfld;
+  LOG(info) << "Field in CAVE: " << isxfld;
   // AIR
   isxfld = 1;
   Float_t aAir[4] = {12.0107, 14.0067, 15.9994, 39.948};
@@ -67,13 +67,13 @@ void Cave::ConstructGeometry()
   Float_t dALIC[3];
 
   if (mHasZDC) {
-    LOG(INFO) << "Setting up CAVE to host ZDC";
+    LOG(info) << "Setting up CAVE to host ZDC";
     // dimensions taken from ALIROOT
     dALIC[0] = 2500;
     dALIC[1] = 2500;
     dALIC[2] = 15000;
   } else {
-    LOG(INFO) << "Setting up CAVE without ZDC";
+    LOG(info) << "Setting up CAVE without ZDC";
     dALIC[0] = 2000;
     dALIC[1] = 2000;
     dALIC[2] = 3000;
@@ -91,21 +91,24 @@ void Cave::ConstructGeometry()
   TGeoCompositeShape* shCaveTR = new TGeoCompositeShape("shCaveTR", "shCaveTR1-shCaveTR2:transTR2");
   TGeoVolume* voBarrel = new TGeoVolume("barrel", shCaveTR, kMedAir);
   cavevol->AddNode(voBarrel, 1, new TGeoTranslation(0., -30., 0.));
+  if (mHasRB24) { // should be not true only for alice 3
+    // mother volume for RB24 side (FDD, Compensator)
+    const Float_t kRB24CL = 2. * 597.9;
+    auto shCaveRB24 = new TGeoPcon(0., 360., 6);
+    Float_t z0 = kRB24CL / 2 + 714.6;
+    shCaveRB24->DefineSection(0, -kRB24CL / 2., 0., 105.);
+    shCaveRB24->DefineSection(1, -z0 + 1705., 0., 105.);
+    shCaveRB24->DefineSection(2, -z0 + 1705., 0., 14.5);
+    shCaveRB24->DefineSection(3, -z0 + 1880., 0., 14.5);
+    shCaveRB24->DefineSection(4, -z0 + 1880., 0., 40.0);
+    shCaveRB24->DefineSection(5, kRB24CL / 2, 0., 40.0);
 
-  // mother volune for RB24 side (FDD, Compensator)
-  const Float_t kRB24CL = 2. * 597.9;
-  auto shCaveRB24 = new TGeoPcon(0., 360., 6);
-  Float_t z0 = kRB24CL / 2 + 714.6;
-  shCaveRB24->DefineSection(0, -kRB24CL / 2., 0., 105.);
-  shCaveRB24->DefineSection(1, -z0 + 1705., 0., 105.);
-  shCaveRB24->DefineSection(2, -z0 + 1705., 0., 14.5);
-  shCaveRB24->DefineSection(3, -z0 + 1880., 0., 14.5);
-  shCaveRB24->DefineSection(4, -z0 + 1880., 0., 40.0);
-  shCaveRB24->DefineSection(5, kRB24CL / 2, 0., 40.0);
-
-  TGeoVolume* caveRB24 = new TGeoVolume("caveRB24", shCaveRB24, kMedAir);
-  caveRB24->SetVisibility(0);
-  cavevol->AddNode(caveRB24, 1, new TGeoTranslation(0., 0., z0));
+    TGeoVolume* caveRB24 = new TGeoVolume("caveRB24", shCaveRB24, kMedAir);
+    caveRB24->SetVisibility(0);
+    cavevol->AddNode(caveRB24, 1, new TGeoTranslation(0., 0., z0));
+  } else {
+    LOGP(info, "Setting up CAVE without RB24");
+  }
   //
 }
 
@@ -128,7 +131,7 @@ Cave& Cave::operator=(const Cave& rhs)
 FairModule* Cave::CloneModule() const { return new Cave(*this); }
 void Cave::FinishPrimary()
 {
-  LOG(DEBUG) << "CAVE: Primary finished";
+  LOG(debug) << "CAVE: Primary finished";
   for (auto& f : mFinishPrimaryHooks) {
     f();
   }
@@ -159,7 +162,7 @@ void Cave::BeginPrimary()
 
 bool Cave::ProcessHits(FairVolume*)
 {
-  LOG(FATAL) << "CAVE ProcessHits called; should never happen";
+  LOG(fatal) << "CAVE ProcessHits called; should never happen";
   return false;
 }
 

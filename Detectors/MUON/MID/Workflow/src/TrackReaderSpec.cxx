@@ -12,6 +12,7 @@
 #include "MIDWorkflow/TrackReaderSpec.h"
 
 #include "DPLUtils/RootTreeReader.h"
+#include "CommonUtils/StringUtils.h"
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/ControlService.h"
 #include "Framework/Lifetime.h"
@@ -19,7 +20,7 @@
 #include "Framework/Task.h"
 #include "SimulationDataFormat/MCCompLabel.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "DataFormatsMID/Cluster3D.h"
+#include "DataFormatsMID/Cluster.h"
 #include "DataFormatsMID/ROFRecord.h"
 #include "DataFormatsMID/Track.h"
 #include "DataFormatsMID/MCClusterLabel.h"
@@ -50,11 +51,10 @@ RootTreeReader::SpecialPublishHook logging{
       printBranch<Track>(data, "TRACKS");
     }
     if (name == "MIDTrackCluster") {
-      printBranch<Cluster3D>(data, "TRACKCLUSTERS");
+      printBranch<Cluster>(data, "TRACKCLUSTERS");
     }
     if (name == "MIDTrackLabels") {
-      auto tdata = reinterpret_cast<o2::dataformats::MCTruthContainer<MCCompLabel>*>(data);
-      LOGP(info, "MID {:d} {:s}", tdata->getNElements(), "TRACKLABELS");
+      printBranch<MCCompLabel>(data, "TRACKLABELS");
     }
     if (name == "MIDTrackClusterLabels") {
       auto tdata = reinterpret_cast<o2::dataformats::MCTruthContainer<MCClusterLabel>*>(data);
@@ -73,7 +73,7 @@ struct TrackReader {
       LOGP(warning, "Not reading MID Track Labels");
     }
     auto treeName = "midreco";
-    auto fileName = ic.options().get<std::string>("infile");
+    auto fileName = o2::utils::Str::concat_string(o2::utils::Str::rectifyDirectory(ic.options().get<std::string>("input-dir")), ic.options().get<std::string>("infile"));
     auto nofEntries{-1};
     if (mUseMC) {
       mTreeReader = std::make_unique<RootTreeReader>(
@@ -83,9 +83,9 @@ struct TrackReader {
         RootTreeReader::PublishingMode::Single,
         RootTreeReader::BranchDefinition<std::vector<Track>>{Output{"MID", "TRACKS", 0}, "MIDTrack"},
         RootTreeReader::BranchDefinition<std::vector<ROFRecord>>{Output{"MID", "TRACKROFS", 0}, "MIDTrackROF"},
-        RootTreeReader::BranchDefinition<std::vector<Cluster3D>>{Output{"MID", "TRACKCLUSTERS", 0}, "MIDTrackCluster"},
+        RootTreeReader::BranchDefinition<std::vector<Cluster>>{Output{"MID", "TRACKCLUSTERS", 0}, "MIDTrackCluster"},
         RootTreeReader::BranchDefinition<std::vector<ROFRecord>>{Output{"MID", "TRCLUSROFS", 0}, "MIDTrackClusterROF"},
-        RootTreeReader::BranchDefinition<o2::dataformats::MCTruthContainer<MCCompLabel>>{Output{"MID", "TRACKLABELS", 0}, "MIDTrackLabels"},
+        RootTreeReader::BranchDefinition<std::vector<MCCompLabel>>{Output{"MID", "TRACKLABELS", 0}, "MIDTrackLabels"},
         RootTreeReader::BranchDefinition<o2::dataformats::MCTruthContainer<MCClusterLabel>>{Output{"MID", "TRCLUSLABELS", 0}, "MIDTrackClusterLabels"},
         &logging);
     } else {
@@ -96,7 +96,7 @@ struct TrackReader {
         RootTreeReader::PublishingMode::Single,
         RootTreeReader::BranchDefinition<std::vector<Track>>{Output{"MID", "TRACKS", 0}, "MIDTrack"},
         RootTreeReader::BranchDefinition<std::vector<ROFRecord>>{Output{"MID", "TRACKROFS", 0}, "MIDTrackROF"},
-        RootTreeReader::BranchDefinition<std::vector<Cluster3D>>{Output{"MID", "TRACKCLUSTERS", 0}, "MIDTrackCluster"},
+        RootTreeReader::BranchDefinition<std::vector<Cluster>>{Output{"MID", "TRACKCLUSTERS", 0}, "MIDTrackCluster"},
         RootTreeReader::BranchDefinition<std::vector<ROFRecord>>{Output{"MID", "TRCLUSROFS", 0}, "MIDTrackClusterROF"},
         &logging);
     }
@@ -126,7 +126,7 @@ DataProcessorSpec getTrackReaderSpec(bool useMC, const char* specName)
 
   auto options = Options{
     {"infile", VariantType::String, "mid-reco.root", {"name of the input track file"}},
-  };
+    {"input-dir", VariantType::String, "none", {"Input directory"}}};
 
   return DataProcessorSpec{
     specName,

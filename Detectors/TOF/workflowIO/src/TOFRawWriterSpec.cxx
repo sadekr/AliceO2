@@ -23,6 +23,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include "DetectorsRaw/RDHUtils.h"
 
 using namespace o2::framework;
 
@@ -36,14 +37,15 @@ void RawWriter::init(InitContext& ic)
   mOutFileName = ic.options().get<std::string>("tof-raw-outfile");
   mOutDirName = ic.options().get<std::string>("tof-raw-outdir");
   mFileFor = ic.options().get<std::string>("file-for");
-  LOG(DEBUG) << "Raw output file: " << mOutFileName.c_str();
+  mOldFormat = ic.options().get<bool>("use-old-format");
+  LOG(debug) << "Raw output file: " << mOutFileName.c_str();
 
   // if needed, create output directory
   if (!std::filesystem::exists(mOutDirName)) {
     if (!std::filesystem::create_directories(mOutDirName)) {
-      LOG(FATAL) << "could not create output directory " << mOutDirName;
+      LOG(fatal) << "could not create output directory " << mOutDirName;
     } else {
-      LOG(DEBUG) << "created output directory " << mOutDirName;
+      LOG(debug) << "created output directory " << mOutDirName;
     }
   }
 }
@@ -53,13 +55,17 @@ void RawWriter::run(ProcessingContext& pc)
   auto digits = pc.inputs().get<std::vector<o2::tof::Digit>*>("tofdigits");
   auto row = pc.inputs().get<std::vector<o2::tof::ReadoutWindowData>*>("readoutwin");
   int nwindow = row->size();
-  LOG(DEBUG) << "Encoding " << nwindow << " TOF readout windows";
+  LOG(debug) << "Encoding " << nwindow << " TOF readout windows";
 
   int cache = 1024 * 1024; // 1 MB
   int verbosity = 0;
 
   o2::tof::raw::Encoder encoder;
   encoder.setVerbose(verbosity);
+
+  if (mOldFormat) {
+    encoder.setEncoderCRUZEROES();
+  }
 
   encoder.open(mOutFileName, mOutDirName, mFileFor);
   encoder.alloc(cache);
@@ -111,6 +117,8 @@ DataProcessorSpec getTOFRawWriterSpec()
   inputs.emplace_back("tofdigits", o2::header::gDataOriginTOF, "DIGITS", 0, Lifetime::Timeframe);
   inputs.emplace_back("readoutwin", o2::header::gDataOriginTOF, "READOUTWINDOW", 0, Lifetime::Timeframe);
 
+  int rdhDefaultVersion = o2::raw::RDHUtils::getVersion<o2::header::RAWDataHeader>();
+
   return DataProcessorSpec{
     "TOFRawWriter",
     inputs,
@@ -119,7 +127,8 @@ DataProcessorSpec getTOFRawWriterSpec()
     Options{
       {"tof-raw-outfile", VariantType::String, "tof.raw", {"Name of the output file"}},
       {"tof-raw-outdir", VariantType::String, ".", {"Name of the output dir"}},
-      {"file-for", VariantType::String, "cru", {"Single file per: all,cru,link"}}}};
+      {"file-for", VariantType::String, "cruendpoint", {"Single file per: all,cruendpoint,link"}},
+      {"use-old-format", VariantType::Bool, rdhDefaultVersion < 7, {"expecting zeroes in words 2 and 3 of the CRU payload"}}}};
 }
 } // namespace tof
 } // namespace o2

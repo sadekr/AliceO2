@@ -17,9 +17,9 @@
 #include "CommonConstants/LHCConstants.h"
 #include "CommonConstants/Triggers.h"
 #include "TString.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include "DataFormatsParameters/GRPObject.h"
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 #include "DetectorsRaw/RDHUtils.h"
 
 #include <array>
@@ -46,7 +46,7 @@ Encoder::Encoder()
 
 void Encoder::nextWord(int icrate)
 {
-  if (mNextWordStatus[icrate]) {
+  if (mOldFormat && mNextWordStatus[icrate]) {
     mUnion[icrate]++;
     mUnion[icrate]->data = 0;
     mUnion[icrate]++;
@@ -60,10 +60,18 @@ void Encoder::nextWord(int icrate)
 bool Encoder::open(const std::string& name, const std::string& path, const std::string& fileFor)
 {
   bool status = false;
+  static const uint8_t nopadding = 1;
+  static const uint8_t padding = 0;
+  uint8_t dataformat = mOldFormat ? padding : nopadding;
 
   // register links
   o2::header::RAWDataHeader rdh;
   mFileWriter.useRDHVersion(RDHUtils::getVersion<o2::header::RAWDataHeader>());
+  if (o2::raw::RDHUtils::getVersion(&rdh) > 6) {
+    mFileWriter.useRDHDataFormat(dataformat);
+  } else {
+    mFileWriter.useRDHDataFormat(padding);
+  }
   for (int crateid = 0; crateid < 72; crateid++) {
     // cru=0 --> FLP 1, ... defined in Geo
     // cru=1 --> FLP 1, ... defined in Geo
@@ -73,12 +81,16 @@ bool Encoder::open(const std::string& name, const std::string& path, const std::
     RDHUtils::setCRUID(rdh, Geo::getCRUid(crateid));
     RDHUtils::setLinkID(rdh, Geo::getCRUlink(crateid));
     RDHUtils::setEndPointID(rdh, Geo::getCRUendpoint(crateid));
+    const int served = 3;
+    const int received = 3;
+    uint32_t detField = (served << 24) + (received << 16);
+    RDHUtils::setDetectorField(rdh, detField);
     // currently storing each CRU in a separate file
     std::string outFileLink;
     if (mCrateOn[crateid]) {
       if (fileFor == "all") { // single file for all links
         outFileLink = o2::utils::Str::concat_string(path, "/TOF.raw");
-      } else if (fileFor == "cru") {
+      } else if (fileFor == "cruendpoint") {
         outFileLink = o2::utils::Str::concat_string(path, "/", "TOF_alio2-cr1-flp", std::to_string(Geo::getFLPid(crateid)), "_cru", std::to_string(Geo::getCRUid(crateid)), "_", std::to_string(Geo::getCRUendpoint(crateid)), ".raw");
       } else if (fileFor == "link") {
         outFileLink = o2::utils::Str::concat_string(path, "/", "TOF_alio2-cr1-flp", std::to_string(Geo::getFLPid(crateid)), "_cru", std::to_string(Geo::getCRUid(crateid)), "_", std::to_string(Geo::getCRUendpoint(crateid)), "_link", std::to_string(RDHUtils::getLinkID(rdh)), ".raw");
@@ -143,6 +155,9 @@ void Encoder::encodeTRM(const std::vector<Digit>& summary, Int_t icrate, Int_t i
 // return next TRM index (-1 if not in the same crate)
 // start to convert digiti from istart --> then update istart to the starting position of the new TRM
 {
+
+  static unsigned long bc_shift = uint64_t(o2::raw::HBFUtils::Instance().orbitFirstSampled) * Geo::BC_IN_ORBIT;
+
   if (mVerbose) {
     printf("Crate %d: encode TRM %d \n", icrate, itrm);
   }
@@ -180,11 +195,11 @@ void Encoder::encodeTRM(const std::vector<Digit>& summary, Int_t icrate, Int_t i
         break;
       }
 
-      int hittimeTDC = (summary[istart].getBC() - mEventCounter * Geo::BC_IN_WINDOW) * 1024 + summary[istart].getTDC(); // time in TDC bin within the TOF WINDOW
+      int hittimeTDC = (summary[istart].getBC() - bc_shift - mEventCounter * Geo::BC_IN_WINDOW) * 1024 + summary[istart].getTDC(); // time in TDC bin within the TOF WINDOW
 
       if (hittimeTDC < 0) {
-        LOG(ERROR) << "Negative hit encoded " << hittimeTDC << ", something went wrong in filling readout window";
-        printf("%llu %d %d\n", (unsigned long long)summary[istart].getBC(), mEventCounter * Geo::BC_IN_WINDOW, summary[istart].getTDC());
+        LOG(error) << "Negative hit encoded " << hittimeTDC << ", something went wrong in filling readout window";
+        printf("%llu %d %d\n", (unsigned long long)summary[istart].getBC() - bc_shift, mEventCounter * Geo::BC_IN_WINDOW, summary[istart].getTDC());
       }
       // leading time
       mUnion[icrate]->trmDataHit.time = hittimeTDC;
@@ -213,7 +228,9 @@ void Encoder::encodeTRM(const std::vector<Digit>& summary, Int_t icrate, Int_t i
 
   // set TRM data size
   int neventwords = getSize(trmheader, mUnion[icrate]) / 4 + 1;
-  neventwords -= neventwords / 4 * 2;
+  if (mOldFormat) {
+    neventwords -= neventwords / 4 * 2;
+  }
   trmheader->trmDataHeader.eventWords = neventwords;
 
   // TRM TRAILER
@@ -256,7 +273,7 @@ bool Encoder::encode(std::vector<std::vector<o2::tof::Digit>> digitWindow, int t
   auto start = std::chrono::high_resolution_clock::now();
 
   mEventCounter = tofwindow; // tof window index
-  mIR.orbit = mEventCounter / Geo::NWINDOW_IN_ORBIT;
+  mIR.orbit = mEventCounter / Geo::NWINDOW_IN_ORBIT + o2::raw::HBFUtils::Instance().getFirstSampledTFIR().orbit;
 
   for (int i = 0; i < 72; i++) {
     mNextWordStatus[i] = false;
@@ -344,18 +361,35 @@ bool Encoder::encode(std::vector<std::vector<o2::tof::Digit>> digitWindow, int t
       mUnion[i]->drmDataTrailer.mbz = 0;
       mUnion[i]->drmDataTrailer.dataId = 5;
       int neventwords = getSize(mDRMDataHeader[i], mUnion[i]) / 4 + 1;
-      neventwords -= neventwords / 4 * 2 + 6;
+      if (mOldFormat) {
+        neventwords -= neventwords / 4 * 2;
+      }
+      neventwords -= 6;
       mDRMDataHeader[i]->eventWords = neventwords;
       nextWord(i);
       mUnion[i]->data = 0x70000000;
       nextWord(i);
+
+      // check if the numer of paylod words  is divisible by 4 (16 bytes), otherwise fill with two words
+      int nbytes = getSize(mTOFDataHeader[i], mUnion[i]);
+      if (nbytes % 4) {
+        LOG(error) << "Nbytes not divisible by 4? Something went wrong with the word (32 bits) length";
+      } else if (nbytes % 8) {
+        LOG(error) << "Odd number of nwords in TOF payload, this should not happen";
+      } else if (nbytes % 16) {
+        //        LOG(info) << "Nwords not divisible by 4, let's fill with 2 more words";
+        mUnion[i]->data = 0x70000000;
+        nextWord(i);
+        mUnion[i]->data = 0x70000000;
+        nextWord(i);
+      }
 
       mTOFDataHeader[i]->bytePayload = getSize(mTOFDataHeader[i], mUnion[i]);
     }
 
     // check that all digits were used
     if (icurrentdigit < summary.size()) {
-      LOG(ERROR) << "Not all digits are been used : only " << icurrentdigit << " of " << summary.size();
+      LOG(error) << "Not all digits are been used : only " << icurrentdigit << " of " << summary.size();
     }
   }
 

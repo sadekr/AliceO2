@@ -13,18 +13,18 @@
 #include <string>
 #include "TFile.h"
 #include <iostream>
-#include "FV0Calibration/FV0ChannelTimeCalibrationObject.h"
+#include "DataFormatsFV0/FV0ChannelTimeCalibrationObject.h"
 #include "CCDB/CcdbApi.h"
 #endif
 
 // Macro retrieves only latest set of calibrations
-int readChannelTimeOffsetFV0CalibObjectFromCCDB(const std::string url = "http://o2-ccdb.internal/")
+int readChannelTimeOffsetFV0CalibObjectFromCCDB(const std::string url = "http://alice-ccdb.cern.ch/")
 {
   o2::ccdb::CcdbApi api;
   api.init(url);
   map<string, string> metadata;
   map<string, string> headers;
-  auto retrieved = api.retrieveFromTFileAny<o2::fv0::FV0ChannelTimeCalibrationObject>("FV0/Calibration/ChannelTimeOffset", metadata, -1, &headers);
+  auto retrieved = api.retrieveFromTFileAny<o2::fv0::FV0ChannelTimeCalibrationObject>("FV0/Calib/ChannelTimeOffset", metadata, -1, &headers);
 
   std::cout << "--- HEADERS ---" << std::endl;
   for (const auto& [key, value] : headers) {

@@ -14,20 +14,25 @@ o2_add_library(CommonUtils
                        src/RootChain.cxx src/CompStream.cxx src/ShmManager.cxx
                        src/ValueMonitor.cxx
                        src/StringUtils.cxx
-                       src/ConfigurableParamHelper.cxx src/ConfigurableParam.cxx src/RootSerializableKeyValueStore.cxx
+                       src/ConfigurableParamReaders.cxx src/ConfigurableParamHelper.cxx src/ConfigurableParam.cxx src/RootSerializableKeyValueStore.cxx
                        src/KeyValParam.cxx
                        src/FileSystemUtils.cxx
                        src/FIFO.cxx
                        src/FileFetcher.cxx
                        src/VerbosityConfig.cxx
+                       src/BoostHistogramUtils.cxx
+                       src/NameConf.cxx
+                       src/IRFrameSelector.cxx
+                       src/DebugStreamer.cxx
+                       src/DLLoaderBase.cxx
                PUBLIC_LINK_LIBRARIES ROOT::Hist ROOT::Tree Boost::iostreams O2::CommonDataFormat O2::Headers
-                                     FairLogger::FairLogger)
+                                     FairLogger::FairLogger O2::MathUtils TBB::tbb)
 
 o2_target_root_dictionary(CommonUtils
                           HEADERS include/CommonUtils/TreeStream.h
                                   include/CommonUtils/TreeStreamRedirector.h
                                   include/CommonUtils/RootChain.h
-                                  include/CommonUtils/BoostSerializer.h
+                                  include/CommonUtils/BoostHistogramUtils.h
                                   include/CommonUtils/ShmManager.h
                                   include/CommonUtils/RngHelper.h
                                   include/CommonUtils/StringUtils.h
@@ -35,23 +40,22 @@ o2_target_root_dictionary(CommonUtils
                                   include/CommonUtils/MemFileHelper.h
                                   include/CommonUtils/ConfigurableParam.h
                                   include/CommonUtils/ConfigurableParamHelper.h
+                                  include/CommonUtils/ConfigurableParamReaders.h
                                   include/CommonUtils/ConfigurationMacroHelper.h
                                   include/CommonUtils/RootSerializableKeyValueStore.h
                                   include/CommonUtils/KeyValParam.h
                                   include/CommonUtils/VerbosityConfig.h
-                                  include/CommonUtils/FileFetcher.h)
+                                  include/CommonUtils/FileFetcher.h
+                                  include/CommonUtils/DLLoaderBase.h
+                                  include/CommonUtils/NameConf.h
+                                  include/CommonUtils/IRFrameSelector.h
+                                  include/CommonUtils/DebugStreamer.h)
 
 o2_add_test(TreeStream
             COMPONENT_NAME CommonUtils
             LABELS utils
             SOURCES test/testTreeStream.cxx
             PUBLIC_LINK_LIBRARIES O2::CommonUtils O2::ReconstructionDataFormats)
-
-o2_add_test(BoostSerializer
-            COMPONENT_NAME CommonUtils
-            LABELS utils
-            SOURCES test/testBoostSerializer.cxx
-            PUBLIC_LINK_LIBRARIES O2::CommonUtils Boost::serialization)
 
 o2_add_test(CompStream
             COMPONENT_NAME CommonUtils
@@ -75,6 +79,12 @@ o2_add_test(MemFileHelper
             COMPONENT_NAME CommonUtils
             LABELS utils
             SOURCES test/testMemFileHelper.cxx
+            PUBLIC_LINK_LIBRARIES O2::CommonUtils)
+
+o2_add_test(EnumFlags
+            COMPONENT_NAME CommonUtils
+            LABELS utils
+            SOURCES test/testEnumFlags.cxx
             PUBLIC_LINK_LIBRARIES O2::CommonUtils)
 
 o2_add_executable(treemergertool

@@ -18,6 +18,9 @@
 /// \author Piotr Konopka, piotr.jan.konopka@cern.ch
 
 #include <string>
+#include <vector>
+#include <variant>
+#include "Framework/DataProcessorLabel.h"
 
 namespace o2::mergers
 {
@@ -38,33 +41,64 @@ enum class MergedObjectTimespan {
   // when InputObjectsTimespan::FullHistory is set.
   LastDifference,
   // Generalisation of the two above. Resets all objects in Mergers after n cycles (0 - infinite).
-  // The the above will be removed once we switch to NCycles in QC.
+  // The above will be removed once we switch to NCycles in QC.
   NCycles
 };
 
+enum class PublishMovingWindow {
+  // Publishes an object containing data points from the last cycle if it has one.
+  Yes,
+  No
+};
+
 enum class PublicationDecision {
-  EachNSeconds,       // Merged object is published each N seconds.
+  EachNSeconds,  // Merged object is published each N seconds. This can evolve over time, thus we expect pairs specifying N:duration1, M:duration2...
+  EachNArrivals, // Merged object is published whenever we receive N new input objects.
 };
 
 enum class TopologySize {
-  NumberOfLayers, // User specifies the number of layers in topology.
-  ReductionFactor // User specifies how many sources should be handled by one merger (by maximum).
+  NumberOfLayers,  // User specifies the number of layers in topology.
+  ReductionFactor, // User specifies how many sources should be handled by one merger (by maximum).
+  MergersPerLayer  // User specifies how many Mergers should be spawned in each layer.
 };
 
+enum class ParallelismType {
+  SplitInputs, // Splits the provided vector of InputSpecs evenly among Mergers.
+  RoundRobin   // Mergers receive their input messages in round robin order. Useful when there is one InputSpec with a wildcard.
+};
+
+// fixme: this way of configuring mergers should be refactored, it does not make sense that we share `param`s across for different enum values.
 template <typename V, typename P = double>
 struct ConfigEntry {
   V value;
   P param = P();
 };
 
+/**
+ * This class just serves the purpose of allowing for both the old and the new way of specifying the
+ * cycles duration.
+ */
+class PublicationDecisionParameter
+{
+ public:
+  PublicationDecisionParameter(size_t param) : decision({{param, 1}}) {}
+  PublicationDecisionParameter(const std::vector<std::pair<size_t, size_t>>& decision) : decision(decision) {}
+
+  std::vector<std::pair<size_t /* cycle duration seconds */, size_t /* validity seconds */>> decision;
+};
+
+// todo rework configuration in a way that user cannot create an invalid configuration
 // \brief MergerAlgorithm configuration structure. Default configuration should work in most cases, out of the box.
 struct MergerConfig {
   ConfigEntry<InputObjectsTimespan> inputObjectTimespan = {InputObjectsTimespan::FullHistory};
   ConfigEntry<MergedObjectTimespan, int> mergedObjectTimespan = {MergedObjectTimespan::FullHistory};
-  ConfigEntry<PublicationDecision> publicationDecision = {PublicationDecision::EachNSeconds, 10};
-  ConfigEntry<TopologySize, int> topologySize = {TopologySize::NumberOfLayers, 1};
+  ConfigEntry<PublicationDecision, PublicationDecisionParameter> publicationDecision = {PublicationDecision::EachNSeconds, {10}};
+  ConfigEntry<TopologySize, std::variant<int, std::vector<size_t>>> topologySize = {TopologySize::NumberOfLayers, 1};
+  ConfigEntry<PublishMovingWindow> publishMovingWindow = {PublishMovingWindow::No};
   std::string monitoringUrl = "infologger:///debug?qc";
-  std::string detectorName;
+  std::string detectorName = "TST";
+  ConfigEntry<ParallelismType> parallelismType = {ParallelismType::SplitInputs};
+  std::vector<o2::framework::DataProcessorLabel> labels;
 };
 
 } // namespace o2::mergers

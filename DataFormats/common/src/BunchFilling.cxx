@@ -55,11 +55,23 @@ int BunchFilling::getLastFilledBC(int dir) const
 }
 
 //_________________________________________________
+std::vector<int> BunchFilling::getFilledBCs(int dir) const
+{
+  std::vector<int> vb;
+  for (int bc = 0; bc < o2::constants::lhc::LHCMaxBunches; bc++) {
+    if (testBC(bc, dir)) {
+      vb.push_back(bc);
+    }
+  }
+  return vb;
+}
+
+//_________________________________________________
 void BunchFilling::setBC(int bcID, bool active, int dir)
 {
   // add interacting BC slot
   if (bcID >= o2::constants::lhc::LHCMaxBunches) {
-    LOG(FATAL) << "BCid is limited to " << 0 << '-' << o2::constants::lhc::LHCMaxBunches - 1;
+    LOG(fatal) << "BCid is limited to " << 0 << '-' << o2::constants::lhc::LHCMaxBunches - 1;
   }
   if (dir < 0) {
     mPattern.set(bcID, active);
@@ -111,7 +123,7 @@ void BunchFilling::setBCFilling(const std::string& patt, int dir)
 }
 
 //_________________________________________________
-void BunchFilling::print(int dir, int bcPerLine) const
+void BunchFilling::print(int dir, bool filledOnly, int bcPerLine) const
 {
   const std::string names[3] = {"Interacting", "Beam-A", "Beam-C"};
   for (int id = -1; id < 2; id++) {
@@ -119,7 +131,14 @@ void BunchFilling::print(int dir, int bcPerLine) const
       printf("%s bunches\n", names[id + 1].c_str());
       bool endlOK = false;
       for (int i = 0; i < o2::constants::lhc::LHCMaxBunches; i++) {
-        printf("%c", testBC(i, id) ? '+' : '-');
+        bool on = testBC(i, id);
+        if (!filledOnly) {
+          printf("%c", on ? '+' : '-');
+        } else if (on) {
+          printf("%4d ", i);
+        } else {
+          continue;
+        }
         if (((i + 1) % bcPerLine) == 0) {
           printf("\n");
           endlOK = true;
@@ -140,13 +159,13 @@ BunchFilling* BunchFilling::loadFrom(const std::string& fileName, const std::str
   // load object from file
   TFile fl(fileName.data());
   if (fl.IsZombie()) {
-    LOG(ERROR) << "Failed to open " << fileName;
+    LOG(error) << "Failed to open " << fileName;
     return nullptr;
   }
   std::string nm = objName.empty() ? o2::BunchFilling::Class()->GetName() : objName;
   auto bf = reinterpret_cast<o2::BunchFilling*>(fl.GetObjectChecked(nm.c_str(), o2::BunchFilling::Class()));
   if (!bf) {
-    LOG(ERROR) << "Did not find object named " << nm;
+    LOG(error) << "Did not find object named " << nm;
     return nullptr;
   }
   return bf;
@@ -180,6 +199,42 @@ BunchFilling::Pattern BunchFilling::createPattern(const std::string& p)
     throw std::runtime_error(fmt::format("failed to extract BC pattern from input string ({})", p));
   }
   return patt;
+}
+
+//_________________________________________________
+std::string BunchFilling::buckets2PatternString(const std::vector<int>& buckets, int ibeam)
+{
+  // create bunches pattern string from filled buckets, in the format parsed by o2::BunchFilling::createPattern
+  Pattern patt;
+  std::string pattS;
+  for (int b : buckets) {
+    patt[o2::constants::lhc::LHCBunch2P2BC(b / 10, o2::constants::lhc::BeamDirection(ibeam))] = true;
+  }
+  int nh = 0;
+  for (int i = 0; i < o2::constants::lhc::LHCMaxBunches; i++) {
+    if (patt[i]) {
+      if (nh) {
+        pattS += fmt::format("{}L", nh);
+        nh = 0; // reset holes
+      }
+      pattS += "H";
+    } else {
+      nh++;
+    }
+  }
+  return pattS;
+}
+
+//_________________________________________________
+void BunchFilling::buckets2BeamPattern(const std::vector<int>& buckets, int ibeam)
+{
+  // create bunches pattern string from filled buckets, in the format parsed by o2::BunchFilling::createPattern
+  Pattern& patt = mBeamAC[ibeam];
+  for (int b : buckets) {
+    if (b) {
+      patt[o2::constants::lhc::LHCBunch2P2BC(b / 10, o2::constants::lhc::BeamDirection(ibeam))] = true;
+    }
+  }
 }
 
 //_________________________________________________

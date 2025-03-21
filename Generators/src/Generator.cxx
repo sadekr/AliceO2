@@ -15,8 +15,10 @@
 #include "Generators/Trigger.h"
 #include "Generators/PrimaryGenerator.h"
 #include "SimulationDataFormat/MCEventHeader.h"
+#include "SimulationDataFormat/ParticleStatus.h"
+#include "SimulationDataFormat/MCGenProperties.h"
 #include "FairPrimaryGenerator.h"
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include <cmath>
 #include "TClonesArray.h"
 #include "TParticle.h"
@@ -26,6 +28,8 @@ namespace o2
 namespace eventgen
 {
 
+std::atomic<int> Generator::InstanceCounter{0};
+unsigned int Generator::gTotalNEvents = 0;
 /*****************************************************************/
 /*****************************************************************/
 
@@ -33,6 +37,8 @@ Generator::Generator() : FairGenerator("ALICEo2", "ALICEo2 Generator"),
                          mBoost(0.)
 {
   /** default constructor **/
+  mThisInstanceID = Generator::InstanceCounter;
+  Generator::InstanceCounter++;
 }
 
 /*****************************************************************/
@@ -41,6 +47,8 @@ Generator::Generator(const Char_t* name, const Char_t* title) : FairGenerator(na
                                                                 mBoost(0.)
 {
   /** constructor **/
+  mThisInstanceID = Generator::InstanceCounter;
+  Generator::InstanceCounter++;
 }
 
 /*****************************************************************/
@@ -68,14 +76,27 @@ Bool_t
     /** clear particle vector **/
     mParticles.clear();
 
+    /** reset the sub-generator ID **/
+    mSubGeneratorId = -1;
+
     /** generate event **/
     if (!generateEvent()) {
+      LOG(error) << "ReadEvent failed in generateEvent";
       return kFALSE;
     }
 
     /** import particles **/
     if (!importParticles()) {
+      LOG(error) << "ReadEvent failed in importParticles";
       return kFALSE;
+    }
+
+    if (mSubGeneratorsIdToDesc.empty() && mSubGeneratorId > -1) {
+      LOG(fatal) << "ReadEvent failed because no SubGenerator description given";
+    }
+
+    if (!mSubGeneratorsIdToDesc.empty() && mSubGeneratorId < 0) {
+      LOG(fatal) << "ReadEvent failed because SubGenerator description given but sub-generator not set";
     }
 
     /** trigger event **/
@@ -89,6 +110,7 @@ Bool_t
 
   /** add tracks **/
   if (!addTracks(primGen)) {
+    LOG(error) << "ReadEvent failed in addTracks";
     return kFALSE;
   }
 
@@ -96,10 +118,11 @@ Bool_t
   auto header = primGen->GetEvent();
   auto o2header = dynamic_cast<o2::dataformats::MCEventHeader*>(header);
   if (!header) {
-    LOG(FATAL) << "MC event header is not a 'o2::dataformats::MCEventHeader' object";
+    LOG(fatal) << "MC event header is not a 'o2::dataformats::MCEventHeader' object";
     return kFALSE;
   }
   updateHeader(o2header);
+  updateSubGeneratorInformation(o2header);
 
   /** success **/
   return kTRUE;
@@ -114,7 +137,7 @@ Bool_t
 
   auto o2primGen = dynamic_cast<PrimaryGenerator*>(primGen);
   if (!o2primGen) {
-    LOG(FATAL) << "PrimaryGenerator is not a o2::eventgen::PrimaryGenerator";
+    LOG(fatal) << "PrimaryGenerator is not a o2::eventgen::PrimaryGenerator";
     return kFALSE;
   }
 
@@ -131,11 +154,12 @@ Bool_t
                         particle.GetMother(1),
                         particle.GetDaughter(0),
                         particle.GetDaughter(1),
-                        particle.GetStatusCode() == 1,
+                        particle.TestBit(ParticleStatus::kToBeDone),
                         particle.Energy() * mEnergyUnit,
                         particle.T() * mTimeUnit,
                         particle.GetWeight(),
-                        (TMCProcess)particle.GetUniqueID());
+                        (TMCProcess)particle.GetUniqueID(),
+                        particle.GetStatusCode()); // generator status information passed as status code field
   }
 
   /** success **/
@@ -201,6 +225,27 @@ Bool_t
 
   /** return **/
   return triggered;
+}
+
+/*****************************************************************/
+
+void Generator::addSubGenerator(int subGeneratorId, std::string const& subGeneratorDescription)
+{
+  if (subGeneratorId < 0) {
+    LOG(fatal) << "Sub-generator IDs must be >= 0, instead, passed value is " << subGeneratorId;
+  }
+  mSubGeneratorsIdToDesc.insert({subGeneratorId, subGeneratorDescription});
+}
+
+/*****************************************************************/
+
+void Generator::updateSubGeneratorInformation(o2::dataformats::MCEventHeader* header) const
+{
+  if (mSubGeneratorId < 0) {
+    return;
+  }
+  header->putInfo<int>(o2::mcgenid::GeneratorProperty::SUBGENERATORID, mSubGeneratorId);
+  header->putInfo<std::unordered_map<int, std::string>>(o2::mcgenid::GeneratorProperty::SUBGENERATORDESCRIPTIONMAP, mSubGeneratorsIdToDesc);
 }
 
 /*****************************************************************/

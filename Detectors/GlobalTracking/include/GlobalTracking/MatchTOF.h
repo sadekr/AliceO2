@@ -39,12 +39,18 @@
 #include "ReconstructionDataFormats/PID.h"
 #include "TPCFastTransform.h"
 #include "CommonDataFormat/InteractionRecord.h"
+#include "CorrectionMapsHelper.h"
+#include "GlobalTracking/MatchTOFParams.h"
 
 // from FIT
 #include "DataFormatsFT0/RecPoints.h"
 
 namespace o2
 {
+namespace tpc
+{
+class VDriftCorrFact;
+}
 
 namespace globaltracking
 {
@@ -84,7 +90,7 @@ class MatchTOF
 
  public:
   ///< perform matching for provided input
-  void run(const o2::globaltracking::RecoContainer& inp);
+  void run(const o2::globaltracking::RecoContainer& inp, unsigned long firstTForbit = 0);
 
   void setCosmics()
   {
@@ -103,6 +109,10 @@ class MatchTOF
   void setTimeTolerance(float val) { mTimeTolerance = val; }
   ///< get tolerance on track-TOF times comparison
   float getTimeTolerance() const { return mTimeTolerance; }
+  ///< set extra time tolerance on trackTRD-TOF times comparison
+  void setExtraTimeToleranceTRD(float val) { mExtraTimeToleranceTRD = val; }
+  ///< get extra tolerance on trackTRD-TOF times comparison
+  float getExtraTimeToleranceTRD() const { return mExtraTimeToleranceTRD; }
 
   ///< set space tolerance on track-TOF times comparison // this in the old AliRoot was the TOF matching window
   void setSpaceTolerance(float val) { mSpaceTolerance = val; }
@@ -137,53 +147,66 @@ class MatchTOF
   std::vector<o2::dataformats::MatchInfoTOF>& getMatchedTrackVector(trkType index) { return mMatchedTracks[index]; }
   std::vector<o2::dataformats::CalibInfoTOF>& getCalibVector() { return mCalibInfoTOF; }
 
-  std::vector<o2::MCCompLabel>& getMatchedTOFLabelsVector(trkType index) { return mOutTOFLabels[index]; } ///< get vector of TOF label of matched tracks
+  std::vector<o2::dataformats::MatchInfoTOFReco>& getMatchedTracksPair(int sec) { return mMatchedTracksPairsSec[sec]; }
 
-  ///< set input TPC tracks cluster indices
-  void setTPCTrackClusIdxInp(const gsl::span<const o2::tpc::TPCClRefElem> inp)
-  {
-    mTPCTrackClusIdx = inp;
-  }
+  std::vector<o2::MCCompLabel>& getMatchedTOFLabelsVector(trkType index) { return mOutTOFLabels[index]; } ///< get vector of TOF labels of matched tracks
 
-  ///< set input TPC cluster sharing map
-  void setTPCClustersSharingMap(const gsl::span<const unsigned char> inp)
-  {
-    mTPCRefitterShMap = inp;
-  }
-
-  ///< set input TPC clusters
-  void setTPCClustersInp(const o2::tpc::ClusterNativeAccess* inp)
-  {
-    mTPCClusterIdxStruct = inp;
-  }
+  void setTPCVDrift(const o2::tpc::VDriftCorrFact& v);
+  void setTPCCorrMaps(o2::gpu::CorrectionMapsHelper* maph);
 
   void setFIT(bool value = true) { mIsFIT = value; }
-  int findFITIndex(int bc);
+  static int findFITIndex(int bc, const gsl::span<const o2::ft0::RecPoints>& FITRecPoints, unsigned long firstOrbit);
 
   void checkRefitter();
   bool makeConstrainedTPCTrack(int matchedID, o2::dataformats::TrackTPCTOF& trConstr);
 
   ///< populate externally provided container by TOF-time-constrained TPC tracks
-  template <typename V>
-  void makeConstrainedTPCTracks(V& container)
+  template <typename MtcInfo, typename MCInfo, typename CTrack>
+  void makeConstrainedTPCTracks(MtcInfo& mtcCont, MCInfo& MCCont, CTrack& trcCont)
   {
+    auto nmatch = getMatchedTrackVector(o2::dataformats::MatchInfoTOFReco::TrackType::TPC).size(); // preliminary matches
+    mtcCont.reserve(nmatch);
+    trcCont.reserve(nmatch);
+    if (mMCTruthON) {
+      MCCont.reserve(nmatch);
+    }
     checkRefitter();
-    int nmatched = mMatchedTracks[trkType::TPC].size(), nconstrained = 0;
-    container.resize(nmatched);
-    for (unsigned i = 0; i < nmatched; i++) {
-      if (makeConstrainedTPCTrack(i, container[nconstrained])) {
+
+    auto& mclabs = getMatchedTOFLabelsVector(o2::dataformats::MatchInfoTOFReco::TrackType::TPC);
+    auto& info = getMatchedTrackVector(o2::dataformats::MatchInfoTOFReco::TrackType::TPC);
+    int nconstrained = 0;
+    for (unsigned i = 0; i < nmatch; i++) {
+      auto& ctr = trcCont.emplace_back();
+      if (makeConstrainedTPCTrack(i, ctr)) {
+        mtcCont.push_back(info[i]);
+        if (mMCTruthON) {
+          MCCont.push_back(mclabs[i]);
+        }
         nconstrained++;
+      } else {
+        trcCont.pop_back();
       }
     }
-    container.resize(nconstrained);
   }
+
+  void setTS(unsigned long creationTime) { mTimestamp = creationTime; }
+  unsigned long getTS() const { return mTimestamp; }
+
+  static void groupingMatch(const std::vector<o2::dataformats::MatchInfoTOFReco>& origin, std::vector<std::vector<o2::dataformats::MatchInfoTOFReco>>& grouped, std::vector<std::vector<int>>& firstEls, std::vector<std::vector<int>>& secondEls);
+  static void printGrouping(const std::vector<o2::dataformats::MatchInfoTOFReco>& origin, const std::vector<std::vector<o2::dataformats::MatchInfoTOFReco>>& grouped);
+
+  void storeMatchable(bool val = true) { mStoreMatchable = val; }
+
+  void setNlanes(int lanes) { mNlanes = lanes; }
 
  private:
   bool prepareFITData();
   int prepareInteractionTimes();
   bool prepareTPCData();
-  void addTPCSeed(const o2::tpc::TrackTPC& _tr, o2::dataformats::GlobalTrackID srcGID);
-  void addITSTPCSeed(const o2::dataformats::TrackTPCITS& _tr, o2::dataformats::GlobalTrackID srcGID);
+  void propagateTPCTracks(int sec);
+  void propagateConstrTracks(int sec);
+  void addTPCSeed(const o2::tpc::TrackTPC& _tr, o2::dataformats::GlobalTrackID srcGID, float time0, float terr);
+  void addITSTPCSeed(const o2::dataformats::TrackTPCITS& _tr, o2::dataformats::GlobalTrackID srcGID, float time0, float terr);
   void addTRDSeed(const o2::trd::TrackTRD& _tr, o2::dataformats::GlobalTrackID srcGID, float time0, float terr);
   void addConstrainedSeed(o2::track::TrackParCov& trc, o2::dataformats::GlobalTrackID srcGID, o2::track::TrackLTIntegral intLT0, timeEst timeMUS);
   //  void addTPCTRDSeed(const o2::track::TrackParCov& _tr, o2::dataformats::GlobalTrackID srcGID, int tpcID);
@@ -192,18 +215,29 @@ class MatchTOF
 
   void doMatching(int sec);
   void doMatchingForTPC(int sec);
-  void selectBestMatches();
-  void selectBestMatchesHP();
+  void selectBestMatches(int sec);
+  void BestMatches(std::vector<o2::dataformats::MatchInfoTOFReco>& matchedTracksPairs, std::vector<o2::dataformats::MatchInfoTOF>* matchedTracks, std::vector<int>* matchedTracksIndex, int* matchedClustersIndex, const gsl::span<const o2::ft0::RecPoints>& FITRecPoints, const std::vector<Cluster>& TOFClusWork, const std::vector<matchTrack>* TracksWork, std::vector<o2::dataformats::CalibInfoTOF>& CalibInfoTOF, unsigned long Timestamp, bool MCTruthON, const o2::dataformats::MCTruthContainer<o2::MCCompLabel>* TOFClusLabels, const std::vector<o2::MCCompLabel>* TracksLblWork, std::vector<o2::MCCompLabel>* OutTOFLabels, float calibMaxChi2);
+  void BestMatchesHP(std::vector<o2::dataformats::MatchInfoTOFReco>& matchedTracksPairs, std::vector<o2::dataformats::MatchInfoTOF>* matchedTracks, std::vector<int>* matchedTracksIndex, int* matchedClustersIndex, const gsl::span<const o2::ft0::RecPoints>& FITRecPoints, const std::vector<Cluster>& TOFClusWork, std::vector<o2::dataformats::CalibInfoTOF>& CalibInfoTOF, unsigned long Timestamp, bool MCTruthON, const o2::dataformats::MCTruthContainer<o2::MCCompLabel>* TOFClusLabels, const std::vector<o2::MCCompLabel>* TracksLblWork, std::vector<o2::MCCompLabel>* OutTOFLabels);
   bool propagateToRefX(o2::track::TrackParCov& trc, float xRef /*in cm*/, float stepInCm /*in cm*/, o2::track::TrackLTIntegral& intLT);
-  bool propagateToRefXWithoutCov(o2::track::TrackParCov& trc, float xRef /*in cm*/, float stepInCm /*in cm*/, float bz);
+  bool propagateToRefXWithoutCov(const o2::track::TrackParCov& trc, float xRef /*in cm*/, float stepInCm /*in cm*/, float bz);
+  bool propagateToRefXWithoutCov(const o2::track::TrackParCov& trc, float xRef /*in cm*/, float stepInCm /*in cm*/, float bz, float pos[3]);
+  void updateTL(o2::track::TrackLTIntegral& intLT, float deltal);
 
   void updateTimeDependentParams();
+
+  static bool mHasFillScheme;
+  static bool mFillScheme[o2::constants::lhc::LHCMaxBunches];
 
   //================================================================
 
   // Data members
   const o2::globaltracking::RecoContainer* mRecoCont = nullptr;
   o2::InteractionRecord mStartIR{0, 0}; ///< IR corresponding to the start of the TF
+
+  int mNlanes = 3; ///< for multi-threading in matching
+
+  // TOF matching params (work in progress)
+  const MatchTOFParams* mMatchParams = nullptr;
 
   // for derived class
   int mCurrTracksTreeEntry = 0; ///< current tracks tree entry loaded to memory
@@ -213,6 +247,11 @@ class MatchTOF
   bool mMCTruthON = false; ///< flag availability of MC truth
 
   ///========== Parameters to be set externally, e.g. from CCDB ====================
+  float mTPCVDriftRef = -1.; ///< TPC nominal drift speed in cm/microseconds
+  float mTPCVDriftCorrFact = 1.; ///< TPC nominal correction factort (wrt ref)
+  float mTPCVDrift = -1.;    ///< TPC drift speed in cm/microseconds
+  float mTPCDriftTimeOffset = 0; ///< drift time offset in mus
+
   float mBz = 0;          ///< nominal Bz
   float mMaxInvPt = 999.; ///< derived from nominal Bz
 
@@ -221,10 +260,11 @@ class MatchTOF
   float mTPCTBinMUSInv = 0.; ///< inverse TPC time bin duration in microseconds
   float mTPCBin2Z = 0.;      ///< conversion coeff from TPC time-bin to Z
 
-  bool mIsCosmics = false;    ///< switch on to reconstruct cosmics and match with TPC
-  float mTimeTolerance = 1e3; ///< tolerance in ns for track-TOF time bracket matching
-  float mSpaceTolerance = 10; ///< tolerance in cm for track-TOF time bracket matching
-  int mSigmaTimeCut = 30.;    ///< number of sigmas to cut on time when matching the track to the TOF cluster
+  bool mIsCosmics = false;              ///< switch on to reconstruct cosmics and match with TPC
+  float mTimeTolerance = 1e3;           ///< tolerance in ns for track-TOF time bracket matching
+  float mExtraTimeToleranceTRD = 500E3; ///< extra tolerance in ns for track-TOF time bracket matching
+  float mSpaceTolerance = 10;           ///< tolerance in cm for track-TOF time bracket matching
+  float mSigmaTimeCut = 3;              ///< number of sigmas to cut on time when matching the track to the TOF cluster
 
   bool mIsFIT = false;
   bool mIsITSTPCused = false;
@@ -232,6 +272,11 @@ class MatchTOF
   bool mIsTPCTRDused = false;
   bool mIsITSTPCTRDused = false;
   bool mSetHighPurity = false;
+  bool mStoreMatchable = false;
+
+  unsigned long mTimestamp = 0; ///< in ms
+
+  unsigned long mFirstTForbit = 0; ///< First orbit in TF (needed to align FT0 recpoints)
 
   // from ruben
   gsl::span<const o2::tpc::TrackTPC> mTPCTracksArray; ///< input TPC tracks span
@@ -244,8 +289,10 @@ class MatchTOF
   /// data needed for refit of time-constrained TPC tracks
   gsl::span<const o2::tpc::TPCClRefElem> mTPCTrackClusIdx;            ///< input TPC track cluster indices span
   gsl::span<const unsigned char> mTPCRefitterShMap;                   ///< externally set TPC clusters sharing map
+  gsl::span<const unsigned int> mTPCRefitterOccMap;                   ///< externally set TPC clusters occupancy map
   const o2::tpc::ClusterNativeAccess* mTPCClusterIdxStruct = nullptr; ///< struct holding the TPC cluster indices
-  std::unique_ptr<o2::gpu::TPCFastTransform> mTPCTransform;           ///< TPC cluster transformation
+
+  o2::gpu::CorrectionMapsHelper* mTPCCorrMapsHelper = nullptr;        ///< TPC cluster transformation
   std::unique_ptr<o2::gpu::GPUO2InterfaceRefit> mTPCRefitter;         ///< TPC refitter used for TPC tracks refit during the reconstruction
 
   const o2::dataformats::MCTruthContainer<o2::MCCompLabel>* mTOFClusLabels; ///< input TOF clusters MC labels (pointer to read from tree)
@@ -257,22 +304,24 @@ class MatchTOF
   /// <<<-----
 
   ///<working copy of the input tracks
-  std::vector<matchTrack> mTracksWork[trkType::SIZE]; ///<track params prepared for matching + time value
-  std::vector<o2::MCCompLabel> mTracksLblWork[trkType::SIZE];           ///<TPCITS track labels
-  std::vector<o2::track::TrackLTIntegral> mLTinfos[trkType::SIZE];      ///<expected times and others
-  std::vector<o2::dataformats::GlobalTrackID> mTrackGid[trkType::SIZE]; ///<expected times and others
+  std::vector<matchTrack> mTracksWork[o2::constants::math::NSectors][trkType::SIZE];                   ///< track params prepared for matching + time value
+  std::vector<o2::MCCompLabel> mTracksLblWork[o2::constants::math::NSectors][trkType::SIZE];           ///< TPCITS track labels
+  std::vector<o2::track::TrackLTIntegral> mLTinfos[o2::constants::math::NSectors][trkType::SIZE];      ///< expected times and others
+  std::vector<o2::dataformats::GlobalTrackID> mTrackGid[o2::constants::math::NSectors][trkType::SIZE]; ///< expected times and others
   ///< per sector indices of track entry in mTracksWork
   std::array<std::vector<int>, o2::constants::math::NSectors> mTracksSectIndexCache[trkType::SIZE];
+  std::array<std::vector<int>, o2::constants::math::NSectors> mTracksSeed[trkType::SIZE];
+  std::vector<float> mVZtpcOnly[o2::constants::math::NSectors];
 
-  std::vector<float> mExtraTPCFwdTime;                             ///<track extra params for TPC tracks: Fws Max time
-  std::vector<Cluster> mTOFClusWork;                               ///<track params prepared for matching
-  std::vector<int8_t> mSideTPC;                                    ///<track side for TPC tracks
+  std::vector<float> mExtraTPCFwdTime[o2::constants::math::NSectors]; ///< track extra params for TPC tracks: Fws Max time
+  std::vector<Cluster> mTOFClusWork;                                  ///< track params prepared for matching
+  std::vector<int8_t> mSideTPC[o2::constants::math::NSectors];        ///< track side for TPC tracks
 
   ///< per sector indices of TOF cluster entry in mTOFClusWork
   std::array<std::vector<int>, o2::constants::math::NSectors> mTOFClusSectIndexCache;
 
-  ///<array of track-TOFCluster pairs from the matching
-  std::vector<o2::dataformats::MatchInfoTOFReco> mMatchedTracksPairs;
+  ///< array of track-TOFCluster pairs from the matching
+  std::vector<o2::dataformats::MatchInfoTOFReco> mMatchedTracksPairsSec[o2::constants::math::NSectors];
 
   ///<array of TOFChannel calibration info
   std::vector<o2::dataformats::CalibInfoTOF> mCalibInfoTOF;
@@ -282,7 +331,7 @@ class MatchTOF
   std::vector<o2::dataformats::MatchInfoTOF> mMatchedTracks[trkType::SIZEALL]; // this is the output of the matching -> UNCONS, CONSTR
   std::vector<o2::MCCompLabel> mOutTOFLabels[trkType::SIZEALL];                ///< TOF label of matched tracks
 
-  std::vector<int> mMatchedTracksIndex[trkType::SIZE]; // vector of indexes of the tracks to be matched
+  std::vector<int> mMatchedTracksIndex[o2::constants::math::NSectors][trkType::SIZE]; // vector of indexes of the tracks to be matched
 
   int mNumOfClusters;                   // number of clusters to be matched
   int* mMatchedClustersIndex = nullptr; //[mNumOfClusters]
@@ -291,6 +340,9 @@ class MatchTOF
   UInt_t mDBGFlags = 0;
   std::string mDebugTreeFileName = "dbg_matchTOF.root"; ///< name for the debug tree file
 
+  std::array<float, 5> mCovDiagInner{}; ///< total cov.matrix extra diagonal error from TrackTuneParams
+  std::array<float, 5> mCovDiagOuter{}; ///< total cov.matrix extra diagonal error from TrackTuneParams
+
   ///----------- aux stuff --------------///
   static constexpr float MAXSNP = 0.85; // max snp of ITS or TPC track at xRef to be matched
 
@@ -298,7 +350,7 @@ class MatchTOF
   TStopwatch mTimerMatchITSTPC;
   TStopwatch mTimerMatchTPC;
   TStopwatch mTimerDBG;
-  ClassDefNV(MatchTOF, 3);
+  ClassDefNV(MatchTOF, 6);
 };
 } // namespace globaltracking
 } // namespace o2

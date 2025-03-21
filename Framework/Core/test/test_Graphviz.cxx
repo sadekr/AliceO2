@@ -8,9 +8,6 @@
 // In applying this license CERN does not waive the privileges and immunities
 // granted to it by virtue of its status as an Intergovernmental Organization
 // or submit itself to any jurisdiction.
-#define BOOST_TEST_MODULE Test Framework GraphvizHelpers
-#define BOOST_TEST_MAIN
-#define BOOST_TEST_DYN_LINK
 
 #include "Mocking.h"
 #include "../src/ComputingResourceHelpers.h"
@@ -21,7 +18,7 @@
 #include "Framework/WorkflowSpec.h"
 #include "Headers/DataHeader.h"
 
-#include <boost/test/unit_test.hpp>
+#include <catch_amalgamated.hpp>
 #include <sstream>
 
 using namespace o2::framework;
@@ -37,12 +34,14 @@ void lineByLineComparision(const std::string& as, const std::string& bs)
   while (a.good() && b.good()) {
     a.getline(bufferA, 1024);
     b.getline(bufferB, 1024);
-    BOOST_CHECK_EQUAL(std::string(bufferA), std::string(bufferB));
+    REQUIRE(std::string(bufferA) == std::string(bufferB));
   }
-  BOOST_CHECK(a.eof());
-  BOOST_CHECK(b.eof());
+  REQUIRE(a.eof());
+  REQUIRE(b.eof());
 }
 
+namespace
+{
 // This is how you can define your processing in a declarative way
 WorkflowSpec defineDataProcessing()
 {
@@ -59,6 +58,10 @@ WorkflowSpec defineDataProcessing()
                   InputSpec{"i2", "TST", "C1"}},
            Outputs{}}};
 }
+} // namespace
+
+namespace
+{
 
 WorkflowSpec defineDataProcessing2()
 {
@@ -78,31 +81,33 @@ WorkflowSpec defineDataProcessing2()
                  2),
   };
 }
+} // namespace
 
-BOOST_AUTO_TEST_CASE(TestGraphviz)
+TEST_CASE("TestGraphviz")
 {
   auto workflow = defineDataProcessing();
   std::ostringstream str;
   auto expectedResult = R"EXPECTED(digraph structs {
   node[shape=record]
-  struct [label="A"];
-  struct [label="B"];
-  struct [label="C"];
-  struct [label="D"];
+  "A" [label="A"];
+  "B" [label="B"];
+  "C" [label="C"];
+  "D" [label="D"];
 }
 )EXPECTED";
   GraphvizHelpers::dumpDataProcessorSpec2Graphviz(str, workflow);
   lineByLineComparision(str.str(), expectedResult);
   std::vector<DeviceSpec> devices;
   for (auto& device : devices) {
-    BOOST_CHECK(device.id != "");
+    REQUIRE(device.id != "");
   }
   auto configContext = makeEmptyConfigContext();
   auto channelPolicies = ChannelConfigurationPolicy::createDefaultPolicies(*configContext);
   auto completionPolicies = CompletionPolicy::createDefaultPolicies();
+  auto callbacksPolicies = CallbacksPolicy::createDefaultPolicies();
   std::vector<ComputingResource> resources = {ComputingResourceHelpers::getLocalhostResource()};
   SimpleResourceManager rm(resources);
-  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, devices, rm, "workflow-id");
+  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, callbacksPolicies, devices, rm, "workflow-id", *configContext);
   str.str("");
   GraphvizHelpers::dumpDeviceSpec2Graphviz(str, devices);
   lineByLineComparision(str.str(), R"EXPECTED(digraph structs {
@@ -119,29 +124,30 @@ BOOST_AUTO_TEST_CASE(TestGraphviz)
 )EXPECTED");
 }
 
-BOOST_AUTO_TEST_CASE(TestGraphvizWithPipeline)
+TEST_CASE("TestGraphvizWithPipeline")
 {
   auto workflow = defineDataProcessing2();
   std::ostringstream str;
   auto expectedResult = R"EXPECTED(digraph structs {
   node[shape=record]
-  struct [label="A"];
-  struct [label="B"];
-  struct [label="C"];
+  "A" [label="A"];
+  "B" [label="B"];
+  "C" [label="C"];
 }
 )EXPECTED";
   GraphvizHelpers::dumpDataProcessorSpec2Graphviz(str, workflow);
   lineByLineComparision(str.str(), expectedResult);
   std::vector<DeviceSpec> devices;
   for (auto& device : devices) {
-    BOOST_CHECK(device.id != "");
+    REQUIRE(device.id != "");
   }
   auto configContext = makeEmptyConfigContext();
   auto channelPolicies = ChannelConfigurationPolicy::createDefaultPolicies(*configContext);
   auto completionPolicies = CompletionPolicy::createDefaultPolicies();
+  auto callbacksPolicies = CallbacksPolicy::createDefaultPolicies();
   std::vector<ComputingResource> resources = {ComputingResourceHelpers::getLocalhostResource()};
   SimpleResourceManager rm(resources);
-  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, devices, rm, "workflow-id");
+  DeviceSpecHelpers::dataProcessorSpecs2DeviceSpecs(workflow, channelPolicies, completionPolicies, callbacksPolicies, devices, rm, "workflow-id", *configContext);
   str.str("");
   GraphvizHelpers::dumpDeviceSpec2Graphviz(str, devices);
   lineByLineComparision(str.str(), R"EXPECTED(digraph structs {

@@ -10,9 +10,31 @@
 # or submit itself to any jurisdiction.
 
 o2_add_library(EventVisualisationDataConverter
-               SOURCES src/VisualisationEvent.cxx 
+               SOURCES src/VisualisationEvent.cxx
                        src/VisualisationTrack.cxx
                        src/VisualisationCluster.cxx
+                       src/VisualisationCalo.cxx
+                       src/VisualisationEventSerializer.cxx
+                       src/VisualisationEventJSONSerializer.cxx
+                       src/VisualisationEventROOTSerializer.cxx
+                       src/VisualisationEventOpenGLSerializer.cxx
                PUBLIC_LINK_LIBRARIES RapidJSON::RapidJSON
                         O2::ReconstructionDataFormats
+                        O2::DataFormatsParameters
 )
+
+o2_add_executable(eve-convert
+        SOURCES src/converter.cxx
+                src/VisualisationEvent.cxx
+                src/VisualisationEventSerializer.cxx
+                src/VisualisationEventJSONSerializer.cxx
+                src/VisualisationEventROOTSerializer.cxx
+                src/VisualisationEventOpenGLSerializer.cxx
+                src/VisualisationTrack.cxx
+                src/VisualisationCluster.cxx
+                src/VisualisationCalo.cxx
+        PUBLIC_LINK_LIBRARIES
+                O2::EventVisualisationView
+                RapidJSON::RapidJSON
+                O2::ReconstructionDataFormats
+        )

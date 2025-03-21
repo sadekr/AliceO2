@@ -277,6 +277,12 @@ class RootTreeWriter
   /// default constructor forbidden
   RootTreeWriter() = delete;
 
+  /// a destructor making sure that the Writer is closed (if didn't happen before)
+  ~RootTreeWriter()
+  {
+    close();
+  }
+
   /// constructor
   /// @param treename  name of file
   /// @param treename  name of tree to write
@@ -303,8 +309,9 @@ class RootTreeWriter
   /// branch definition provided to the constructor.
   void init(const char* filename, const char* treename, const char* treetitle = nullptr)
   {
-    mFile = std::make_unique<TFile>(filename, "RECREATE");
+    mFile = std::make_unique<TFile>(filename, "RECREATE", "", 505);
     mTree = std::make_unique<TTree>(treename, treetitle != nullptr ? treetitle : treename);
+    mTree->SetDirectory(mFile.get());
     mTreeStructure->setup(mBranchSpecs, mTree.get());
   }
 
@@ -347,22 +354,25 @@ class RootTreeWriter
   /// the writer is invalid after calling close
   void close()
   {
-    mIsClosed = true;
-    if (!mFile) {
-      return;
+    if (!mIsClosed) {
+      mIsClosed = true;
+      if (!mFile) {
+        return;
+      }
+      if (mCustomClose) {
+        mCustomClose(mFile.get(), mTree.get());
+      } else {
+        // set the number of elements according to branch content and write tree
+        mTree->SetEntries();
+        // use TFile::Write rather then TTree::Write since latter writes to default gDirectory
+        mFile->Write();
+        mFile->Close();
+      }
+      // this is a feature of ROOT, the tree belongs to the file and will be deleted
+      // automatically
+      mTree.release();
+      mFile.reset(nullptr);
     }
-    if (mCustomClose) {
-      mCustomClose(mFile.get(), mTree.get());
-    } else {
-      // set the number of elements according to branch content and write tree
-      mTree->SetEntries();
-      mTree->Write();
-      mFile->Close();
-    }
-    // this is a feature of ROOT, the tree belongs to the file and will be deleted
-    // automatically
-    mTree.release();
-    mFile.reset(nullptr);
   }
 
   /// autosave the tree
@@ -372,7 +382,7 @@ class RootTreeWriter
       return;
     }
     mTree->SetEntries();
-    LOG(INFO) << "Autosaving " << mTree->GetName() << " at entry " << mTree->GetEntries();
+    LOG(info) << "Autosaving " << mTree->GetName() << " at entry " << mTree->GetEntries();
     mTree->AutoSave("overwrite");
   }
 
@@ -502,7 +512,7 @@ class RootTreeWriter
   // vectors of messageable types
   template <typename T>
   struct StructureElementTypeTrait<T, std::enable_if_t<has_messageable_value_type<T>::value &&
-                                                       is_specialization<T, std::vector>::value>> {
+                                                       is_specialization_v<T, std::vector>>> {
     using value_type = T;
     using store_type = value_type*;
     using specialization_id = MessageableVectorSpecialization;
@@ -520,7 +530,8 @@ class RootTreeWriter
 
   // types marked as ROOT serialized
   template <typename T>
-  struct StructureElementTypeTrait<T, std::enable_if_t<is_specialization<T, ROOTSerialized>::value == true>> {
+  struct StructureElementTypeTrait<T,
+                                   std::enable_if_t<is_specialization_v<T, ROOTSerialized> == true>> {
     using value_type = typename T::wrapped_type;
     using store_type = value_type*;
     using specialization_id = ROOTTypeSpecialization;
@@ -608,7 +619,7 @@ class RootTreeWriter
         if (specs[SpecIndex].branches.at(branchIdx) == nullptr) {
           throw std::runtime_error(std::to_string(SpecIndex) + ": can not create branch " + name + " for type " + typeid(value_type).name() + " - LinkDef entry missing?");
         }
-        LOG(INFO) << SpecIndex << ": branch  " << name << " set up";
+        LOG(info) << SpecIndex << ": branch  " << name << " set up";
         branchIdx++;
       }
     }

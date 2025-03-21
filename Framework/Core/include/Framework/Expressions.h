@@ -14,12 +14,10 @@
 #include "Framework/BasicOps.h"
 #include "Framework/CompilerBuiltins.h"
 #include "Framework/Pack.h"
-#include "Framework/CheckTypes.h"
 #include "Framework/Configurable.h"
 #include "Framework/Variant.h"
 #include "Framework/InitContext.h"
 #include "Framework/ConfigParamRegistry.h"
-#include "Framework/RootConfigParamHelpers.h"
 #include "Framework/RuntimeError.h"
 #include <arrow/type_fwd.h>
 #include <gandiva/gandiva_aliases.h>
@@ -36,25 +34,42 @@ namespace gandiva
 {
 class SelectionVector;
 class Filter;
+class Projector;
 } // namespace gandiva
 #endif
 #include <variant>
 #include <string>
 #include <memory>
-#include <typeinfo>
 #include <set>
+namespace gandiva
+{
+using Selection = std::shared_ptr<gandiva::SelectionVector>;
+using FilterPtr = std::shared_ptr<gandiva::Filter>;
+} // namespace gandiva
 
 using atype = arrow::Type;
 struct ExpressionInfo {
+  ExpressionInfo(int ai, size_t hash, std::set<uint32_t>&& hs, gandiva::SchemaPtr sc)
+    : argumentIndex(ai),
+      processHash(hash),
+      hashes(hs),
+      schema(sc)
+  {
+  }
   int argumentIndex;
   size_t processHash;
-  std::set<size_t> hashes;
+  std::set<uint32_t> hashes;
   gandiva::SchemaPtr schema;
-  gandiva::NodePtr tree;
+  gandiva::NodePtr tree = nullptr;
+  gandiva::FilterPtr filter = nullptr;
+  gandiva::Selection selection = nullptr;
+  bool resetSelection = false;
 };
 
 namespace o2::framework::expressions
 {
+const char* stringType(atype::type t);
+
 template <typename... T>
 struct LiteralStorage {
   using stored_type = std::variant<T...>;
@@ -66,33 +81,28 @@ using LiteralValue = LiteralStorage<int, bool, float, double, uint8_t, int64_t, 
 template <typename T>
 constexpr auto selectArrowType()
 {
-  if constexpr (std::is_same_v<T, int>) {
-    return atype::INT32;
-  } else if constexpr (std::is_same_v<T, bool>) {
-    return atype::BOOL;
-  } else if constexpr (std::is_same_v<T, float>) {
-    return atype::FLOAT;
-  } else if constexpr (std::is_same_v<T, double>) {
-    return atype::DOUBLE;
-  } else if constexpr (std::is_same_v<T, uint8_t>) {
-    return atype::UINT8;
-  } else if constexpr (std::is_same_v<T, int8_t>) {
-    return atype::INT8;
-  } else if constexpr (std::is_same_v<T, uint16_t>) {
-    return atype::UINT16;
-  } else if constexpr (std::is_same_v<T, int16_t>) {
-    return atype::INT16;
-  } else if constexpr (std::is_same_v<T, int64_t>) {
-    return atype::INT64;
-  } else if constexpr (std::is_same_v<T, uint32_t>) {
-    return atype::UINT32;
-  } else if constexpr (std::is_same_v<T, uint64_t>) {
-    return atype::UINT64;
-  } else {
-    return atype::NA;
-  }
-  O2_BUILTIN_UNREACHABLE();
+  return atype::NA;
 }
+
+#define SELECT_ARROW_TYPE(_Ctype_, _Atype_) \
+  template <typename T>                     \
+    requires std::same_as<T, _Ctype_>       \
+  constexpr auto selectArrowType()          \
+  {                                         \
+    return atype::_Atype_;                  \
+  }
+
+SELECT_ARROW_TYPE(bool, BOOL);
+SELECT_ARROW_TYPE(float, FLOAT);
+SELECT_ARROW_TYPE(double, DOUBLE);
+SELECT_ARROW_TYPE(uint8_t, UINT8);
+SELECT_ARROW_TYPE(int8_t, INT8);
+SELECT_ARROW_TYPE(uint16_t, UINT16);
+SELECT_ARROW_TYPE(int16_t, INT16);
+SELECT_ARROW_TYPE(uint32_t, UINT32);
+SELECT_ARROW_TYPE(int32_t, INT32);
+SELECT_ARROW_TYPE(uint64_t, UINT64);
+SELECT_ARROW_TYPE(int64_t, INT64);
 
 std::shared_ptr<arrow::DataType> concreteArrowType(atype::type type);
 std::string upcastTo(atype::type f);
@@ -113,9 +123,9 @@ struct LiteralNode {
 struct BindingNode {
   BindingNode(BindingNode const&) = default;
   BindingNode(BindingNode&&) = delete;
-  BindingNode(std::string const& name_, std::size_t hash_, atype::type type_) : name{name_}, hash{hash_}, type{type_} {}
-  std::string name;
-  std::size_t hash;
+  constexpr BindingNode(const char* name_, uint32_t hash_, atype::type type_) : name{name_}, hash{hash_}, type{type_} {}
+  const char* name;
+  uint32_t hash;
   atype::type type;
 };
 
@@ -131,7 +141,7 @@ struct PlaceholderNode : LiteralNode {
   PlaceholderNode(Configurable<T> const& v) : LiteralNode{v.value}, name{v.name}
   {
     if constexpr (variant_trait_v<typename std::decay<T>::type> != VariantType::Unknown) {
-      retrieve = [](InitContext& context, std::string const& name) { return LiteralNode::var_t{context.options().get<T>(name.c_str())}; };
+      retrieve = [](InitContext& context, char const* name) { return LiteralNode::var_t{context.options().get<T>(name)}; };
     } else {
       runtime_error("Unknown parameter used in expression.");
     }
@@ -139,11 +149,11 @@ struct PlaceholderNode : LiteralNode {
 
   void reset(InitContext& context)
   {
-    value = retrieve(context, name);
+    value = retrieve(context, name.data());
   }
 
-  std::string name;
-  LiteralNode::var_t (*retrieve)(InitContext&, std::string const& name);
+  std::string const& name;
+  LiteralNode::var_t (*retrieve)(InitContext&, char const*);
 };
 
 /// A conditional node
@@ -152,37 +162,37 @@ struct ConditionalNode {
 
 /// A generic tree node
 struct Node {
-  Node(LiteralNode v) : self{v}, left{nullptr}, right{nullptr}, condition{nullptr}
+  Node(LiteralNode&& v) : self{std::forward<LiteralNode>(v)}, left{nullptr}, right{nullptr}, condition{nullptr}
   {
   }
 
-  Node(PlaceholderNode v) : self{v}, left{nullptr}, right{nullptr}, condition{nullptr}
+  Node(PlaceholderNode&& v) : self{std::forward<PlaceholderNode>(v)}, left{nullptr}, right{nullptr}, condition{nullptr}
   {
   }
 
-  Node(Node&& n) : self{n.self}, left{std::move(n.left)}, right{std::move(n.right)}, condition{std::move(n.condition)}
+  Node(Node&& n) : self{std::forward<self_t>(n.self)}, left{std::forward<std::unique_ptr<Node>>(n.left)}, right{std::forward<std::unique_ptr<Node>>(n.right)}, condition{std::forward<std::unique_ptr<Node>>(n.condition)}
   {
   }
 
-  Node(BindingNode n) : self{n}, left{nullptr}, right{nullptr}, condition{nullptr}
+  Node(BindingNode const& n) : self{n}, left{nullptr}, right{nullptr}, condition{nullptr}
   {
   }
 
   Node(ConditionalNode op, Node&& then_, Node&& else_, Node&& condition_)
     : self{op},
-      left{std::make_unique<Node>(std::move(then_))},
-      right{std::make_unique<Node>(std::move(else_))},
-      condition{std::make_unique<Node>(std::move(condition_))} {}
+      left{std::make_unique<Node>(std::forward<Node>(then_))},
+      right{std::make_unique<Node>(std::forward<Node>(else_))},
+      condition{std::make_unique<Node>(std::forward<Node>(condition_))} {}
 
   Node(OpNode op, Node&& l, Node&& r)
     : self{op},
-      left{std::make_unique<Node>(std::move(l))},
-      right{std::make_unique<Node>(std::move(r))},
+      left{std::make_unique<Node>(std::forward<Node>(l))},
+      right{std::make_unique<Node>(std::forward<Node>(r))},
       condition{nullptr} {}
 
   Node(OpNode op, Node&& l)
     : self{op},
-      left{std::make_unique<Node>(std::move(l))},
+      left{std::make_unique<Node>(std::forward<Node>(l))},
       right{nullptr},
       condition{nullptr} {}
 
@@ -198,55 +208,52 @@ struct Node {
 
 /// overloaded operators to build the tree from an expression
 
-#define BINARY_OP_NODES(_operator_, _operation_)                                        \
-  template <typename T>                                                                 \
-  inline Node operator _operator_(Node left, T right)                                   \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, std::move(left), LiteralNode{right}};     \
-  }                                                                                     \
-  template <typename T>                                                                 \
-  inline Node operator _operator_(T left, Node right)                                   \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, LiteralNode{left}, std::move(right)};     \
-  }                                                                                     \
-  template <typename T>                                                                 \
-  inline Node operator _operator_(Node left, Configurable<T> right)                     \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, std::move(left), PlaceholderNode{right}}; \
-  }                                                                                     \
-  template <typename T>                                                                 \
-  inline Node operator _operator_(Configurable<T> left, Node right)                     \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, PlaceholderNode{left}, std::move(right)}; \
-  }                                                                                     \
-  inline Node operator _operator_(Node left, Node right)                                \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, std::move(left), std::move(right)};       \
-  }                                                                                     \
-  inline Node operator _operator_(BindingNode left, BindingNode right)                  \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, left, right};                             \
-  }                                                                                     \
-  template <>                                                                           \
-  inline Node operator _operator_(BindingNode left, Node right)                         \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, left, std::move(right)};                  \
-  }                                                                                     \
-  template <>                                                                           \
-  inline Node operator _operator_(Node left, BindingNode right)                         \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, std::move(left), right};                  \
-  }                                                                                     \
-                                                                                        \
-  template <typename T>                                                                 \
-  inline Node operator _operator_(Configurable<T> left, BindingNode right)              \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, PlaceholderNode{left}, right};            \
-  }                                                                                     \
-  template <typename T>                                                                 \
-  inline Node operator _operator_(BindingNode left, Configurable<T> right)              \
-  {                                                                                     \
-    return Node{OpNode{BasicOp::_operation_}, left, PlaceholderNode{right}};            \
+#define BINARY_OP_NODES(_operator_, _operation_)                                                        \
+  inline Node operator _operator_(Node&& left, Node&& right)                                            \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, std::forward<Node>(left), std::forward<Node>(right)};     \
+  }                                                                                                     \
+  template <typename T>                                                                                 \
+  inline Node operator _operator_(Node&& left, T right) requires(std::is_arithmetic_v<std::decay_t<T>>) \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, std::forward<Node>(left), LiteralNode{right}};            \
+  }                                                                                                     \
+  template <typename T>                                                                                 \
+  inline Node operator _operator_(T left, Node&& right) requires(std::is_arithmetic_v<std::decay_t<T>>) \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, LiteralNode{left}, std::forward<Node>(right)};            \
+  }                                                                                                     \
+  template <typename T>                                                                                 \
+  inline Node operator _operator_(Node&& left, Configurable<T> const& right)                            \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, std::forward<Node>(left), PlaceholderNode{right}};        \
+  }                                                                                                     \
+  template <typename T>                                                                                 \
+  inline Node operator _operator_(Configurable<T> const& left, Node&& right)                            \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, PlaceholderNode{left}, std::forward<Node>(right)};        \
+  }                                                                                                     \
+  inline Node operator _operator_(BindingNode const& left, BindingNode const& right)                    \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, left, right};                                             \
+  }                                                                                                     \
+  inline Node operator _operator_(BindingNode const& left, Node&& right)                                \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, left, std::forward<Node>(right)};                         \
+  }                                                                                                     \
+  inline Node operator _operator_(Node&& left, BindingNode const& right)                                \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, std::forward<Node>(left), right};                         \
+  }                                                                                                     \
+  template <typename T>                                                                                 \
+  inline Node operator _operator_(Configurable<T> const& left, BindingNode const& right)                \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, PlaceholderNode{left}, right};                            \
+  }                                                                                                     \
+  template <typename T>                                                                                 \
+  inline Node operator _operator_(BindingNode const& left, Configurable<T> const& right)                \
+  {                                                                                                     \
+    return Node{OpNode{BasicOp::_operation_}, left, PlaceholderNode{right}};                            \
   }
 
 BINARY_OP_NODES(&, BitwiseAnd);
@@ -267,135 +274,142 @@ BINARY_OP_NODES(||, LogicalOr);
 
 /// functions
 template <typename T>
-inline Node npow(Node left, T right)
+inline Node npow(Node&& left, T right) requires(std::is_arithmetic_v<T>)
 {
-  return Node{OpNode{BasicOp::Power}, std::move(left), LiteralNode{right}};
+  return Node{OpNode{BasicOp::Power}, std::forward<Node>(left), LiteralNode{right}};
 }
+
+#define BINARY_FUNC_NODES(_func_, _node_)                                                          \
+  template <typename L, typename R>                                                                \
+  inline Node _node_(L left, R right) requires(std::is_arithmetic_v<L> && std::is_arithmetic_v<R>) \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, LiteralNode{left}, LiteralNode{right}};                   \
+  }                                                                                                \
+                                                                                                   \
+  inline Node _node_(Node&& left, Node&& right)                                                    \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, std::forward<Node>(left), std::forward<Node>(right)};     \
+  }                                                                                                \
+                                                                                                   \
+  inline Node _node_(Node&& left, BindingNode const& right)                                        \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, std::forward<Node>(left), right};                         \
+  }                                                                                                \
+                                                                                                   \
+  inline Node _node_(BindingNode const& left, BindingNode const& right)                            \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, left, right};                                             \
+  }                                                                                                \
+                                                                                                   \
+  inline Node _node_(BindingNode const& left, Node&& right)                                        \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, left, std::forward<Node>(right)};                         \
+  }                                                                                                \
+                                                                                                   \
+  template <typename T>                                                                            \
+  inline Node _node_(Node&& left, Configurable<T> const& right)                                    \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, std::forward<Node>(left), PlaceholderNode{right}};        \
+  }                                                                                                \
+                                                                                                   \
+  template <typename T>                                                                            \
+  inline Node _node_(Configurable<T> const& left, Node&& right)                                    \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, PlaceholderNode{left}, std::forward<Node>(right)};        \
+  }                                                                                                \
+                                                                                                   \
+  template <typename T>                                                                            \
+  inline Node _node_(BindingNode const& left, Configurable<T> const& right)                        \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, left, PlaceholderNode{right}};                            \
+  }                                                                                                \
+                                                                                                   \
+  template <typename T>                                                                            \
+  inline Node _node_(Configurable<T> const& left, BindingNode const& right)                        \
+  {                                                                                                \
+    return Node{OpNode{BasicOp::_func_}, PlaceholderNode{left}, right};                            \
+  }
+
+BINARY_FUNC_NODES(Atan2, natan2);
+#define ncheckbit(_node_, _bit_) ((_node_ & _bit_) == _bit_)
 
 /// unary functions on nodes
-inline Node nsqrt(Node left)
-{
-  return Node{OpNode{BasicOp::Sqrt}, std::move(left)};
-}
+#define UNARY_FUNC_NODES(_func_, _node_)                           \
+  inline Node _node_(Node&& arg)                                   \
+  {                                                                \
+    return Node{OpNode{BasicOp::_func_}, std::forward<Node>(arg)}; \
+  }
 
-inline Node nexp(Node left)
-{
-  return Node{OpNode{BasicOp::Exp}, std::move(left)};
-}
-
-inline Node nlog(Node left)
-{
-  return Node{OpNode{BasicOp::Log}, std::move(left)};
-}
-
-inline Node nlog10(Node left)
-{
-  return Node{OpNode{BasicOp::Log10}, std::move(left)};
-}
-
-inline Node nabs(Node left)
-{
-  return Node{OpNode{BasicOp::Abs}, std::move(left)};
-}
-
-inline Node nsin(Node left)
-{
-  return Node{OpNode{BasicOp::Sin}, std::move(left)};
-}
-
-inline Node ncos(Node left)
-{
-  return Node{OpNode{BasicOp::Cos}, std::move(left)};
-}
-
-inline Node ntan(Node left)
-{
-  return Node{OpNode{BasicOp::Tan}, std::move(left)};
-}
-
-inline Node nasin(Node left)
-{
-  return Node{OpNode{BasicOp::Asin}, std::move(left)};
-}
-
-inline Node nacos(Node left)
-{
-  return Node{OpNode{BasicOp::Acos}, std::move(left)};
-}
-
-inline Node natan(Node left)
-{
-  return Node{OpNode{BasicOp::Atan}, std::move(left)};
-}
-
-inline Node nbitwise_not(Node left)
-{
-  return Node{OpNode{BasicOp::BitwiseNot}, std::move(left)};
-}
+UNARY_FUNC_NODES(Round, nround);
+UNARY_FUNC_NODES(Sqrt, nsqrt);
+UNARY_FUNC_NODES(Exp, nexp);
+UNARY_FUNC_NODES(Log, nlog);
+UNARY_FUNC_NODES(Log10, nlog10);
+UNARY_FUNC_NODES(Abs, nabs);
+UNARY_FUNC_NODES(Sin, nsin);
+UNARY_FUNC_NODES(Cos, ncos);
+UNARY_FUNC_NODES(Tan, ntan);
+UNARY_FUNC_NODES(Asin, nasin);
+UNARY_FUNC_NODES(Acos, nacos);
+UNARY_FUNC_NODES(Atan, natan);
+UNARY_FUNC_NODES(BitwiseNot, nbitwise_not);
 
 /// conditionals
-template <typename C, typename T, typename E>
-inline Node ifnode(C condition_, T then_, E else_)
+inline Node ifnode(Node&& condition_, Node&& then_, Node&& else_)
 {
-  return Node{ConditionalNode{}, std::move(then_), std::move(else_), std::move(condition_)};
-}
-
-template <>
-inline Node ifnode(Node condition_, Node then_, Node else_)
-{
-  return Node{ConditionalNode{}, std::move(then_), std::move(else_), std::move(condition_)};
-}
-
-template <typename L, std::enable_if_t<std::is_integral<L>::value || std::is_floating_point<L>::value, bool> = true>
-inline Node ifnode(Node condition_, Node then_, L else_)
-{
-  return Node{ConditionalNode{}, std::move(then_), LiteralNode{else_}, std::move(condition_)};
-}
-
-template <typename L, std::enable_if_t<std::is_integral<L>::value || std::is_floating_point<L>::value, bool> = true>
-inline Node ifnode(Node condition_, L then_, Node else_)
-{
-  return Node{ConditionalNode{}, LiteralNode{then_}, std::move(else_), std::move(condition_)};
-}
-
-template <typename L1, typename L2, std::enable_if_t<(std::is_integral<L1>::value || std::is_floating_point<L1>::value) && (std::is_integral<L2>::value || std::is_floating_point<L2>::value), bool> = true>
-inline Node ifnode(Node condition_, L1 then_, L2 else_)
-{
-  return Node{ConditionalNode{}, LiteralNode{then_}, LiteralNode{else_}, std::move(condition_)};
-}
-
-template <typename T>
-inline Node ifnode(Configurable<T> condition_, Node then_, Node else_)
-{
-  return Node{ConditionalNode{}, std::move(then_), std::move(else_), PlaceholderNode{condition_}};
+  return Node{ConditionalNode{}, std::forward<Node>(then_), std::forward<Node>(else_), std::forward<Node>(condition_)};
 }
 
 template <typename L>
-inline Node ifnode(Node condition_, Node then_, Configurable<L> else_)
+inline Node ifnode(Node&& condition_, Node&& then_, L else_) requires(std::is_arithmetic_v<L>)
 {
-  return Node{ConditionalNode{}, std::move(then_), PlaceholderNode{else_}, std::move(condition_)};
+  return Node{ConditionalNode{}, std::forward<Node>(then_), LiteralNode{else_}, std::forward<Node>(condition_)};
 }
 
 template <typename L>
-inline Node ifnode(Node condition_, Configurable<L> then_, Node else_)
+inline Node ifnode(Node&& condition_, L then_, Node&& else_) requires(std::is_arithmetic_v<L>)
 {
-  return Node{ConditionalNode{}, PlaceholderNode{then_}, std::move(else_), std::move(condition_)};
+  return Node{ConditionalNode{}, LiteralNode{then_}, std::forward<Node>(else_), std::forward<Node>(condition_)};
 }
 
 template <typename L1, typename L2>
-inline Node ifnode(Node condition_, Configurable<L1> then_, Configurable<L2> else_)
+inline Node ifnode(Node&& condition_, L1 then_, L2 else_) requires(std::is_arithmetic_v<L1>&& std::is_arithmetic_v<L2>)
 {
-  return Node{ConditionalNode{}, PlaceholderNode{then_}, PlaceholderNode{else_}, std::move(condition_)};
+  return Node{ConditionalNode{}, LiteralNode{then_}, LiteralNode{else_}, std::forward<Node>(condition_)};
+}
+
+template <typename T>
+inline Node ifnode(Configurable<T> const& condition_, Node&& then_, Node&& else_)
+{
+  return Node{ConditionalNode{}, std::forward<Node>(then_), std::forward<Node>(else_), PlaceholderNode{condition_}};
+}
+
+template <typename L>
+inline Node ifnode(Node&& condition_, Node&& then_, Configurable<L> const& else_)
+{
+  return Node{ConditionalNode{}, std::forward<Node>(then_), PlaceholderNode{else_}, std::forward<Node>(condition_)};
+}
+
+template <typename L>
+inline Node ifnode(Node&& condition_, Configurable<L> const& then_, Node&& else_)
+{
+  return Node{ConditionalNode{}, PlaceholderNode{then_}, std::forward<Node>(else_), std::forward<Node>(condition_)};
+}
+
+template <typename L1, typename L2>
+inline Node ifnode(Node&& condition_, Configurable<L1> const& then_, Configurable<L2> const& else_)
+{
+  return Node{ConditionalNode{}, PlaceholderNode{then_}, PlaceholderNode{else_}, std::forward<Node>(condition_)};
 }
 
 /// A struct, containing the root of the expression tree
 struct Filter {
-  Filter(Node&& node_) : node{std::make_unique<Node>(std::move(node_))}
+  Filter(Node&& node_) : node{std::make_unique<Node>(std::forward<Node>(node_))}
   {
     (void)designateSubtrees(node.get());
   }
 
-  Filter(Filter&& other) : node{std::move(other.node)}
+  Filter(Filter&& other) : node{std::forward<std::unique_ptr<Node>>(other.node)}
   {
     (void)designateSubtrees(node.get());
   }
@@ -404,13 +418,15 @@ struct Filter {
   size_t designateSubtrees(Node* node, size_t index = 0);
 };
 
+template <typename T>
+concept is_filter = std::same_as<T, Filter>;
+
 using Projector = Filter;
 
-using Selection = std::shared_ptr<gandiva::SelectionVector>;
 /// Function for creating gandiva selection from our internal filter tree
-Selection createSelection(std::shared_ptr<arrow::Table> const& table, Filter const& expression);
+gandiva::Selection createSelection(std::shared_ptr<arrow::Table> const& table, Filter const& expression);
 /// Function for creating gandiva selection from prepared gandiva expressions tree
-Selection createSelection(std::shared_ptr<arrow::Table> const& table, std::shared_ptr<gandiva::Filter> gfilter);
+gandiva::Selection createSelection(std::shared_ptr<arrow::Table> const& table, std::shared_ptr<gandiva::Filter> const& gfilter);
 
 struct ColumnOperationSpec;
 using Operations = std::vector<ColumnOperationSpec>;
@@ -419,7 +435,7 @@ using Operations = std::vector<ColumnOperationSpec>;
 Operations createOperations(Filter const& expression);
 
 /// Function to check compatibility of a given arrow schema with operation sequence
-bool isSchemaCompatible(gandiva::SchemaPtr const& Schema, Operations const& opSpecs);
+bool isTableCompatible(std::set<uint32_t> const& hashes, Operations const& specs);
 /// Function to create gandiva expression tree from operation sequence
 gandiva::NodePtr createExpressionTree(Operations const& opSpecs,
                                       gandiva::SchemaPtr const& Schema);
@@ -447,23 +463,24 @@ gandiva::ExpressionPtr makeExpression(gandiva::NodePtr node, gandiva::FieldPtr r
 void updatePlaceholders(Filter& filter, InitContext& context);
 
 template <typename... C>
-std::shared_ptr<gandiva::Projector> createProjectors(framework::pack<C...>, gandiva::SchemaPtr schema)
+std::vector<expressions::Projector> makeProjectors(framework::pack<C...>)
 {
-  std::shared_ptr<gandiva::Projector> projector;
-  auto s = gandiva::Projector::Make(
-    schema,
-    {makeExpression(
-      framework::expressions::createExpressionTree(
-        framework::expressions::createOperations(C::Projector()),
-        schema),
-      C::asArrowField())...},
-    &projector);
-  if (s.ok()) {
-    return projector;
-  } else {
-    throw o2::framework::runtime_error_f("Failed to create projector: %s", s.ToString().c_str());
-  }
+  return {C::Projector()...};
 }
+
+std::shared_ptr<gandiva::Projector> createProjectorHelper(size_t nColumns, expressions::Projector* projectors,
+                                                          std::shared_ptr<arrow::Schema> schema,
+                                                          std::vector<std::shared_ptr<arrow::Field>> const& fields);
+
+template <typename... C>
+std::shared_ptr<gandiva::Projector> createProjectors(framework::pack<C...>, std::vector<std::shared_ptr<arrow::Field>> const& fields, gandiva::SchemaPtr schema)
+{
+  std::array<expressions::Projector, sizeof...(C)> projectors{{std::move(C::Projector())...}};
+
+  return createProjectorHelper(sizeof...(C), projectors.data(), schema, fields);
+}
+
+void updateFilterInfo(ExpressionInfo& info, std::shared_ptr<arrow::Table>& table);
 } // namespace o2::framework::expressions
 
 #endif // O2_FRAMEWORK_EXPRESSIONS_H_

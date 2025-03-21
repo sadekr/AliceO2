@@ -15,12 +15,13 @@
 /// \author  Sergey Gorbunov <sergey.gorbunov@cern.ch>
 
 #include "IrregularSpline2D3D.h"
+#include "GPUCommonLogger.h"
 
 #if !defined(GPUCA_GPUCODE)
 #include <iostream>
 #endif
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 IrregularSpline2D3D::IrregularSpline2D3D() : FlatObject(), mGridU(), mGridV()
 {
@@ -80,7 +81,7 @@ void IrregularSpline2D3D::setFutureBufferAddress(char* futureFlatBufferPtr)
   FlatObject::setFutureBufferAddress(futureFlatBufferPtr);
 }
 
-void IrregularSpline2D3D::construct(int numberOfKnotsU, const float knotsU[], int numberOfAxisBinsU, int numberOfKnotsV, const float knotsV[], int numberOfAxisBinsV)
+void IrregularSpline2D3D::construct(int32_t numberOfKnotsU, const float knotsU[], int32_t numberOfAxisBinsU, int32_t numberOfKnotsV, const float knotsV[], int32_t numberOfAxisBinsV)
 {
   /// Constructor
   ///
@@ -116,7 +117,7 @@ void IrregularSpline2D3D::construct(int numberOfKnotsU, const float knotsU[], in
   mGridV.moveBufferTo(mFlatBufferPtr + vOffset);
 }
 
-void IrregularSpline2D3D::constructRegular(int numberOfKnotsU, int numberOfKnotsV)
+void IrregularSpline2D3D::constructRegular(int32_t numberOfKnotsU, int32_t numberOfKnotsV)
 {
   /// Constructor for a regular spline
   /// \param numberOfKnotsU     U axis: Number of knots in knots[] array
@@ -139,10 +140,10 @@ void IrregularSpline2D3D::constructRegular(int numberOfKnotsU, int numberOfKnots
 void IrregularSpline2D3D::print() const
 {
 #if !defined(GPUCA_GPUCODE)
-  std::cout << " Irregular Spline 2D3D: " << std::endl;
-  std::cout << " grid U: " << std::endl;
+  LOG(info) << " Irregular Spline 2D3D: ";
+  LOG(info) << " grid U: ";
   mGridU.print();
-  std::cout << " grid V: " << std::endl;
+  LOG(info) << " grid V: ";
   mGridV.print();
 #endif
 }

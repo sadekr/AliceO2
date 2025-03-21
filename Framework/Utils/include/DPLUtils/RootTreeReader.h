@@ -20,6 +20,7 @@
 #include "Framework/Output.h"
 #include "Framework/ProcessingContext.h"
 #include "Framework/DataAllocator.h"
+#include "Framework/RootMessageContext.h"
 #include "Framework/Logger.h"
 #include "Headers/DataHeader.h"
 #include <TChain.h>
@@ -34,9 +35,7 @@
 #include <functional> // std::function
 #include <utility>    // std::forward
 
-namespace o2
-{
-namespace framework
+namespace o2::framework
 {
 
 namespace rtr
@@ -52,11 +51,11 @@ struct DefaultKey {
   enum Lifetime lifetime = Lifetime::Timeframe;
 
   DefaultKey(const Output& desc)
-    : origin(desc.origin), description(desc.description), subSpec(desc.subSpec), lifetime(desc.lifetime)
+    : origin(desc.origin), description(desc.description), subSpec(desc.subSpec)
   {
   }
 
-  operator Output() const { return Output{origin, description, subSpec, lifetime}; }
+  operator Output() const { return Output{origin, description, subSpec}; }
 };
 } // namespace rtr
 
@@ -279,13 +278,13 @@ class GenericRootTreeReader
           if (classinfo == nullptr) {
             throw std::runtime_error(std::string("can not find class description for branch ") + mName);
           }
-          LOG(INFO) << "branch set up: " << mName;
+          LOG(info) << "branch set up: " << mName;
         } else {
           if (classinfo == nullptr || classinfo != TClass::GetClass(typeid(BinaryDataStoreType))) {
             throw std::runtime_error("mismatching class type, expecting std::vector<char> for binary branch");
           }
           mSizeBranch = sizebranch;
-          LOG(INFO) << "binary branch set up: " << mName;
+          LOG(info) << "binary branch set up: " << mName;
         }
         mClassInfo = classinfo;
       } else {
@@ -303,7 +302,7 @@ class GenericRootTreeReader
       }
 
       auto snapshot = [&context, &stackcreator](const KeyType& key, const auto& object) {
-        context.outputs().snapshot(Output{key.origin, key.description, key.subSpec, key.lifetime, std::move(stackcreator())}, object);
+        context.outputs().snapshot(Output{key.origin, key.description, key.subSpec, std::move(stackcreator())}, object);
       };
 
       char* data = nullptr;
@@ -311,7 +310,7 @@ class GenericRootTreeReader
       mBranch->GetEntry(entry);
 
       // execute hook if it was registered; if this return true do not proceed further
-      if (mPublishHook != nullptr && (*mPublishHook).hook(mName, context, Output{mKey.origin, mKey.description, mKey.subSpec, mKey.lifetime, std::move(stackcreator())}, data)) {
+      if (mPublishHook != nullptr && (*mPublishHook).hook(mName, context, Output{mKey.origin, mKey.description, mKey.subSpec, std::move(stackcreator())}, data)) {
 
       }
       // try to figureout when we need to do something special
@@ -322,10 +321,10 @@ class GenericRootTreeReader
           mSizeBranch->GetEntry(entry);
           auto* buffer = reinterpret_cast<BinaryDataStoreType*>(data);
           if (buffer->size() == datasize) {
-            LOG(INFO) << "branch " << mName << ": publishing binary chunk of " << datasize << " bytes(s)";
+            LOG(debug) << "branch " << mName << ": publishing binary chunk of " << datasize << " bytes(s)";
             snapshot(mKey, std::move(*buffer));
           } else {
-            LOG(ERROR) << "branch " << mName << ": inconsitent size of binary chunk "
+            LOG(error) << "branch " << mName << ": inconsitent size of binary chunk "
                        << buffer->size() << " vs " << datasize;
             BinaryDataStoreType empty;
             snapshot(mKey, empty);
@@ -510,7 +509,7 @@ class GenericRootTreeReader
       mPublishingMode = def;
     } else if constexpr (std::is_same<U, SpecialPublishHook*>::value) {
       mPublishHook = def;
-    } else if constexpr (is_specialization<U, BranchDefinition>::value) {
+    } else if constexpr (is_specialization_v<U, BranchDefinition>) {
       cargs.emplace_back(key_type(def.key), def.name);
       using type = BranchConfigurationElement<typename U::type, BASE>;
       return std::move(createBranchConfiguration<0, type>(std::move(cargs), std::forward<Args>(args)...));
@@ -557,6 +556,5 @@ class GenericRootTreeReader
 
 using RootTreeReader = GenericRootTreeReader<rtr::DefaultKey>;
 
-} // namespace framework
-} // namespace o2
+} // namespace o2::framework
 #endif

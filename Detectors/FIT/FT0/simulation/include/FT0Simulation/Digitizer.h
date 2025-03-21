@@ -13,17 +13,17 @@
 #define ALICEO2_FT0_DIGITIZER_H
 
 #include "CommonDataFormat/InteractionRecord.h"
+#include "DataFormatsFIT/DeadChannelMap.h"
 #include "DataFormatsFT0/Digit.h"
 #include "DataFormatsFT0/ChannelData.h"
 #include "DataFormatsFT0/MCLabel.h"
-#include "MathUtils/RandomRing.h"
 #include "FT0Simulation/Detector.h"
 #include "FT0Base/Geometry.h"
 #include "SimulationDataFormat/MCTruthContainer.h"
-#include "SimulationDataFormat/MCCompLabel.h"
 #include "FT0Simulation/DigitizationConstants.h"
-#include "FT0Simulation/DigitizationParameters.h"
-#include <TH1F.h>
+#include "DataFormatsFT0/FT0ChannelTimeCalibrationObject.h"
+#include "FT0Base/FT0DigParam.h"
+#include "MathUtils/RandomRing.h"
 #include <array>
 #include <bitset>
 #include <vector>
@@ -72,6 +72,11 @@ class Digitizer
   void init();
   void finish();
 
+  void SetChannelOffset(o2::ft0::FT0ChannelTimeCalibrationObject const*
+                          caliboffsets) { mCalibOffset = caliboffsets; };
+  void setDeadChannelMap(o2::fit::DeadChannelMap const* deadChannelMap) { mDeadChannelMap = deadChannelMap; };
+  double getTimeOffsetWrtBC() const { return mIntRecord.getTimeOffsetWrtBC(); }
+
   struct CFDOutput {
     std::optional<double> particle;
     double deadTime;
@@ -103,7 +108,7 @@ class Digitizer
     if (x <= 0.0f) {
       return 0.0f;
     }
-    float const y = x / DigitizationParameters::Instance().mBunchWidth * DP::SIGNAL_TABLE_SIZE;
+    float const y = x / FT0DigParam::Instance().mBunchWidth * DP::SIGNAL_TABLE_SIZE;
     int const index = std::floor(y);
     if (index + 1 >= DP::SIGNAL_TABLE_SIZE) {
       return mSignalTable.back();
@@ -116,7 +121,7 @@ class Digitizer
   inline VcType signalFormVc(VcType x) const
   { // table lookup for the signal shape (SIMD version)
     // implemented as template function, so that we don't need to include <Vc/Vc> here
-    auto const y = x / DigitizationParameters::Instance().mBunchWidth * DP::SIGNAL_TABLE_SIZE;
+    auto const y = x / FT0DigParam::Instance().mBunchWidth * DP::SIGNAL_TABLE_SIZE;
     typename VcType::IndexType const index = floor(y);
     auto const rem = y - index;
     VcType val(0);
@@ -161,7 +166,10 @@ class Digitizer
                std::vector<o2::ft0::DetTrigInput>& digitsTrig,
                o2::dataformats::MCTruthContainer<o2::ft0::MCLabel>& labels);
 
-  ClassDefNV(Digitizer, 2);
+  o2::ft0::FT0ChannelTimeCalibrationObject const* mCalibOffset = nullptr;
+  o2::fit::DeadChannelMap const* mDeadChannelMap = nullptr;
+
+  ClassDefNV(Digitizer, 3);
 };
 
 } // namespace ft0

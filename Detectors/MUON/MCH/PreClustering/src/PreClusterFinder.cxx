@@ -17,13 +17,12 @@
 #include <vector>
 
 #include <fairmq/Tools.h>
-#include <FairMQLogger.h>
+#include <fairlogger/Logger.h>
 
+#include "MCHBase/Error.h"
 #include "PreClusterFinderMapping.h"
 
-namespace o2
-{
-namespace mch
+namespace o2::mch
 {
 
 struct PreClusterFinder::DetectionElement {
@@ -69,6 +68,7 @@ void PreClusterFinder::deinit()
   /// clear the internal structure
   reset();
   mDEIndices.clear();
+  mErrorMap.clear();
 }
 
 //_________________________________________________________________________________________________
@@ -125,13 +125,22 @@ void PreClusterFinder::loadDigit(const Digit& digit)
 {
   /// fill the Mapping::MpDE structure with fired pad
 
-  int deIndex = mDEIndices[digit.getDetID()];
-  assert(deIndex >= 0 && deIndex < SNDEs);
+  int deIndex = mDEIndices.at(digit.getDetID());
 
   DetectionElement& de(*(mDEs[deIndex]));
 
+  if (digit.getPadID() < 0 || digit.getPadID() >= de.mapping->nPads[0] + de.mapping->nPads[1]) {
+    throw out_of_range("invalid pad index");
+  }
+
   uint16_t iPad = digit.getPadID();
   int iPlane = (iPad < de.mapping->nPads[0]) ? 0 : 1;
+
+  // check that the pad is not already fired
+  if (de.mapping->pads[iPad].useMe) {
+    mErrorMap.add(ErrorType::PreClustering_MultipleDigitsInSamePad, digit.getDetID(), iPad);
+    return;
+  }
 
   // register this digit
   uint16_t iDigit = de.nFiredPads[0] + de.nFiredPads[1];
@@ -526,8 +535,7 @@ void PreClusterFinder::createMapping()
   }
 
   auto tEnd = std::chrono::high_resolution_clock::now();
-  LOG(INFO) << "create mapping in: " << std::chrono::duration<double, std::milli>(tEnd - tStart).count() << " ms";
+  LOG(info) << "create mapping in: " << std::chrono::duration<double, std::milli>(tEnd - tStart).count() << " ms";
 }
 
-} // namespace mch
-} // namespace o2
+} // namespace o2::mch

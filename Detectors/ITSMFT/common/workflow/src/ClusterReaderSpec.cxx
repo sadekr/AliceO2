@@ -19,8 +19,9 @@
 #include "Framework/ConfigParamRegistry.h"
 #include "Framework/Logger.h"
 #include "ITSMFTWorkflow/ClusterReaderSpec.h"
+#include "DataFormatsITSMFT/PhysTrigger.h"
 #include <cassert>
-#include "DetectorsCommonDataFormats/NameConf.h"
+#include "CommonUtils/NameConf.h"
 
 using namespace o2::framework;
 using namespace o2::itsmft;
@@ -30,12 +31,13 @@ namespace o2
 namespace itsmft
 {
 
-ClusterReader::ClusterReader(o2::detectors::DetID id, bool useMC, bool usePatterns)
+ClusterReader::ClusterReader(o2::detectors::DetID id, bool useMC, bool usePatterns, bool triggerOut)
 {
   assert(id == o2::detectors::DetID::ITS || id == o2::detectors::DetID::MFT);
   mDetNameLC = mDetName = id.getName();
   mUseMC = useMC;
   mUsePatterns = usePatterns;
+  mTriggerOut = triggerOut;
   std::transform(mDetNameLC.begin(), mDetNameLC.end(), mDetNameLC.begin(), ::tolower);
 }
 
@@ -51,21 +53,24 @@ void ClusterReader::run(ProcessingContext& pc)
   auto ent = mTree->GetReadEntry() + 1;
   assert(ent < mTree->GetEntries()); // this should not happen
   mTree->GetEntry(ent);
-  LOG(INFO) << mDetName << "ClusterReader pushes " << mClusROFRec.size() << " ROFRecords,"
+  LOG(info) << mDetName << "ClusterReader pushes " << mClusROFRec.size() << " ROFRecords,"
             << mClusterCompArray.size() << " compact clusters at entry " << ent;
 
   // This is a very ugly way of providing DataDescription, which anyway does not need to contain detector name.
   // To be fixed once the names-definition class is ready
-  pc.outputs().snapshot(Output{mOrigin, "CLUSTERSROF", 0, Lifetime::Timeframe}, mClusROFRec);
-  pc.outputs().snapshot(Output{mOrigin, "COMPCLUSTERS", 0, Lifetime::Timeframe}, mClusterCompArray);
+  pc.outputs().snapshot(Output{mOrigin, "CLUSTERSROF", 0}, mClusROFRec);
+  pc.outputs().snapshot(Output{mOrigin, "COMPCLUSTERS", 0}, mClusterCompArray);
   if (mUsePatterns) {
-    pc.outputs().snapshot(Output{mOrigin, "PATTERNS", 0, Lifetime::Timeframe}, mPatternsArray);
+    pc.outputs().snapshot(Output{mOrigin, "PATTERNS", 0}, mPatternsArray);
   }
   if (mUseMC) {
-    pc.outputs().snapshot(Output{mOrigin, "CLUSTERSMCTR", 0, Lifetime::Timeframe}, mClusterMCTruth);
-    pc.outputs().snapshot(Output{mOrigin, "CLUSTERSMC2ROF", 0, Lifetime::Timeframe}, mClusMC2ROFs);
+    pc.outputs().snapshot(Output{mOrigin, "CLUSTERSMCTR", 0}, mClusterMCTruth);
+    pc.outputs().snapshot(Output{mOrigin, "CLUSTERSMC2ROF", 0}, mClusMC2ROFs);
   }
-
+  if (mTriggerOut) {
+    std::vector<o2::itsmft::PhysTrigger> dummyTrig;
+    pc.outputs().snapshot(Output{mOrigin, "PHYSTRIG", 0}, dummyTrig);
+  }
   if (mTree->GetReadEntry() + 1 >= mTree->GetEntries()) {
     pc.services().get<ControlService>().endOfStream();
     pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
@@ -91,14 +96,14 @@ void ClusterReader::connectTree(const std::string& filename)
       mTree->SetBranchAddress((mDetName + mClustMCTruthBranchName).c_str(), &mClusterMCTruthPtr);
       mTree->SetBranchAddress((mDetName + mClustMC2ROFBranchName).c_str(), &mClusMC2ROFsPtr);
     } else {
-      LOG(INFO) << "MC-truth is missing";
+      LOG(info) << "MC-truth is missing";
       mUseMC = false;
     }
   }
-  LOG(INFO) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
+  LOG(info) << "Loaded tree from " << filename << " with " << mTree->GetEntries() << " entries";
 }
 
-DataProcessorSpec getITSClusterReaderSpec(bool useMC, bool usePatterns)
+DataProcessorSpec getITSClusterReaderSpec(bool useMC, bool usePatterns, bool triggerOut)
 {
   std::vector<OutputSpec> outputSpec;
   outputSpec.emplace_back("ITS", "CLUSTERSROF", 0, Lifetime::Timeframe);
@@ -110,18 +115,20 @@ DataProcessorSpec getITSClusterReaderSpec(bool useMC, bool usePatterns)
     outputSpec.emplace_back("ITS", "CLUSTERSMCTR", 0, Lifetime::Timeframe);
     outputSpec.emplace_back("ITS", "CLUSTERSMC2ROF", 0, Lifetime::Timeframe);
   }
-
+  if (triggerOut) {
+    outputSpec.emplace_back("ITS", "PHYSTRIG", 0, Lifetime::Timeframe);
+  }
   return DataProcessorSpec{
     "its-cluster-reader",
     Inputs{},
     outputSpec,
-    AlgorithmSpec{adaptFromTask<ITSClusterReader>(useMC, usePatterns)},
+    AlgorithmSpec{adaptFromTask<ITSClusterReader>(useMC, usePatterns, triggerOut)},
     Options{
       {"its-cluster-infile", VariantType::String, "o2clus_its.root", {"Name of the input cluster file"}},
       {"input-dir", VariantType::String, "none", {"Input directory"}}}};
 }
 
-DataProcessorSpec getMFTClusterReaderSpec(bool useMC, bool usePatterns)
+DataProcessorSpec getMFTClusterReaderSpec(bool useMC, bool usePatterns, bool triggerOut)
 {
   std::vector<OutputSpec> outputSpec;
   outputSpec.emplace_back("MFT", "CLUSTERSROF", 0, Lifetime::Timeframe);
@@ -133,12 +140,14 @@ DataProcessorSpec getMFTClusterReaderSpec(bool useMC, bool usePatterns)
     outputSpec.emplace_back("MFT", "CLUSTERSMCTR", 0, Lifetime::Timeframe);
     outputSpec.emplace_back("MFT", "CLUSTERSMC2ROF", 0, Lifetime::Timeframe);
   }
-
+  if (triggerOut) {
+    outputSpec.emplace_back("MFT", "PHYSTRIG", 0, Lifetime::Timeframe);
+  }
   return DataProcessorSpec{
     "mft-cluster-reader",
     Inputs{},
     outputSpec,
-    AlgorithmSpec{adaptFromTask<MFTClusterReader>(useMC, usePatterns)},
+    AlgorithmSpec{adaptFromTask<MFTClusterReader>(useMC, usePatterns, triggerOut)},
     Options{
       {"mft-cluster-infile", VariantType::String, "mftclusters.root", {"Name of the input cluster file"}},
       {"input-dir", VariantType::String, "none", {"Input directory"}}}};

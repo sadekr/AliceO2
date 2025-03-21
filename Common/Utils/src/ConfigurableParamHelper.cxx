@@ -22,8 +22,9 @@
 #include <TList.h>
 #include <iostream>
 #include <sstream>
-#include "FairLogger.h"
+#include <fairlogger/Logger.h>
 #include <boost/property_tree/ptree.hpp>
+#include <boost/functional/hash.hpp>
 #include <functional>
 #ifdef NDEBUG
 #undef NDEBUG
@@ -45,14 +46,12 @@ std::string ParamDataMember::toString(std::string const& prefix, bool showProv) 
     std::string prov = (provenance.compare("") == 0 ? nil : provenance);
     out << "\t\t[ " + prov + " ]";
   }
-
-  out << "\n";
   return out.str();
 }
 
 std::ostream& operator<<(std::ostream& out, const ParamDataMember& pdm)
 {
-  out << pdm.toString("", false);
+  out << pdm.toString("", false) << "\n";
   return out;
 }
 
@@ -84,18 +83,18 @@ void loopOverMembers(TClass* cl, void* obj,
     }
 
     if (dm->IsaPointer()) {
-      LOG(WARNING) << "Pointer types not supported in ConfigurableParams: " << dm->GetFullTypeName() << " " << dm->GetName();
+      LOG(warning) << "Pointer types not supported in ConfigurableParams: " << dm->GetFullTypeName() << " " << dm->GetName();
       continue;
     }
     if (!dm->IsBasic() && !isValidComplex()) {
-      LOG(WARNING) << "Generic complex types not supported in ConfigurableParams: " << dm->GetFullTypeName() << " " << dm->GetName();
+      LOG(warning) << "Generic complex types not supported in ConfigurableParams: " << dm->GetFullTypeName() << " " << dm->GetName();
       continue;
     }
 
     const auto dim = dm->GetArrayDim();
     // we support very simple vectored data in 1D for now
     if (dim > 1) {
-      LOG(WARNING) << "We support at most 1 dimensional arrays in ConfigurableParams: " << dm->GetFullTypeName() << " " << dm->GetName();
+      LOG(warning) << "We support at most 1 dimensional arrays in ConfigurableParams: " << dm->GetFullTypeName() << " " << dm->GetName();
       continue;
     }
 
@@ -132,7 +131,7 @@ size_t getSizeOfUnderlyingType(const TDataMember& dm)
     if (strcmp(tname, "string") == 0 || strcmp(tname, "std::string")) {
       return sizeof(std::string);
     }
-    LOG(ERROR) << "ENCOUNTERED AN UNSUPPORTED TYPE " << tname << "IN A CONFIGURABLE PARAMETER";
+    LOG(error) << "ENCOUNTERED AN UNSUPPORTED TYPE " << tname << "IN A CONFIGURABLE PARAMETER";
   }
   return 0;
 }
@@ -182,20 +181,20 @@ std::string asString(TDataMember const& dm, char* pointer)
   }
   // potentially other cases to be added here
 
-  LOG(ERROR) << "COULD NOT REPRESENT AS STRING";
-  return nullptr;
+  LOG(error) << "COULD NOT REPRESENT AS STRING";
+  return std::string();
 }
 
 // ----------------------------------------------------------------------
 
 std::vector<ParamDataMember>* _ParamHelper::getDataMembersImpl(std::string const& mainkey, TClass* cl, void* obj,
-                                                               std::map<std::string, ConfigurableParam::EParamProvenance> const* provmap)
+                                                               std::map<std::string, ConfigurableParam::EParamProvenance> const* provmap, size_t globaloffset)
 {
   std::vector<ParamDataMember>* members = new std::vector<ParamDataMember>;
 
-  auto toDataMember = [&members, obj, mainkey, provmap](const TDataMember* dm, int index, int size) {
+  auto toDataMember = [&members, obj, mainkey, provmap, globaloffset](const TDataMember* dm, int index, int size) {
     auto TS = getSizeOfUnderlyingType(*dm);
-    char* pointer = ((char*)obj) + dm->GetOffset() + index * TS;
+    char* pointer = ((char*)obj) + dm->GetOffset() + index * TS + globaloffset;
     const std::string name = getName(dm, index, size);
     auto value = asString(*dm, pointer);
 
@@ -273,7 +272,7 @@ std::type_info const& nameToTypeInfo(const char* tname, TDataType const* dt)
   if (strcmp(tname, "string") == 0 || strcmp(tname, "std::string")) {
     return typeid(std::string);
   }
-  LOG(ERROR) << "ENCOUNTERED AN UNSUPPORTED TYPE " << tname << "IN A CONFIGURABLE PARAMETER";
+  LOG(error) << "ENCOUNTERED AN UNSUPPORTED TYPE " << tname << "IN A CONFIGURABLE PARAMETER";
   return typeid("ERROR");
 }
 
@@ -281,14 +280,14 @@ std::type_info const& nameToTypeInfo(const char* tname, TDataType const* dt)
 
 void _ParamHelper::fillKeyValuesImpl(std::string const& mainkey, TClass* cl, void* obj, boost::property_tree::ptree* tree,
                                      std::map<std::string, std::pair<std::type_info const&, void*>>* keytostoragemap,
-                                     EnumRegistry* enumRegistry)
+                                     EnumRegistry* enumRegistry, size_t globaloffset)
 {
   boost::property_tree::ptree localtree;
-  auto fillMap = [obj, &mainkey, &localtree, &keytostoragemap, &enumRegistry](const TDataMember* dm, int index, int size) {
+  auto fillMap = [obj, &mainkey, &localtree, &keytostoragemap, &enumRegistry, globaloffset](const TDataMember* dm, int index, int size) {
     const auto name = getName(dm, index, size);
     auto dt = dm->GetDataType();
     auto TS = getSizeOfUnderlyingType(*dm);
-    char* pointer = ((char*)obj) + dm->GetOffset() + index * TS;
+    char* pointer = ((char*)obj) + dm->GetOffset() + index * TS + globaloffset;
     localtree.put(name, asString(*dm, pointer));
 
     auto key = mainkey + "." + name;
@@ -309,20 +308,35 @@ void _ParamHelper::fillKeyValuesImpl(std::string const& mainkey, TClass* cl, voi
 
 // ----------------------------------------------------------------------
 
-void _ParamHelper::printMembersImpl(std::string const& mainkey, std::vector<ParamDataMember> const* members, bool showProv)
+void _ParamHelper::printMembersImpl(std::string const& mainkey, std::vector<ParamDataMember> const* members, bool showProv, bool useLogger)
 {
-  _ParamHelper::outputMembersImpl(std::cout, mainkey, members, showProv);
+
+  _ParamHelper::outputMembersImpl(std::cout, mainkey, members, showProv, useLogger);
 }
 
-void _ParamHelper::outputMembersImpl(std::ostream& out, std::string const& mainkey, std::vector<ParamDataMember> const* members, bool showProv)
+void _ParamHelper::outputMembersImpl(std::ostream& out, std::string const& mainkey, std::vector<ParamDataMember> const* members, bool showProv, bool useLogger)
 {
   if (members == nullptr) {
     return;
   }
 
   for (auto& member : *members) {
-    out << member.toString(mainkey, showProv);
+    if (useLogger) {
+      LOG(info) << member.toString(mainkey, showProv);
+    } else {
+      out << member.toString(mainkey, showProv) << "\n";
+    }
   }
+}
+
+size_t _ParamHelper::getHashImpl(std::string const& mainkey, std::vector<ParamDataMember> const* members)
+{
+  size_t hash = 0;
+  boost::hash_combine(hash, mainkey);
+  for (auto& member : *members) {
+    boost::hash_combine(hash, member.value);
+  }
+  return hash;
 }
 
 // ----------------------------------------------------------------------
@@ -341,14 +355,14 @@ bool isMemblockDifferent(char const* block1, char const* block2, int sizeinbytes
 // ----------------------------------------------------------------------
 
 void _ParamHelper::assignmentImpl(std::string const& mainkey, TClass* cl, void* to, void* from,
-                                  std::map<std::string, ConfigurableParam::EParamProvenance>* provmap)
+                                  std::map<std::string, ConfigurableParam::EParamProvenance>* provmap, size_t globaloffset)
 {
-  auto assignifchanged = [to, from, &mainkey, provmap](const TDataMember* dm, int index, int size) {
+  auto assignifchanged = [to, from, &mainkey, provmap, globaloffset](const TDataMember* dm, int index, int size) {
     const auto name = getName(dm, index, size);
     auto dt = dm->GetDataType();
     auto TS = getSizeOfUnderlyingType(*dm);
-    char* pointerto = ((char*)to) + dm->GetOffset() + index * TS;
-    char* pointerfrom = ((char*)from) + dm->GetOffset() + index * TS;
+    char* pointerto = ((char*)to) + dm->GetOffset() + index * TS + globaloffset;
+    char* pointerfrom = ((char*)from) + dm->GetOffset() + index * TS + globaloffset;
 
     // lambda to update the provenance
     auto updateProv = [&mainkey, name, provmap]() {
@@ -357,7 +371,7 @@ void _ParamHelper::assignmentImpl(std::string const& mainkey, TClass* cl, void* 
       if (iter != provmap->end()) {
         iter->second = ConfigurableParam::EParamProvenance::kCCDB; // TODO: change to "current STATE"??
       } else {
-        LOG(WARN) << "KEY " << key << " NOT FOUND WHILE UPDATING PARAMETER PROVENANCE";
+        LOG(warn) << "KEY " << key << " NOT FOUND WHILE UPDATING PARAMETER PROVENANCE";
       }
     };
 
@@ -388,14 +402,14 @@ void _ParamHelper::assignmentImpl(std::string const& mainkey, TClass* cl, void* 
 // ----------------------------------------------------------------------
 
 void _ParamHelper::syncCCDBandRegistry(const std::string& mainkey, TClass* cl, void* to, void* from,
-                                       std::map<std::string, ConfigurableParam::EParamProvenance>* provmap)
+                                       std::map<std::string, ConfigurableParam::EParamProvenance>* provmap, size_t globaloffset)
 {
-  auto sync = [to, from, &mainkey, provmap](const TDataMember* dm, int index, int size) {
+  auto sync = [to, from, &mainkey, provmap, globaloffset](const TDataMember* dm, int index, int size) {
     const auto name = getName(dm, index, size);
     auto dt = dm->GetDataType();
     auto TS = getSizeOfUnderlyingType(*dm);
-    char* pointerto = ((char*)to) + dm->GetOffset() + index * TS;
-    char* pointerfrom = ((char*)from) + dm->GetOffset() + index * TS;
+    char* pointerto = ((char*)to) + dm->GetOffset() + index * TS + globaloffset;
+    char* pointerfrom = ((char*)from) + dm->GetOffset() + index * TS + globaloffset;
 
     // check current provenance
     auto key = mainkey + "." + name;
@@ -434,6 +448,6 @@ void _ParamHelper::syncCCDBandRegistry(const std::string& mainkey, TClass* cl, v
 
 void _ParamHelper::printWarning(std::type_info const& tinfo)
 {
-  LOG(WARNING) << "Registered parameter class with name " << tinfo.name()
+  LOG(warning) << "Registered parameter class with name " << tinfo.name()
                << " has no ROOT dictionary and will not be available in the configurable parameter system";
 }

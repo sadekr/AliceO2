@@ -14,17 +14,6 @@
 /// @since  Oct 1, 2020
 /// @brief
 
-// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
-// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
-// All rights not expressly granted are reserved.
-//
-// This software is distributed under the terms of the GNU General Public
-// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
-//
-// In applying this license CERN does not waive the privileges and immunities
-// granted to it by virtue of its status as an Intergovernmental Organization
-// or submit itself to any jurisdiction.
-
 #include "ReconstructionDataFormats/TrackParametrization.h"
 #include "ReconstructionDataFormats/Vertex.h"
 #include "ReconstructionDataFormats/DCA.h"
@@ -59,9 +48,9 @@ GPUd() TrackParametrization<value_T>::TrackParametrization(const dim3_t& xyz, co
   value_t radPos2 = xyz[0] * xyz[0] + xyz[1] * xyz[1];
   value_t alp = 0;
   if (sectorAlpha || radPos2 < 1) {
-    alp = math_utils::detail::atan2<value_T>(pxpypz[1], pxpypz[0]);
+    alp = gpu::CAMath::ATan2(pxpypz[1], pxpypz[0]);
   } else {
-    alp = math_utils::detail::atan2<value_T>(xyz[1], xyz[0]);
+    alp = gpu::CAMath::ATan2(xyz[1], xyz[0]);
   }
   if (sectorAlpha) {
     alp = math_utils::detail::angle2Alpha<value_t>(alp);
@@ -72,7 +61,7 @@ GPUd() TrackParametrization<value_T>::TrackParametrization(const dim3_t& xyz, co
   // protection against cosp<0
   if (cs * pxpypz[0] + sn * pxpypz[1] < 0) {
     LOG(debug) << "alpha from phiPos() will invalidate this track parameters, overriding to alpha from phi()";
-    alp = math_utils::detail::atan2<value_T>(pxpypz[1], pxpypz[0]);
+    alp = gpu::CAMath::ATan2(pxpypz[1], pxpypz[0]);
     if (sectorAlpha) {
       alp = math_utils::detail::angle2Alpha<value_t>(alp);
     }
@@ -80,14 +69,14 @@ GPUd() TrackParametrization<value_T>::TrackParametrization(const dim3_t& xyz, co
   }
 
   // protection:  avoid alpha being too close to 0 or +-pi/2
-  if (math_utils::detail::abs<value_T>(sn) < 2 * kSafe) {
+  if (gpu::CAMath::Abs(sn) < 2 * kSafe) {
     if (alp > 0) {
       alp += alp < constants::math::PIHalf ? 2 * kSafe : -2 * kSafe;
     } else {
       alp += alp > -constants::math::PIHalf ? -2 * kSafe : 2 * kSafe;
     }
     math_utils::detail::sincos(alp, sn, cs);
-  } else if (math_utils::detail::abs<value_T>(cs) < 2 * kSafe) {
+  } else if (gpu::CAMath::Abs(cs) < 2 * kSafe) {
     if (alp > 0) {
       alp += alp > constants::math::PIHalf ? 2 * kSafe : -2 * kSafe;
     } else {
@@ -103,20 +92,20 @@ GPUd() TrackParametrization<value_T>::TrackParametrization(const dim3_t& xyz, co
   math_utils::detail::rotateZ<value_t>(ver, -alp);
   math_utils::detail::rotateZ<value_t>(mom, -alp);
   //
-  value_t ptI = 1.f / sqrt(mom[0] * mom[0] + mom[1] * mom[1]);
+  value_t ptI = 1.f / gpu::CAMath::Sqrt(mom[0] * mom[0] + mom[1] * mom[1]);
   mX = ver[0];
   mAlpha = alp;
   mP[kY] = ver[1];
   mP[kZ] = ver[2];
   mP[kSnp] = mom[1] * ptI;
   mP[kTgl] = mom[2] * ptI;
-  mAbsCharge = math_utils::detail::abs<value_T>(charge);
+  mAbsCharge = gpu::CAMath::Abs(charge);
   mP[kQ2Pt] = charge ? ptI * charge : ptI;
   mPID = pid;
   //
-  if (math_utils::detail::abs<value_T>(1 - getSnp()) < kSafe) {
+  if (gpu::CAMath::Abs(1 - getSnp()) < kSafe) {
     mP[kSnp] = 1.f - kSafe; // Protection
-  } else if (math_utils::detail::abs<value_T>(-1 - getSnp()) < kSafe) {
+  } else if (gpu::CAMath::Abs(-1 - getSnp()) < kSafe) {
     mP[kSnp] = -1.f + kSafe; // Protection
   }
   //
@@ -127,11 +116,11 @@ template <typename value_T>
 GPUd() bool TrackParametrization<value_T>::getPxPyPzGlo(dim3_t& pxyz) const
 {
   // track momentum
-  if (math_utils::detail::abs<value_T>(getQ2Pt()) < constants::math::Almost0 || math_utils::detail::abs<value_T>(getSnp()) > constants::math::Almost1) {
+  if (gpu::CAMath::Abs(getQ2Pt()) < constants::math::Almost0 || gpu::CAMath::Abs(getSnp()) > constants::math::Almost1) {
     return false;
   }
   value_t cs, sn, pt = getPt();
-  value_t r = math_utils::detail::sqrt<value_T>((1.f - getSnp()) * (1.f + getSnp()));
+  value_t r = gpu::CAMath::Sqrt((1.f - getSnp()) * (1.f + getSnp()));
   math_utils::detail::sincos(getAlpha(), sn, cs);
   pxyz[0] = pt * (r * cs - getSnp() * sn);
   pxyz[1] = pt * (getSnp() * cs + r * sn);
@@ -144,14 +133,14 @@ template <typename value_T>
 GPUd() bool TrackParametrization<value_T>::getPosDirGlo(gpu::gpustd::array<value_t, 9>& posdirp) const
 {
   // fill vector with lab x,y,z,px/p,py/p,pz/p,p,sinAlpha,cosAlpha
-  value_t ptI = math_utils::detail::abs<value_T>(getQ2Pt());
+  value_t ptI = getPtInv();
   value_t snp = getSnp();
-  if (ptI < constants::math::Almost0 || math_utils::detail::abs<value_T>(snp) > constants::math::Almost1) {
+  if (gpu::CAMath::Abs(snp) > constants::math::Almost1) {
     return false;
   }
   value_t &sn = posdirp[7], &cs = posdirp[8];
-  value_t csp = math_utils::detail::sqrt<value_T>((1.f - snp) * (1.f + snp));
-  value_t cstht = math_utils::detail::sqrt<value_T>(1.f + getTgl() * getTgl());
+  value_t csp = gpu::CAMath::Sqrt((1.f - snp) * (1.f + snp));
+  value_t cstht = gpu::CAMath::Sqrt(1.f + getTgl() * getTgl());
   value_t csthti = 1.f / cstht;
   math_utils::detail::sincos(getAlpha(), sn, cs);
   posdirp[0] = getX() * cs - getY() * sn;
@@ -169,7 +158,7 @@ template <typename value_T>
 GPUd() bool TrackParametrization<value_T>::rotateParam(value_t alpha)
 {
   // rotate to alpha frame
-  if (math_utils::detail::abs<value_T>(getSnp()) > constants::math::Almost1) {
+  if (gpu::CAMath::Abs(getSnp()) > constants::math::Almost1) {
     LOGP(debug, "Precondition is not satisfied: |sin(phi)|>1 ! {:f}", getSnp());
     return false;
   }
@@ -178,16 +167,16 @@ GPUd() bool TrackParametrization<value_T>::rotateParam(value_t alpha)
   //
   value_t ca = 0, sa = 0;
   math_utils::detail::sincos(alpha - getAlpha(), sa, ca);
-  value_t snp = getSnp(), csp = math_utils::detail::sqrt<value_T>((1.f - snp) * (1.f + snp)); // Improve precision
+  value_t snp = getSnp(), csp = gpu::CAMath::Sqrt((1.f - snp) * (1.f + snp)); // Improve precision
   // RS: check if rotation does no invalidate track model (cos(local_phi)>=0, i.e. particle
   // direction in local frame is along the X axis
   if ((csp * ca + snp * sa) < 0) {
-    //LOGF(WARNING,"Rotation failed: local cos(phi) would become {:.2f}", csp * ca + snp * sa);
+    // LOGF(warning,"Rotation failed: local cos(phi) would become {:.2f}", csp * ca + snp * sa);
     return false;
   }
   //
   value_t tmp = snp * ca - csp * sa;
-  if (math_utils::detail::abs<value_T>(tmp) > constants::math::Almost1) {
+  if (gpu::CAMath::Abs(tmp) > constants::math::Almost1) {
     LOGP(debug, "Rotation failed: new snp {:.2f}", tmp);
     return false;
   }
@@ -209,34 +198,37 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, const di
   // X [cm] is in the "tracking coordinate system" of this track.
   // b[]={Bx,By,Bz} [kG] is in the Global coordidate system.
   //----------------------------------------------------------------
-
   value_t dx = xk - getX();
-  if (math_utils::detail::abs<value_T>(dx) < constants::math::Almost0) {
+  if (gpu::CAMath::Abs(dx) < constants::math::Almost0) {
     return true;
   }
   // Do not propagate tracks outside the ALICE detector
-  if (math_utils::detail::abs<value_T>(dx) > 1e5 || math_utils::detail::abs<value_T>(getY()) > 1e5 || math_utils::detail::abs<value_T>(getZ()) > 1e5) {
-    LOGP(warning, "Anomalous track, target X:{:f}", xk);
+  if (gpu::CAMath::Abs(dx) > 1e5 || gpu::CAMath::Abs(getY()) > 1e5 || gpu::CAMath::Abs(getZ()) > 1e5) {
+    LOG(warning) << "Anomalous track, traget X:" << xk;
     return false;
   }
   value_t crv = getCurvature(b[2]);
+  if (crv == 0.) {
+    return propagateParamTo(xk, 0.); // for the straight-line propagation use 1D field method
+  }
+
   value_t x2r = crv * dx;
   value_t f1 = getSnp(), f2 = f1 + x2r;
-  if (math_utils::detail::abs<value_T>(f1) > constants::math::Almost1 || math_utils::detail::abs<value_T>(f2) > constants::math::Almost1) {
+  if (gpu::CAMath::Abs(f1) > constants::math::Almost1 || gpu::CAMath::Abs(f2) > constants::math::Almost1) {
     return false;
   }
-  value_t r1 = math_utils::detail::sqrt<value_T>((1.f - f1) * (1.f + f1));
-  if (math_utils::detail::abs<value_T>(r1) < constants::math::Almost0) {
+  value_t r1 = gpu::CAMath::Sqrt((1.f - f1) * (1.f + f1));
+  if (gpu::CAMath::Abs(r1) < constants::math::Almost0) {
     return false;
   }
-  value_t r2 = math_utils::detail::sqrt<value_T>((1.f - f2) * (1.f + f2));
-  if (math_utils::detail::abs<value_T>(r2) < constants::math::Almost0) {
+  value_t r2 = gpu::CAMath::Sqrt((1.f - f2) * (1.f + f2));
+  if (gpu::CAMath::Abs(r2) < constants::math::Almost0) {
     return false;
   }
   value_t dy2dx = (f1 + f2) / (r1 + r2);
-  value_t step = (math_utils::detail::abs<value_T>(x2r) < 0.05f) ? dx * math_utils::detail::abs<value_T>(r2 + f2 * dy2dx)                                              // chord
-                                                                 : 2.f * CAMath::ASin(0.5f * dx * math_utils::detail::sqrt<value_T>(1.f + dy2dx * dy2dx) * crv) / crv; // arc
-  step *= math_utils::detail::sqrt<value_T>(1.f + getTgl() * getTgl());
+  value_t step = (gpu::CAMath::Abs(x2r) < 0.05f) ? dx * gpu::CAMath::Abs(r2 + f2 * dy2dx)                                              // chord
+                                                 : 2.f * CAMath::ASin(0.5f * dx * gpu::CAMath::Sqrt(1.f + dy2dx * dy2dx) * crv) / crv; // arc
+  step *= gpu::CAMath::Sqrt(1.f + getTgl() * getTgl());
   //
   // get the track x,y,z,px/p,py/p,pz/p,p,sinAlpha,cosAlpha in the Global System
   gpu::gpustd::array<value_t, 9> vecLab{0.f};
@@ -246,13 +238,13 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, const di
 
   // rotate to the system where Bx=By=0.
   value_t bxy2 = b[0] * b[0] + b[1] * b[1];
-  value_t bt = math_utils::detail::sqrt<value_T>(bxy2);
+  value_t bt = gpu::CAMath::Sqrt(bxy2);
   value_t cosphi = 1.f, sinphi = 0.f;
   if (bt > constants::math::Almost0) {
     cosphi = b[0] / bt;
     sinphi = b[1] / bt;
   }
-  value_t bb = math_utils::detail::sqrt<value_T>(bxy2 + b[2] * b[2]);
+  value_t bb = gpu::CAMath::Sqrt(bxy2 + b[2] * b[2]);
   value_t costet = 1.f, sintet = 0.f;
   if (bb > constants::math::Almost0) {
     costet = b[2] / bb;
@@ -290,8 +282,8 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, const di
 
   // Do the final correcting step to the target plane (linear approximation)
   value_t x = vecLab[0], y = vecLab[1], z = vecLab[2];
-  if (math_utils::detail::abs<value_T>(dx) > constants::math::Almost0) {
-    if (math_utils::detail::abs<value_T>(vecLab[3]) < constants::math::Almost0) {
+  if (gpu::CAMath::Abs(dx) > constants::math::Almost0) {
+    if (gpu::CAMath::Abs(vecLab[3]) < constants::math::Almost0) {
       return false;
     }
     dx = xk - vecLab[0];
@@ -301,7 +293,7 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, const di
   }
 
   // Calculate the track parameters
-  t = 1.f / math_utils::detail::sqrt<value_T>(vecLab[3] * vecLab[3] + vecLab[4] * vecLab[4]);
+  t = 1.f / gpu::CAMath::Sqrt(vecLab[3] * vecLab[3] + vecLab[4] * vecLab[4]);
   mX = xk;
   mP[kY] = y;
   mP[kZ] = z;
@@ -322,30 +314,26 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, value_t 
   // distances only (<mm, i.e. misalignment)
   //----------------------------------------------------------------
   value_t dx = xk - getX();
-  if (math_utils::detail::abs<value_T>(dx) < constants::math::Almost0) {
+  if (gpu::CAMath::Abs(dx) < constants::math::Almost0) {
     return true;
   }
-  value_t crv = (math_utils::detail::abs<value_T>(b) < constants::math::Almost0) ? 0.f : getCurvature(b);
+  value_t crv = (gpu::CAMath::Abs(b) < constants::math::Almost0) ? 0.f : getCurvature(b);
   value_t x2r = crv * dx;
   value_t f1 = getSnp(), f2 = f1 + x2r;
-  if ((math_utils::detail::abs<value_T>(f1) > constants::math::Almost1) || (math_utils::detail::abs<value_T>(f2) > constants::math::Almost1)) {
+  if ((gpu::CAMath::Abs(f1) > constants::math::Almost1) || (gpu::CAMath::Abs(f2) > constants::math::Almost1)) {
     return false;
   }
-  value_t r1 = math_utils::detail::sqrt<value_T>((1.f - f1) * (1.f + f1));
-  if (math_utils::detail::abs<value_T>(r1) < constants::math::Almost0) {
+  value_t r1 = gpu::CAMath::Sqrt((1.f - f1) * (1.f + f1));
+  if (gpu::CAMath::Abs(r1) < constants::math::Almost0) {
     return false;
   }
-  value_t r2 = math_utils::detail::sqrt<value_T>((1.f - f2) * (1.f + f2));
-  if (math_utils::detail::abs<value_T>(r2) < constants::math::Almost0) {
+  value_t r2 = gpu::CAMath::Sqrt((1.f - f2) * (1.f + f2));
+  if (gpu::CAMath::Abs(r2) < constants::math::Almost0) {
     return false;
   }
-  mX = xk;
   double dy2dx = (f1 + f2) / (r1 + r2);
-  mP[kY] += dx * dy2dx;
-  mP[kSnp] += x2r;
-  if (math_utils::detail::abs<value_T>(x2r) < 0.05f) {
-    mP[kZ] += dx * (r2 + f2 * dy2dx) * getTgl();
-  } else {
+  bool arcz = gpu::CAMath::Abs(x2r) > 0.05f;
+  if (arcz) {
     // for small dx/R the linear apporximation of the arc by the segment is OK,
     // but at large dx/R the error is very large and leads to incorrect Z propagation
     // angle traversed delta = 2*asin(dist_start_end / R / 2), hence the arc is: R*deltaPhi
@@ -354,7 +342,11 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, value_t 
     //    double rot = 2*TMath::ASin(0.5*chord*crv); // angular difference seen from the circle center
     //    track1 += rot/crv*track3;
     //
-    value_t rot = CAMath::ASin(r1 * f2 - r2 * f1);  // more economic version from Yura.
+    auto arg = r1 * f2 - r2 * f1;
+    if (gpu::CAMath::Abs(arg) > constants::math::Almost1) {
+      return false;
+    }
+    value_t rot = CAMath::ASin(arg);                // more economic version from Yura.
     if (f1 * f1 + f2 * f2 > 1.f && f1 * f2 < 0.f) { // special cases of large rotations or large abs angles
       if (f2 > 0.f) {
         rot = constants::math::PI - rot; //
@@ -363,7 +355,12 @@ GPUd() bool TrackParametrization<value_T>::propagateParamTo(value_t xk, value_t 
       }
     }
     mP[kZ] += getTgl() / crv * rot;
+  } else {
+    mP[kZ] += dx * (r2 + f2 * dy2dx) * getTgl();
   }
+  mX = xk;
+  mP[kY] += dx * dy2dx;
+  mP[kSnp] += x2r;
   return true;
 }
 
@@ -374,27 +371,27 @@ GPUd() bool TrackParametrization<value_T>::propagateParamToDCA(const math_utils:
   // propagate track to DCA to the vertex
   value_t sn, cs, alp = getAlpha();
   math_utils::detail::sincos(alp, sn, cs);
-  value_t x = getX(), y = getY(), snp = getSnp(), csp = math_utils::detail::sqrt<value_T>((1.f - snp) * (1.f + snp));
+  value_t x = getX(), y = getY(), snp = getSnp(), csp = gpu::CAMath::Sqrt((1.f - snp) * (1.f + snp));
   value_t xv = vtx.X() * cs + vtx.Y() * sn, yv = -vtx.X() * sn + vtx.Y() * cs, zv = vtx.Z();
   x -= xv;
   y -= yv;
-  //Estimate the impact parameter neglecting the track curvature
-  value_t d = math_utils::detail::abs<value_T>(x * snp - y * csp);
+  // Estimate the impact parameter neglecting the track curvature
+  value_t d = gpu::CAMath::Abs(x * snp - y * csp);
   if (d > maxD) {
     return false;
   }
   value_t crv = getCurvature(b);
   value_t tgfv = -(crv * x - snp) / (crv * y + csp);
-  sn = tgfv / math_utils::detail::sqrt<value_T>(1.f + tgfv * tgfv);
-  cs = math_utils::detail::sqrt<value_T>((1.f - sn) * (1.f + sn));
-  cs = (math_utils::detail::abs<value_T>(tgfv) > constants::math::Almost0) ? sn / tgfv : constants::math::Almost1;
+  sn = tgfv / gpu::CAMath::Sqrt(1.f + tgfv * tgfv);
+  cs = gpu::CAMath::Sqrt((1.f - sn) * (1.f + sn));
+  cs = (gpu::CAMath::Abs(tgfv) > constants::math::Almost0) ? sn / tgfv : constants::math::Almost1;
 
   x = xv * cs + yv * sn;
   yv = -xv * sn + yv * cs;
   xv = x;
 
   auto tmpT(*this); // operate on the copy to recover after the failure
-  alp += math_utils::detail::asin<value_T>(sn);
+  alp += gpu::CAMath::ASin(sn);
   if (!tmpT.rotateParam(alp) || !tmpT.propagateParamTo(xv, b)) {
 #ifndef GPUCA_ALIGPUCODE
     LOG(debug) << "failed to propagate to alpha=" << alp << " X=" << xv << " for vertex "
@@ -422,26 +419,26 @@ GPUd() bool TrackParametrization<value_T>::getYZAt(value_t xk, value_t b, value_
   value_t dx = xk - getX();
   y = mP[kY];
   z = mP[kZ];
-  if (math_utils::detail::abs<value_T>(dx) < constants::math::Almost0) {
+  if (gpu::CAMath::Abs(dx) < constants::math::Almost0) {
     return true;
   }
   value_t crv = getCurvature(b);
   value_t x2r = crv * dx;
   value_t f1 = getSnp(), f2 = f1 + x2r;
-  if ((math_utils::detail::abs<value_T>(f1) > constants::math::Almost1) || (math_utils::detail::abs<value_T>(f2) > constants::math::Almost1)) {
+  if ((gpu::CAMath::Abs(f1) > constants::math::Almost1) || (gpu::CAMath::Abs(f2) > constants::math::Almost1)) {
     return false;
   }
-  value_t r1 = math_utils::detail::sqrt<value_T>((1.f - f1) * (1.f + f1));
-  if (math_utils::detail::abs<value_T>(r1) < constants::math::Almost0) {
+  value_t r1 = gpu::CAMath::Sqrt((1.f - f1) * (1.f + f1));
+  if (gpu::CAMath::Abs(r1) < constants::math::Almost0) {
     return false;
   }
-  value_t r2 = math_utils::detail::sqrt<value_T>((1.f - f2) * (1.f + f2));
-  if (math_utils::detail::abs<value_T>(r2) < constants::math::Almost0) {
+  value_t r2 = gpu::CAMath::Sqrt((1.f - f2) * (1.f + f2));
+  if (gpu::CAMath::Abs(r2) < constants::math::Almost0) {
     return false;
   }
   double dy2dx = (f1 + f2) / (r1 + r2);
   y += dx * dy2dx;
-  if (math_utils::detail::abs<value_T>(x2r) < 0.05f) {
+  if (gpu::CAMath::Abs(x2r) < 0.05f) {
     z += dx * (r2 + f2 * dy2dx) * getTgl();
   } else {
     // for small dx/R the linear apporximation of the arc by the segment is OK,
@@ -498,14 +495,113 @@ GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<valu
   return getYZAt(xk, b, y, z) ? y : -9999.f;
 }
 
+//______________________________________________________________
+template <typename value_T>
+GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<value_T>::getSnpAt(value_t xk, value_t b) const
+{
+  ///< this method is just an alias for obtaining snp @ X in the tree->Draw()
+  value_t dx = xk - getX();
+  if (gpu::CAMath::Abs(dx) < constants::math::Almost0) {
+    return getSnp();
+  }
+  value_t crv = (gpu::CAMath::Abs(b) < constants::math::Almost0) ? 0.f : getCurvature(b);
+  value_t x2r = crv * dx;
+  return mP[kSnp] + x2r;
+}
+
+//______________________________________________________________
+template <typename value_T>
+GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<value_T>::getPhiAt(value_t xk, value_t b) const
+{
+  ///< this method is just an alias for obtaining phi @ X in the tree->Draw()
+  value_t dx = xk - getX();
+  if (gpu::CAMath::Abs(dx) < constants::math::Almost0) {
+    return getPhi();
+  }
+  value_t crv = (gpu::CAMath::Abs(b) < constants::math::Almost0) ? 0.f : getCurvature(b);
+  value_t x2r = crv * dx;
+  value_t snp = mP[kSnp] + x2r;
+  value_t phi = 999.;
+  if (gpu::CAMath::Abs(snp) < constants::math::Almost1) {
+    phi = gpu::CAMath::ASin(snp) + getAlpha();
+    math_utils::detail::bringTo02Pi<value_t>(phi);
+  }
+  return phi;
+}
+
+//______________________________________________________________
+template <typename value_T>
+GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<value_T>::getPhiPosAt(value_t xk, value_t b) const
+{
+  ///< this method is just an alias for obtaining phiPos @ X in the tree->Draw()
+  value_t phi = 999.;
+  auto y = getYAt(xk, b);
+  if (y > -9998.) {
+    phi = gpu::CAMath::ATan2(y, xk) + getAlpha();
+    math_utils::detail::bringTo02Pi<value_t>(phi);
+  }
+  return phi;
+}
+
+//______________________________________________________________
+template <typename value_T>
+GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<value_T>::getSnpAt(value_t alpha, value_t xk, value_t b) const
+{
+  ///< this method is just an alias for obtaining snp @ alpha, X in the tree->Draw()
+  math_utils::detail::bringToPMPi<value_t>(alpha);
+  value_t ca = 0, sa = 0;
+  math_utils::detail::sincos(alpha - getAlpha(), sa, ca);
+  value_t snp = getSnp(), csp = gpu::CAMath::Sqrt((1.f - snp) * (1.f + snp)); // Improve precision
+  // RS: check if rotation does no invalidate track model (cos(local_phi)>=0, i.e. particle direction in local frame is along the X axis
+  if ((csp * ca + snp * sa) < 0.) {
+    // LOGF(warning,"Rotation failed: local cos(phi) would become {:.2f}", csp * ca + snp * sa);
+    return -999;
+  }
+  value_t tmp = snp * ca - csp * sa;
+  if (gpu::CAMath::Abs(tmp) > constants::math::Almost1) {
+    LOGP(debug, "Rotation failed: new snp {:.2f}", tmp);
+    return -999;
+  }
+  value_t xrot = getX() * ca + getY() * sa;
+  value_t dx = xk - xrot;
+  value_t crv = (gpu::CAMath::Abs(b) < constants::math::Almost0) ? 0.f : getCurvature(b);
+  value_t x2r = crv * dx;
+  return tmp + x2r;
+}
+
 #ifndef GPUCA_ALIGPUCODE
 //_____________________________________________________________
 template <typename value_T>
 std::string TrackParametrization<value_T>::asString() const
 {
   // print parameters as string
-  return fmt::format("X:{:+.4e} Alp:{:+.3e} Par: {:+.4e} {:+.4e} {:+.4e} {:+.4e} {:+.4e} |Q|:{:d} {:s}",
+  return fmt::format("X:{:+.4e} Alp:{:+.3e} Par: {:+.4e} {:+.4e} {:+.4e} {:+.4e} {:+.4e} |Q|:{:d} {:s}\n",
                      getX(), getAlpha(), getY(), getZ(), getSnp(), getTgl(), getQ2Pt(), getAbsCharge(), getPID().getName());
+}
+
+//_____________________________________________________________
+template <typename value_T>
+std::string TrackParametrization<value_T>::asStringHexadecimal()
+{
+  auto _X = getX();
+  auto _Alpha = getAlpha();
+  auto _Y = getY();
+  auto _Z = getZ();
+  auto _Snp = getSnp();
+  auto _Tgl = getTgl();
+  float _Q2Pt = getQ2Pt();
+  float _AbsCharge = getAbsCharge();
+  // print parameters as string
+  return fmt::format("X:{:x} Alp:{:x} Par: {:x} {:x} {:x} {:x} {:x} |Q|:{:x} {:s}\n",
+                     reinterpret_cast<const unsigned int&>(_X),
+                     reinterpret_cast<const unsigned int&>(_Alpha),
+                     reinterpret_cast<const unsigned int&>(_Y),
+                     reinterpret_cast<const unsigned int&>(_Z),
+                     reinterpret_cast<const unsigned int&>(_Snp),
+                     reinterpret_cast<const unsigned int&>(_Tgl),
+                     reinterpret_cast<const unsigned int&>(_Q2Pt),
+                     reinterpret_cast<const unsigned int&>(_AbsCharge),
+                     getPID().getName());
 }
 #endif
 
@@ -516,6 +612,30 @@ GPUd() void TrackParametrization<value_T>::printParam() const
   // print parameters
 #ifndef GPUCA_ALIGPUCODE
   printf("%s\n", asString().c_str());
+#elif !defined(GPUCA_GPUCODE_DEVICE) || (!defined(__OPENCL__) && defined(GPUCA_GPU_DEBUG_PRINT))
+  printf("X:%+.4e Alp:%+.3e Par: %+.4e %+.4e %+.4e %+.4e %+.4e |Q|:%d %s\n",
+         getX(), getAlpha(), getY(), getZ(), getSnp(), getTgl(), getQ2Pt(), getAbsCharge(), getPID().getName());
+#endif
+}
+
+//______________________________________________________________
+template <typename value_T>
+GPUd() void TrackParametrization<value_T>::printParamHexadecimal()
+{
+  // print parameters
+#ifndef GPUCA_ALIGPUCODE
+  printf("%s\n", asStringHexadecimal().c_str());
+#elif !defined(GPUCA_GPUCODE_DEVICE) || (!defined(__OPENCL__) && defined(GPUCA_GPU_DEBUG_PRINT))
+  printf("X:%x Alp:%x Par: %x %x %x %x %x |Q|:%x %s\n",
+         gpu::CAMath::Float2UIntReint(getX()),
+         gpu::CAMath::Float2UIntReint(getAlpha()),
+         gpu::CAMath::Float2UIntReint(getY()),
+         gpu::CAMath::Float2UIntReint(getZ()),
+         gpu::CAMath::Float2UIntReint(getSnp()),
+         gpu::CAMath::Float2UIntReint(getTgl()),
+         gpu::CAMath::Float2UIntReint(getQ2Pt()),
+         gpu::CAMath::Float2UIntReint(getAbsCharge()),
+         getPID().getName());
 #endif
 }
 
@@ -534,17 +654,24 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
   const auto fy = mP[0], sn = mP[2];
   const value_t kEps = 1.e-6;
   //
+  if (gpu::CAMath::Abs(getSnp()) > constants::math::Almost1) {
+    return false;
+  }
   auto crv = getCurvature(bz);
-  if (math_utils::detail::abs<value_T>(crv) > constants::math::Almost0) { // helix
+  while (gpu::CAMath::Abs(crv) > constants::math::Almost0) { // helix ?
     // get center of the track circle
-    math_utils::CircleXY<value_t> circle;
+    math_utils::CircleXY<value_t> circle{};
     getCircleParamsLoc(bz, circle);
-    value_t r0 = math_utils::detail::sqrt<value_T>(circle.getCenterD2());
+    if (circle.rC == 0.) {
+      crv = 0.;
+      break;
+    }
+    value_t r0 = gpu::CAMath::Sqrt(circle.getCenterD2());
     if (r0 <= constants::math::Almost0) {
       return false; // the track is concentric to circle
     }
     value_t tR2r0 = 1.f, g = 0.f, tmp = 0.f;
-    if (math_utils::detail::abs<value_T>(circle.rC - r0) > kEps) {
+    if (gpu::CAMath::Abs(circle.rC - r0) > kEps) {
       tR2r0 = circle.rC / r0;
       g = 0.5f * (r * r / (r0 * circle.rC) - tR2r0 - 1.f / tR2r0);
       tmp = 1.f + g * tR2r0;
@@ -557,7 +684,7 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
     if (det < 0.f) {
       return false; // does not reach raduis r
     }
-    det = math_utils::detail::sqrt<value_T>(det);
+    det = gpu::CAMath::Sqrt(det);
     //
     // the intersection happens in 2 points: {circle.xC+tR*C,circle.yC+tR*S}
     // with C=f*c0+-|s0|*det and S=f*s0-+c0 sign(s0)*det
@@ -565,8 +692,8 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
     //
     x = circle.xC * tmp;
     value_t y = circle.yC * tmp;
-    if (math_utils::detail::abs<value_T>(circle.yC) > constants::math::Almost0) { // when circle.yC==0 the x,y is unique
-      value_t dfx = tR2r0 * math_utils::detail::abs<value_T>(circle.yC) * det;
+    if (gpu::CAMath::Abs(circle.yC) > constants::math::Almost0) { // when circle.yC==0 the x,y is unique
+      value_t dfx = tR2r0 * gpu::CAMath::Abs(circle.yC) * det;
       value_t dfy = tR2r0 * circle.xC * (circle.yC > 0.f ? det : -det);
       if (dir == DirAuto) {                              // chose the one which corresponds to smallest step
         value_t delta = (x - mX) * dfx - (y - fy) * dfy; // the choice of + in C will lead to smaller step if delta<0
@@ -577,7 +704,7 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
         if (dfeps < -kEps) {
           return true;
         }
-        if (math_utils::detail::abs<value_T>(dfeps) < kEps && math_utils::detail::abs<value_T>(mX * mX + fy * fy - r * r) < kEps) { // are we already in right r?
+        if (gpu::CAMath::Abs(dfeps) < kEps && gpu::CAMath::Abs(mX * mX + fy * fy - r * r) < kEps) { // are we already in right r?
           return mX;
         }
         x += dfx + dfx;
@@ -594,7 +721,7 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
         if (dfeps < -kEps) {
           return true;
         }
-        if (math_utils::detail::abs<value_T>(dfeps) < kEps && math_utils::detail::abs<value_T>(mX * mX + fy * fy - r * r) < kEps) { // are we already in right r?
+        if (gpu::CAMath::Abs(dfeps) < kEps && gpu::CAMath::Abs(mX * mX + fy * fy - r * r) < kEps) { // are we already in right r?
           return mX;
         }
         x -= dfx + dfx;
@@ -612,85 +739,86 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
         return false;
       }
     }
-  } else {                                                                  // this is a straight track
-    if (math_utils::detail::abs<value_T>(sn) >= constants::math::Almost1) { // || to Y axis
-      value_t det = (r - mX) * (r + mX);
-      if (det < 0.f) {
-        return false; // does not reach raduis r
-      }
-      x = mX;
-      if (dir == DirAuto) {
-        return true;
-      }
-      det = math_utils::detail::sqrt<value_T>(det);
-      if (dir == DirOutward) { // along the track direction
-        if (sn > 0.f) {
-          if (fy > det) {
-            return false; // track is along Y axis and above the circle
-          }
-        } else {
-          if (fy < -det) {
-            return false; // track is against Y axis amd belo the circle
-          }
-        }
-      } else if (dir == DirInward) { // against track direction
-        if (sn > 0.f) {
-          if (fy < -det) {
-            return false; // track is along Y axis
-          }
-        } else if (fy > det) {
-          return false; // track is against Y axis
-        }
-      }
-    } else if (math_utils::detail::abs<value_T>(sn) <= constants::math::Almost0) { // || to X axis
-      value_t det = (r - fy) * (r + fy);
-      if (det < 0.f) {
-        return false; // does not reach raduis r
-      }
-      det = math_utils::detail::sqrt<value_T>(det);
-      if (dir == DirAuto) {
-        x = mX > 0.f ? det : -det; // choose the solution requiring the smalest step
-        return true;
-      } else if (dir == DirOutward) { // along the track direction
-        if (mX > det) {
-          return false; // current point is in on the right from the circle
-        } else {
-          x = (mX < -det) ? -det : det; // on the left : within the circle
-        }
-      } else { // against the track direction
-        if (mX < -det) {
-          return false;
-        } else {
-          x = mX > det ? det : -det;
-        }
-      }
-    } else { // general case of straight line
-      value_t cs = math_utils::detail::sqrt<value_T>((1.f - sn) * (1.f + sn));
-      value_t xsyc = mX * sn - fy * cs;
-      value_t det = (r - xsyc) * (r + xsyc);
-      if (det < 0.f) {
-        return false; // does not reach raduis r
-      }
-      det = math_utils::detail::sqrt<value_T>(det);
-      value_t xcys = mX * cs + fy * sn;
-      value_t t = -xcys;
-      if (dir == DirAuto) {
-        t += t > 0.f ? -det : det; // chose the solution requiring the smalest step
-      } else if (dir > 0) {        // go in increasing mX direction. ( t+-det > 0)
-        if (t >= -det) {
-          t += -det; // take minimal step giving t>0
-        } else {
-          return false; // both solutions have negative t
-        }
-      } else { // go in increasing mX direction. (t+-det < 0)
-        if (t < det) {
-          t -= det; // take minimal step giving t<0
-        } else {
-          return false; // both solutions have positive t
-        }
-      }
-      x = mX + cs * t;
+    return x;
+  }
+  // this is a straight track
+  if (gpu::CAMath::Abs(sn) >= constants::math::Almost1) { // || to Y axis
+    value_t det = (r - mX) * (r + mX);
+    if (det < 0.f) {
+      return false; // does not reach raduis r
     }
+    x = mX;
+    if (dir == DirAuto) {
+      return true;
+    }
+    det = gpu::CAMath::Sqrt(det);
+    if (dir == DirOutward) { // along the track direction
+      if (sn > 0.f) {
+        if (fy > det) {
+          return false; // track is along Y axis and above the circle
+        }
+      } else {
+        if (fy < -det) {
+          return false; // track is against Y axis amd belo the circle
+        }
+      }
+    } else if (dir == DirInward) { // against track direction
+      if (sn > 0.f) {
+        if (fy < -det) {
+          return false; // track is along Y axis
+        }
+      } else if (fy > det) {
+        return false; // track is against Y axis
+      }
+    }
+  } else if (gpu::CAMath::Abs(sn) <= constants::math::Almost0) { // || to X axis
+    value_t det = (r - fy) * (r + fy);
+    if (det < 0.f) {
+      return false; // does not reach raduis r
+    }
+    det = gpu::CAMath::Sqrt(det);
+    if (dir == DirAuto) {
+      x = mX > 0.f ? det : -det; // choose the solution requiring the smalest step
+      return true;
+    } else if (dir == DirOutward) { // along the track direction
+      if (mX > det) {
+        return false; // current point is in on the right from the circle
+      } else {
+        x = (mX < -det) ? -det : det; // on the left : within the circle
+      }
+    } else { // against the track direction
+      if (mX < -det) {
+        return false;
+      } else {
+        x = mX > det ? det : -det;
+      }
+    }
+  } else { // general case of straight line
+    value_t cs = gpu::CAMath::Sqrt((1.f - sn) * (1.f + sn));
+    value_t xsyc = mX * sn - fy * cs;
+    value_t det = (r - xsyc) * (r + xsyc);
+    if (det < 0.f) {
+      return false; // does not reach raduis r
+    }
+    det = gpu::CAMath::Sqrt(det);
+    value_t xcys = mX * cs + fy * sn;
+    value_t t = -xcys;
+    if (dir == DirAuto) {
+      t += t > 0.f ? -det : det; // chose the solution requiring the smalest step
+    } else if (dir > 0) {        // go in increasing mX direction. ( t+-det > 0)
+      if (t >= -det) {
+        t += det; // take minimal step giving t>0
+      } else {
+        return false; // both solutions have negative t
+      }
+    } else { // go in decreasing mX direction. (t+-det < 0)
+      if (t < det) {
+        t -= det; // take minimal step giving t<0
+      } else {
+        return false; // both solutions have positive t
+      }
+    }
+    x = mX + cs * t;
   }
   //
   return true;
@@ -698,7 +826,7 @@ GPUd() bool TrackParametrization<value_T>::getXatLabR(value_t r, value_t& x, val
 
 //______________________________________________
 template <typename value_T>
-GPUd() bool TrackParametrization<value_T>::correctForELoss(value_t xrho, bool anglecorr, value_t dedx)
+GPUd() bool TrackParametrization<value_T>::correctForELoss(value_t xrho, bool anglecorr)
 {
   //------------------------------------------------------------------
   // This function corrects the track parameters for the energy loss in crossed material.
@@ -708,50 +836,119 @@ GPUd() bool TrackParametrization<value_T>::correctForELoss(value_t xrho, bool an
   // "dedx" - mean enery loss (GeV/(g/cm^2), if <=kCalcdEdxAuto : calculate on the fly
   // "anglecorr" - switch for the angular correction
   //------------------------------------------------------------------
-  constexpr value_t kMaxELossFrac = 0.3f; // max allowed fractional eloss
-  constexpr value_t kMinP = 0.01f;        // kill below this momentum
+  constexpr value_t kMinP = 0.01f; // kill below this momentum
 
-  // Apply angle correction, if requested
-  if (anglecorr) {
-    value_t csp2 = (1.f - getSnp()) * (1.f + getSnp()); // cos(phi)^2
-    value_t cst2I = (1.f + getTgl() * getTgl());        // 1/cos(lambda)^2
-    value_t angle = math_utils::detail::sqrt<value_T>(cst2I / (csp2));
-    xrho *= angle;
-  }
-  value_t p = getP();
-  value_t p2 = p * p;
-  value_t e2 = p2 + getPID().getMass2();
-  value_t beta2 = p2 / e2;
-
-  // Calculating the energy loss corrections************************
-  if ((xrho != 0.f) && (beta2 < 1.f)) {
-    if (dedx < kCalcdEdxAuto + constants::math::Almost1) { // request to calculate dedx on the fly
-      dedx = BetheBlochSolid(p / getPID().getMass());
-      if (mAbsCharge != 1) {
-        dedx *= mAbsCharge * mAbsCharge;
+  auto m = getPID().getMass();
+  if (m > 0 && xrho != 0.f) {
+    // Apply angle correction, if requested
+    if (anglecorr) {
+      value_t csp2 = (1.f - getSnp()) * (1.f + getSnp()); // cos(phi)^2
+      value_t cst2I = (1.f + getTgl() * getTgl());        // 1/cos(lambda)^2
+      value_t angle = gpu::CAMath::Sqrt(cst2I / (csp2));
+      xrho *= angle;
+    }
+    int charge2 = getAbsCharge() * getAbsCharge();
+    value_t p = getP(), p0 = p, p2 = p * p, e2 = p2 + getPID().getMass2(), massInv = 1. / m, bg = p * massInv;
+    value_t e = gpu::CAMath::Sqrt(e2), ekin = e - m, dedx = getdEdxBBOpt(bg);
+#ifdef _BB_NONCONST_CORR_
+    value_t dedxDer = 0., dedx1 = dedx;
+#endif
+    if (charge2 != 1) {
+      dedx *= charge2;
+    }
+    value_t dE = dedx * xrho;
+    int na = 1 + int(gpu::CAMath::Abs(dE) / ekin * ELoss2EKinThreshInv);
+    if (na > MaxELossIter) {
+      na = MaxELossIter;
+    }
+    if (na > 1) {
+      dE /= na;
+      xrho /= na;
+#ifdef _BB_NONCONST_CORR_
+      dedxDer = getBetheBlochSolidDerivativeApprox(dedx1, bg); // require correction for non-constantness of dedx vs betagamma
+      if (charge2 != 1) {
+        dedxDer *= charge2;
+      }
+#endif
+    }
+    while (na--) {
+#ifdef _BB_NONCONST_CORR_
+      if (dedxDer != 0.) { // correction for non-constantness of dedx vs beta*gamma (in linear approximation): for a single step dE -> dE * [(exp(dedxDer) - 1)/dedxDer]
+        if (xrho < 0) {
+          dedxDer = -dedxDer; // E.loss ( -> positive derivative)
+        }
+        auto corrC = (gpu::CAMath::Exp(dedxDer) - 1.) / dedxDer;
+        dE *= corrC;
+      }
+#endif
+      e += dE;
+      if (e > m) { // stopped
+        p = gpu::CAMath::Sqrt(e * e - getPID().getMass2());
+      } else {
+        return false;
+      }
+      if (na) {
+        bg = p * massInv;
+        dedx = getdEdxBBOpt(bg);
+#ifdef _BB_NONCONST_CORR_
+        dedxDer = getBetheBlochSolidDerivativeApprox(dedx, bg);
+#endif
+        if (charge2 != 1) {
+          dedx *= charge2;
+#ifdef _BB_NONCONST_CORR_
+          dedxDer *= charge2;
+#endif
+        }
+        dE = dedx * xrho;
       }
     }
 
-    value_t dE = dedx * xrho;
-    value_t e = math_utils::detail::sqrt<value_T>(e2);
-    if (math_utils::detail::abs<value_T>(dE) > kMaxELossFrac * e) {
-      return false; // 30% energy loss is too much!
-    }
-    value_t eupd = e + dE;
-    value_t pupd2 = eupd * eupd - getPID().getMass2();
-    if (pupd2 < kMinP * kMinP) {
+    if (p < kMinP) {
       return false;
     }
-    setQ2Pt(getQ2Pt() * p / math_utils::detail::sqrt<value_T>(pupd2));
+    setQ2Pt(getQ2Pt() * p0 / p);
   }
 
   return true;
 }
 
+//______________________________________________
+template <typename value_T>
+GPUd() typename o2::track::TrackParametrization<value_T>::yzerr_t TrackParametrization<value_T>::getVertexInTrackFrame(const o2::dataformats::VertexBase& v) const
+{
+  // rotate vertex to track frame and return parameters used by getPredictedChi2 and update of TrackParametrizationWithError
+  value_t sn, cs;
+  math_utils::detail::sincos(-mAlpha, sn, cs); // use -alpha since we rotate from lab to tracking frame
+  value_t sn2 = sn * sn, cs2 = cs * cs, sncs = sn * cs;
+  value_t dsxysncs = 2. * v.getSigmaXY() * sncs;
+  return {{/*v.getX()*cs-v.getY()*sn,*/ v.getX() * sn + v.getY() * cs, v.getZ()},
+          {v.getSigmaX2() * sn2 + dsxysncs + v.getSigmaY2() * cs2, (sn + cs) * v.getSigmaYZ(), v.getSigmaZ2()}};
+}
+
+//______________________________________________
+template <typename value_T>
+GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<value_T>::getDCAYtoMV(value_t b, value_t xmv, value_t ymv, value_t zmv) const
+{
+  auto ttmp = *this;
+  dim2_t dca;
+  return ttmp.propagateParamToDCA({xmv, ymv, zmv}, b, &dca) ? dca[0] : -9999.;
+}
+
+//______________________________________________
+template <typename value_T>
+GPUd() typename TrackParametrization<value_T>::value_t TrackParametrization<value_T>::getDCAZtoMV(value_t b, value_t xmv, value_t ymv, value_t zmv) const
+{
+  auto ttmp = *this;
+  dim2_t dca;
+  return ttmp.propagateParamToDCA({xmv, ymv, zmv}, b, &dca) ? dca[1] : -9999.;
+}
+
 namespace o2::track
 {
+#if !defined(GPUCA_GPUCODE) || defined(GPUCA_GPUCODE_DEVICE) // FIXME: DR: WORKAROUND to avoid CUDA bug creating host symbols for device code.
 template class TrackParametrization<float>;
-#ifndef GPUCA_GPUCODE_DEVICE
+#endif
+#ifndef GPUCA_GPUCODE
 template class TrackParametrization<double>;
 #endif
 } // namespace o2::track

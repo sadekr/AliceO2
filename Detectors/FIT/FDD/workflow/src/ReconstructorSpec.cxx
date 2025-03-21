@@ -32,39 +32,30 @@ void FDDReconstructorDPL::init(InitContext& ic)
 
 void FDDReconstructorDPL::run(ProcessingContext& pc)
 {
-  if (mFinished) {
-    return;
-  }
   mRecPoints.clear();
+  mRecChData.clear();
   auto digitsBC = pc.inputs().get<gsl::span<o2::fdd::Digit>>("digitsBC");
   auto digitsCh = pc.inputs().get<gsl::span<o2::fdd::ChannelData>>("digitsCh");
   // RS: if we need to process MC truth, uncomment lines below
-  //std::unique_ptr<const o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>> labels;
-  //const o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>* lblPtr = nullptr;
+  // std::unique_ptr<const o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>> labels;
+  // const o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>* lblPtr = nullptr;
   if (mUseMC) {
-    //labels = pc.inputs().get<const o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>*>("labels");
-    //lblPtr = labels.get();
-    LOG(INFO) << "Ignoring MC info";
+    // labels = pc.inputs().get<const o2::dataformats::MCTruthContainer<o2::fdd::MCLabel>*>("labels");
+    // lblPtr = labels.get();
+    LOG(info) << "Ignoring MC info";
   }
   int nDig = digitsBC.size();
   mRecPoints.reserve(nDig);
-  mRecChData.resize(digitsCh.size());
+  mRecChData.reserve(digitsCh.size());
   for (int id = 0; id < nDig; id++) {
     const auto& digit = digitsBC[id];
     auto channels = digit.getBunchChannelData(digitsCh);
-    gsl::span<o2::fdd::ChannelDataFloat> out_ch(mRecChData);
-    out_ch = out_ch.subspan(digit.ref.getFirstEntry(), digit.ref.getEntries());
-    mRecPoints.emplace_back(mReco.process(digit, channels, out_ch));
+    mReco.process(digit, channels, mRecPoints, mRecChData);
   }
-
   // do we ignore MC in this task?
-
-  LOG(INFO) << "FDD reconstruction pushes " << mRecPoints.size() << " RecPoints";
-  pc.outputs().snapshot(Output{mOrigin, "RECPOINTS", 0, Lifetime::Timeframe}, mRecPoints);
-  pc.outputs().snapshot(Output{mOrigin, "RECCHDATA", 0, Lifetime::Timeframe}, mRecChData);
-
-  mFinished = true;
-  pc.services().get<ControlService>().readyToQuit(QuitRequest::Me);
+  LOG(debug) << "FDD reconstruction pushes " << mRecPoints.size() << " RecPoints";
+  pc.outputs().snapshot(Output{mOrigin, "RECPOINTS", 0}, mRecPoints);
+  pc.outputs().snapshot(Output{mOrigin, "RECCHDATA", 0}, mRecChData);
 }
 
 DataProcessorSpec getFDDReconstructorSpec(bool useMC)
@@ -74,7 +65,7 @@ DataProcessorSpec getFDDReconstructorSpec(bool useMC)
   inputSpec.emplace_back("digitsBC", o2::header::gDataOriginFDD, "DIGITSBC", 0, Lifetime::Timeframe);
   inputSpec.emplace_back("digitsCh", o2::header::gDataOriginFDD, "DIGITSCH", 0, Lifetime::Timeframe);
   if (useMC) {
-    LOG(INFO) << "Currently FDDReconstructor does not consume and provide MC truth";
+    LOG(info) << "Currently FDDReconstructor does not consume and provide MC truth";
     // inputSpec.emplace_back("labels", o2::header::gDataOriginFDD, "DIGITSMCTR", 0, Lifetime::Timeframe);
   }
   outputSpec.emplace_back(o2::header::gDataOriginFDD, "RECPOINTS", 0, Lifetime::Timeframe);

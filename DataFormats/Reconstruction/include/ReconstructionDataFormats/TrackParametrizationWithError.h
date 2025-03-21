@@ -18,6 +18,7 @@
 #define INCLUDE_RECONSTRUCTIONDATAFORMATS_TRACKPARAMETRIZATIONWITHERROR_H_
 
 #include "ReconstructionDataFormats/TrackParametrization.h"
+#include <MathUtils/Cartesian.h>
 
 namespace o2
 {
@@ -38,18 +39,18 @@ class TrackParametrizationWithError : public TrackParametrization<value_T>
 #endif
 
   using covMat_t = gpu::gpustd::array<value_t, kCovMatSize>;
-  using MatrixDSym5 = ROOT::Math::SMatrix<double, kNParams, kNParams, ROOT::Math::MatRepSym<double, kNParams>>;
-  using MatrixD5 = ROOT::Math::SMatrix<double, kNParams, kNParams, ROOT::Math::MatRepStd<double, kNParams, kNParams>>;
+  using MatrixDSym5 = o2::math_utils::SMatrix<double, kNParams, kNParams, o2::math_utils::MatRepSym<double, kNParams>>;
+  using MatrixD5 = o2::math_utils::SMatrix<double, kNParams, kNParams, o2::math_utils::MatRepStd<double, kNParams, kNParams>>;
 
-  GPUd() TrackParametrizationWithError();
+  GPUhd() TrackParametrizationWithError();
   GPUd() TrackParametrizationWithError(value_t x, value_t alpha, const params_t& par, const covMat_t& cov, int charge = 1, const PID pid = PID::Pion);
   GPUd() TrackParametrizationWithError(const dim3_t& xyz, const dim3_t& pxpypz,
                                        const gpu::gpustd::array<value_t, kLabCovMatSize>& cv, int sign, bool sectorAlpha = true, const PID pid = PID::Pion);
 
-  GPUdDefault() TrackParametrizationWithError(const TrackParametrizationWithError& src) = default;
+  GPUhdDefault() TrackParametrizationWithError(const TrackParametrizationWithError& src) = default;
   GPUdDefault() TrackParametrizationWithError(TrackParametrizationWithError&& src) = default;
-  GPUdDefault() TrackParametrizationWithError& operator=(const TrackParametrizationWithError& src) = default;
-  GPUdDefault() TrackParametrizationWithError& operator=(TrackParametrizationWithError&& src) = default;
+  GPUhdDefault() TrackParametrizationWithError& operator=(const TrackParametrizationWithError& src) = default;
+  GPUhdDefault() TrackParametrizationWithError& operator=(TrackParametrizationWithError&& src) = default;
   GPUdDefault() ~TrackParametrizationWithError() = default;
   using TrackParametrization<value_T>::TrackParametrization;
 
@@ -79,39 +80,48 @@ class TrackParametrizationWithError : public TrackParametrization<value_T>
   GPUd() bool getCovXYZPxPyPzGlo(gpu::gpustd::array<value_t, kLabCovMatSize>& c) const;
 
   GPUd() void print() const;
+  GPUd() void printHexadecimal();
 #ifndef GPUCA_ALIGPUCODE
   std::string asString() const;
+  std::string asStringHexadecimal();
 #endif
 
   // parameters + covmat manipulation
+  GPUd() bool testRotate(value_t alpha) const;
   GPUd() bool rotate(value_t alpha);
   GPUd() bool propagateTo(value_t xk, value_t b);
   GPUd() bool propagateTo(value_t xk, const dim3_t& b);
   GPUd() bool propagateToDCA(const o2::dataformats::VertexBase& vtx, value_t b, o2::dataformats::DCA* dca = nullptr, value_t maxD = 999.f);
   GPUd() void invert();
-
   GPUd() value_t getPredictedChi2(const dim2_t& p, const dim3_t& cov) const;
+  GPUd() value_t getPredictedChi2Quiet(const dim2_t& p, const dim3_t& cov) const;
   GPUd() value_t getPredictedChi2(const value_t* p, const value_t* cov) const;
+  GPUd() value_t getPredictedChi2Quiet(const value_t* p, const value_t* cov) const;
 
   template <typename T>
   GPUd() value_t getPredictedChi2(const BaseCluster<T>& p) const;
+  template <typename T>
+  GPUd() value_t getPredictedChi2Quiet(const BaseCluster<T>& p) const;
 
-  void buildCombinedCovMatrix(const TrackParametrizationWithError& rhs, MatrixDSym5& cov) const;
-  value_t getPredictedChi2(const TrackParametrizationWithError& rhs, MatrixDSym5& covToSet) const;
-  value_t getPredictedChi2(const TrackParametrizationWithError& rhs) const;
-  bool update(const TrackParametrizationWithError& rhs, const MatrixDSym5& covInv);
-  bool update(const TrackParametrizationWithError& rhs);
+  GPUd() void buildCombinedCovMatrix(const TrackParametrizationWithError& rhs, MatrixDSym5& cov) const;
+  GPUd() value_t getPredictedChi2(const TrackParametrizationWithError& rhs, MatrixDSym5& covToSet) const;
+  GPUd() value_t getPredictedChi2(const TrackParametrizationWithError& rhs) const;
+  GPUd() value_t getPredictedChi2Quiet(const TrackParametrizationWithError& rhs) const;
+  GPUd() bool update(const TrackParametrizationWithError& rhs, const MatrixDSym5& covInv);
+  GPUd() bool update(const TrackParametrizationWithError& rhs);
 
   GPUd() bool update(const dim2_t& p, const dim3_t& cov);
   GPUd() bool update(const value_t* p, const value_t* cov);
+  GPUd() value_T update(const o2::dataformats::VertexBase& vtx, value_T maxChi2 = 1e15);
 
   template <typename T>
   GPUd() bool update(const BaseCluster<T>& p);
 
-  GPUd() bool correctForMaterial(value_t x2x0, value_t xrho, bool anglecorr = false, value_t dedx = kCalcdEdxAuto);
+  GPUd() bool correctForMaterial(value_t x2x0, value_t xrho, bool anglecorr = false);
 
   GPUd() void resetCovariance(value_t s2 = 0);
   GPUd() void checkCovariance();
+  GPUd() void checkCorrelations();
   GPUd() void setCov(value_t v, size_t i, size_t j);
   GPUd() void setCov(value_t v, int i);
   GPUd() void setCov(const covMat_t& mat);
@@ -119,6 +129,15 @@ class TrackParametrizationWithError : public TrackParametrization<value_T>
   GPUd() void updateCov(const covMat_t& delta);
   GPUd() void updateCov(value_t delta, size_t i, size_t j);
   GPUd() void updateCov(value_t delta, size_t i);
+
+  GPUd() void updateCov(const params_t delta2, bool preserveCorrelations);
+  GPUd() void updateCov(const value_t* delta2, bool preserveCorrelations);
+
+  GPUd() void updateCovCorr(const params_t delta2);
+  GPUd() void updateCovCorr(const value_t* delta2);
+
+  GPUd() void updateCov(const params_t delta2);
+  GPUd() void updateCov(const value_t* delta2);
 
  protected:
   covMat_t mC{0.f}; // 15 covariance matrix elements
@@ -128,7 +147,7 @@ class TrackParametrizationWithError : public TrackParametrization<value_T>
 
 //__________________________________________________________________________
 template <typename value_T>
-GPUdi() TrackParametrizationWithError<value_T>::TrackParametrizationWithError() : TrackParametrization<value_T>{}
+GPUhdi() TrackParametrizationWithError<value_T>::TrackParametrizationWithError() : TrackParametrization<value_T>{}
 {
 }
 
@@ -136,7 +155,8 @@ GPUdi() TrackParametrizationWithError<value_T>::TrackParametrizationWithError() 
 template <typename value_T>
 GPUdi() TrackParametrizationWithError<value_T>::TrackParametrizationWithError(value_t x, value_t alpha, const params_t& par,
                                                                               const covMat_t& cov, int charge, const PID pid)
-  : TrackParametrization<value_T>{x, alpha, par, charge, pid}
+  : TrackParametrization<value_T>{
+      x, alpha, par, charge, pid}
 {
   // explicit constructor
   for (int i = 0; i < kCovMatSize; i++) {
@@ -292,9 +312,19 @@ template <typename value_T>
 template <typename T>
 GPUdi() auto TrackParametrizationWithError<value_T>::getPredictedChi2(const BaseCluster<T>& p) const -> value_t
 {
-  const dim2_t pyz = {p.getY(), p.getZ()};
-  const dim3_t cov = {p.getSigmaY2(), p.getSigmaYZ(), p.getSigmaZ2()};
+  const dim2_t pyz = {value_T(p.getY()), value_T(p.getZ())};
+  const dim3_t cov = {value_T(p.getSigmaY2()), value_T(p.getSigmaYZ()), value_T(p.getSigmaZ2())};
   return getPredictedChi2(pyz, cov);
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+template <typename T>
+GPUdi() auto TrackParametrizationWithError<value_T>::getPredictedChi2Quiet(const BaseCluster<T>& p) const -> value_t
+{
+  const dim2_t pyz = {value_T(p.getY()), value_T(p.getZ())};
+  const dim3_t cov = {value_T(p.getSigmaY2()), value_T(p.getSigmaYZ()), value_T(p.getSigmaZ2())};
+  return getPredictedChi2Quiet(pyz, cov);
 }
 
 //______________________________________________
@@ -302,6 +332,13 @@ template <typename value_T>
 GPUdi() auto TrackParametrizationWithError<value_T>::getPredictedChi2(const dim2_t& p, const dim3_t& cov) const -> value_t
 {
   return getPredictedChi2(p.data(), cov.data());
+}
+
+//______________________________________________
+template <typename value_T>
+GPUdi() auto TrackParametrizationWithError<value_T>::getPredictedChi2Quiet(const dim2_t& p, const dim3_t& cov) const -> value_t
+{
+  return getPredictedChi2Quiet(p.data(), cov.data());
 }
 
 //______________________________________________
@@ -316,8 +353,8 @@ template <typename value_T>
 template <typename T>
 GPUdi() bool TrackParametrizationWithError<value_T>::update(const BaseCluster<T>& p)
 {
-  const dim2_t pyz = {p.getY(), p.getZ()};
-  const dim3_t cov = {p.getSigmaY2(), p.getSigmaYZ(), p.getSigmaZ2()};
+  const dim2_t pyz = {value_T(p.getY()), value_T(p.getZ())};
+  const dim3_t cov = {value_T(p.getSigmaY2()), value_T(p.getSigmaYZ()), value_T(p.getSigmaZ2())};
   return update(pyz, cov);
 }
 
@@ -361,6 +398,71 @@ GPUdi() void TrackParametrizationWithError<value_T>::updateCov(const covMat_t& d
 {
   for (size_t i = 0; i < kCovMatSize; ++i) {
     mC[i] += delta[i];
+  }
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+GPUdi() void TrackParametrizationWithError<value_T>::updateCov(const params_t delta2)
+{
+  // Increment cov.matrix diagonal elements by the vector of squared deltas
+  updateCov(delta2.data());
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+GPUdi() void TrackParametrizationWithError<value_T>::updateCov(const value_t* delta2)
+{
+  // Increment cov.matrix diagonal elements by the vector of squared deltas
+  for (int i = 0; i < kNParams; i++) {
+    mC[DiagMap[i]] += delta2[i];
+  }
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+GPUdi() void TrackParametrizationWithError<value_T>::updateCovCorr(const params_t delta2)
+{
+  // Increment cov.matrix diagonal elements by the vector of squared deltas, modify non-diagonal elements to preserve correlations
+  updateCovCorr(delta2.data());
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+GPUdi() void TrackParametrizationWithError<value_T>::updateCovCorr(const value_t* delta2)
+{
+  // Increment cov.matrix diagonal elements by the vector of squared deltas, modify non-diagonal elements to preserve correlations
+#pragma GCC diagnostic push // FIXME: remove in the future, GCC compiler bug reports incorrect uninitialized warning for oldDiag
+#pragma GCC diagnostic ignored "-Wuninitialized"
+  value_t oldDiag[kNParams];
+  for (int i = 0; i < kNParams; i++) {
+    auto diagI = DiagMap[i];
+    oldDiag[i] = mC[diagI];
+    mC[diagI] += delta2[i];
+    for (int j = 0; j < i; j++) {
+      mC[CovarMap[i][j]] *= gpu::CAMath::Sqrt(mC[diagI] * mC[DiagMap[j]] / (oldDiag[i] * oldDiag[j]));
+    }
+  }
+#pragma GCC diagnostic pop
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+GPUdi() void TrackParametrizationWithError<value_T>::updateCov(const params_t delta2, bool preserveCorrelations)
+{
+  // Increment cov.matrix diagonal elements by the vector of squared deltas. If requested, modify non-diagonal elements to preserve correlations
+  updateCov(delta2.data(), preserveCorrelations);
+}
+
+//__________________________________________________________________________
+template <typename value_T>
+GPUdi() void TrackParametrizationWithError<value_T>::updateCov(const value_t* delta2, bool preserveCorrelations)
+{
+  // Increment cov.matrix diagonal elements by the vector of squared deltas. If requested, modify non-diagonal elements to preserve correlations
+  if (preserveCorrelations) {
+    updateCovCorr(delta2);
+  } else {
+    updateCov(delta2);
   }
 }
 

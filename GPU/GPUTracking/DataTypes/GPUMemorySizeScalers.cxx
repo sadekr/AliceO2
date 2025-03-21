@@ -15,13 +15,15 @@
 #include "GPUMemorySizeScalers.h"
 #include "GPULogging.h"
 
-using namespace GPUCA_NAMESPACE::gpu;
+using namespace o2::gpu;
 
 void GPUMemorySizeScalers::rescaleMaxMem(size_t newAvailableMemory)
 {
   GPUMemorySizeScalers tmp;
   double scaleFactor = (double)newAvailableMemory / tmp.availableMemory;
-  GPUInfo("Rescaling buffer size limits from %lu to %lu bytes of memory (factor %f)", tmp.availableMemory, newAvailableMemory, scaleFactor);
+  if (scaleFactor != 1.) {
+    GPUInfo("Rescaling buffer size limits from %lu to %lu bytes of memory (factor %f)", tmp.availableMemory, newAvailableMemory, scaleFactor);
+  }
   tpcMaxPeaks = (double)tmp.tpcMaxPeaks * scaleFactor;
   tpcMaxClusters = (double)tmp.tpcMaxClusters * scaleFactor;
   tpcMaxStartHits = (double)tmp.tpcMaxStartHits * scaleFactor;
